@@ -6,8 +6,10 @@
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
 static char *font = "mono:pixelsize=24:antialias=true:autohint=true";
-static char *font2[] = { "JoyPixels:pixelsize=22:antialias=true:autohint=true" };
-static char *font3[] = { "Hack Nerd Font Mono:pixelsize=22:antialias=true:autohint=true" };
+// static char *font2[] = { "JoyPixels:pixelsize=22:antialias=true:autohint=true" };
+// static char *font2[] = { "NotoColorEmoji:pixelsize=22:antialias=true:autohint=true" };
+static char *font2[] = { "Hack Nerd Font Mono:pixelsize=22:antialias=true:autohint=true" };
+// static char *font2[] = { "Ubuntu Mono:pixelsize=22:antialias=true:autohint=true" };
 static int borderpx = 2;
 
 /*
