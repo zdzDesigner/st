@@ -1430,7 +1430,7 @@ void xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int
     if (base.mode & ATTR_BOXDRAW) {
         drawboxes(winx, winy, width / len, win.ch, fg, bg, specs, len);
     } else {
-        /* Render the glyphs. ================ */
+        /* Render the glyphs. ================  font*/
         FcBool b = FcFalse;
         FcPatternGetBool(specs->font->pattern, FC_COLOR, 0, &b);
         if (!b) {
