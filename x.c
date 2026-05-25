@@ -1328,7 +1328,7 @@ void xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int
 {
     int charlen = len * ((base.mode & ATTR_WIDE) ? 2 : 1);
     int winx = borderpx + x * win.cw, winy = borderpx + y * win.ch, width = charlen * win.cw;
-    Color *fg, *bg, *temp, revfg, revbg, truefg, truebg;
+    Color *fg, *bg, *temp, revfg, revbg, truefg, truebg, fillbg;
     XRenderColor colfg, colbg;
     XRectangle r;
 
@@ -1406,6 +1406,18 @@ void xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int
     if (base.mode & ATTR_BLINK && win.mode & MODE_BLINK) fg = bg;
 
     if (base.mode & ATTR_INVISIBLE) fg = bg;
+
+    if (bg != &dc.col[defaultbg] && bg->color.alpha != dc.col[defaultbg].color.alpha) {
+        Color *opaquebg = bg;
+
+        colbg.red = opaquebg->color.red;
+        colbg.green = opaquebg->color.green;
+        colbg.blue = opaquebg->color.blue;
+        colbg.alpha = dc.col[defaultbg].color.alpha;
+        XftColorAllocValue(xw.dpy, xw.vis, xw.cmap, &colbg, &fillbg);
+        bg = &fillbg;
+        if (fg == opaquebg) fg = bg;
+    }
 
     /* Intelligent cleaning up of the borders. */
     if (x == 0) {

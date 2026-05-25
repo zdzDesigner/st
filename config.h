@@ -5,12 +5,18 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "mono:pixelsize=24:antialias=true:autohint=true";
+// static char *font = "mono:pixelsize=24:antialias=true:autohint=true";
+static char *font = "DejaVu Sans Mono:style=Book:pixelsize=17:antialias=true:autohint=true";
 // static char *font = "JoyPixels:pixelsize=24:antialias=true:autohint=true"; // 部分系统不支持
 // JoyPixels: poly request too large or internal Xlib length error
 // static char *font = "unifont:pixelsize=24:antialias=true:autohint=true";
 // static char *font = "DejaVu Sans Mono:pixelsize=24:antialias=true:autohint=true";
-static char *font2[] = {"Hack Nerd Font Mono:pixelsize=22:antialias=true:autohint=true"};
+static char *font2[] = { "Hack Nerd Font Mono:pixelsize=16:antialias=true:autohint=true" };
+// static char *font2[] = {
+//   "monospace:size=22",
+//   "Noto Sans CJK SC:size=18",
+//   "Hack Nerd Font Mono:pixelsize=22:antialias=true:autohint=true"
+// };
 static int borderpx = 2;
 
 /*
@@ -50,7 +56,7 @@ int allowaltscreen = 1;
 
 /* allow certain non-interactive (insecure) window operations such as:
    setting the clipboard text */
-int allowwindowops = 0;
+int allowwindowops = 1;
 
 /*
  * draw latency range in ms - from new content/keypress/etc until drawing.
@@ -224,7 +230,8 @@ static uint forcemousemod = ShiftMask;
  */
 ResourcePref resources[] = {
     {"font", STRING, &font},
-    {"fontalt0", STRING, &font2[0]},
+    {"fontalt0", STRING, &font},
+    // {"fontalt0", STRING, &font2[0]},
     {"color0", STRING, &colorname[0]},
     {"color1", STRING, &colorname[1]},
     {"color2", STRING, &colorname[2]},
@@ -318,7 +325,8 @@ static Shortcut shortcuts[] = {
     // { MODKEY,               XK_o,           externalpipe,   {.v = copyoutput } },
     {Mod1Mask | ControlMask, XK_l, externalpipe, {.v = openurlcmd}},
     {Mod1Mask, XK_y, externalpipe, {.v = copyurlcmd}},
-    {Mod1Mask, XK_c, externalpipe, {.v = copyoutput}},
+    {Mod4Mask, XK_c, externalpipe, {.v = copyoutput}},
+    // {Mod1Mask, XK_c, externalpipe, {.v = copyoutput}},
 };
 
 /*
