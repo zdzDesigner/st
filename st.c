@@ -18,6 +18,7 @@
 #include <wchar.h>
 
 #include "st.h"
+#include "st_zig.h"
 #include "win.h"
 
 #if   defined(__linux)
@@ -216,12 +217,8 @@ static void selscroll(int, int);
 static void selsnap(int *, int *, int);
 
 static size_t utf8decode(const char *, Rune *, size_t);
-static Rune utf8decodebyte(char, size_t *);
-static char utf8encodebyte(Rune, size_t);
-static size_t utf8validate(Rune *, size_t);
 
 static char *base64dec(const char *);
-static char base64dec_getc(const char **);
 
 static ssize_t xwrite(int, const char *, size_t);
 
@@ -233,11 +230,6 @@ static STREscape strescseq;
 static int iofd = 1;
 static int cmdfd;
 static pid_t pid;
-
-static uchar utfbyte[UTF_SIZ + 1] = {0x80,    0, 0xC0, 0xE0, 0xF0};
-static uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
-static Rune utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
-static Rune utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
 ssize_t
 xwrite(int fd, const char *s, size_t len)
@@ -288,125 +280,23 @@ xstrdup(char *s)
 size_t
 utf8decode(const char *c, Rune *u, size_t clen)
 {
-	size_t i, j, len, type;
-	Rune udecoded;
+	ZigUtf8Decode dec;
 
-	*u = UTF_INVALID;
-	if (!clen)
-		return 0;
-	udecoded = utf8decodebyte(c[0], &len);
-	if (!BETWEEN(len, 1, UTF_SIZ))
-		return 1;
-	for (i = 1, j = 1; i < clen && j < len; ++i, ++j) {
-		udecoded = (udecoded << 6) | utf8decodebyte(c[i], &type);
-		if (type != 0)
-			return j;
-	}
-	if (j < len)
-		return 0;
-	*u = udecoded;
-	utf8validate(u, len);
-
-	return len;
-}
-
-Rune
-utf8decodebyte(char c, size_t *i)
-{
-	for (*i = 0; *i < LEN(utfmask); ++(*i))
-		if (((uchar)c & utfmask[*i]) == utfbyte[*i])
-			return (uchar)c & ~utfmask[*i];
-
-	return 0;
+	dec = st_utf8decode((const unsigned char *)c, clen);
+	*u = dec.rune;
+	return dec.len;
 }
 
 size_t
 utf8encode(Rune u, char *c)
 {
-	size_t len, i;
-
-	len = utf8validate(&u, 0);
-	if (len > UTF_SIZ)
-		return 0;
-
-	for (i = len - 1; i != 0; --i) {
-		c[i] = utf8encodebyte(u, 0);
-		u >>= 6;
-	}
-	c[0] = utf8encodebyte(u, len);
-
-	return len;
-}
-
-char
-utf8encodebyte(Rune u, size_t i)
-{
-	return utfbyte[i] | (u & ~utfmask[i]);
-}
-
-size_t
-utf8validate(Rune *u, size_t i)
-{
-	if (!BETWEEN(*u, utfmin[i], utfmax[i]) || BETWEEN(*u, 0xD800, 0xDFFF))
-		*u = UTF_INVALID;
-	for (i = 1; *u > utfmax[i]; ++i)
-		;
-
-	return i;
-}
-
-static const char base64_digits[] = {
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 0, 0, 0,
-	63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 0, 0, 0, -1, 0, 0, 0, 0, 1,
-	2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-	22, 23, 24, 25, 0, 0, 0, 0, 0, 0, 26, 27, 28, 29, 30, 31, 32, 33, 34,
-	35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-};
-
-char
-base64dec_getc(const char **src)
-{
-	while (**src && !isprint(**src))
-		(*src)++;
-	return **src ? *((*src)++) : '=';  /* emulate padding if string ends */
+	return st_utf8encode(u, (unsigned char *)c);
 }
 
 char *
 base64dec(const char *src)
 {
-	size_t in_len = strlen(src);
-	char *result, *dst;
-
-	if (in_len % 4)
-		in_len += 4 - (in_len % 4);
-	result = dst = xmalloc(in_len / 4 * 3 + 1);
-	while (*src) {
-		int a = base64_digits[(unsigned char) base64dec_getc(&src)];
-		int b = base64_digits[(unsigned char) base64dec_getc(&src)];
-		int c = base64_digits[(unsigned char) base64dec_getc(&src)];
-		int d = base64_digits[(unsigned char) base64dec_getc(&src)];
-
-		/* invalid input. 'a' can be -1, e.g. if src is "\n" (c-str) */
-		if (a == -1 || b == -1)
-			break;
-
-		*dst++ = (a << 2) | ((b & 0x30) >> 4);
-		if (c == -1)
-			break;
-		*dst++ = ((b & 0x0f) << 4) | ((c & 0x3c) >> 2);
-		if (d == -1)
-			break;
-		*dst++ = ((c & 0x03) << 6) | d;
-	}
-	*dst = '\0';
-	return result;
+	return st_base64dec(src);
 }
 
 void
@@ -1211,31 +1101,14 @@ tnewline(int first_col)
 void
 csiparse(void)
 {
-	char *p = csiescseq.buf, *np;
-	long int v;
+	ZigCsiParse parsed;
 
-	csiescseq.narg = 0;
-	if (*p == '?') {
-		csiescseq.priv = 1;
-		p++;
-	}
-
-	csiescseq.buf[csiescseq.len] = '\0';
-	while (p < csiescseq.buf+csiescseq.len) {
-		np = NULL;
-		v = strtol(p, &np, 10);
-		if (np == p)
-			v = 0;
-		if (v == LONG_MAX || v == LONG_MIN)
-			v = -1;
-		csiescseq.arg[csiescseq.narg++] = v;
-		p = np;
-		if (*p != ';' || csiescseq.narg == ESC_ARG_SIZ)
-			break;
-		p++;
-	}
-	csiescseq.mode[0] = *p++;
-	csiescseq.mode[1] = (p < csiescseq.buf+csiescseq.len) ? *p : '\0';
+	parsed = st_csiparse((const unsigned char *)csiescseq.buf, csiescseq.len);
+	csiescseq.priv = parsed.priv ? 1 : 0;
+	csiescseq.narg = parsed.narg;
+	memcpy(csiescseq.arg, parsed.arg, sizeof(parsed.arg));
+	csiescseq.mode[0] = parsed.mode[0];
+	csiescseq.mode[1] = parsed.mode[1];
 }
 
 /* for absolute user moves, when decom is set */
@@ -1382,152 +1255,84 @@ tdeleteline(int n)
 int32_t
 tdefcolor(int *attr, int *npar, int l)
 {
-	int32_t idx = -1;
-	uint r, g, b;
+	ZigColorParse parsed;
+	int oldnpar = *npar;
 
-	switch (attr[*npar + 1]) {
-	case 2: /* direct color in RGB space */
-		if (*npar + 4 >= l) {
-			fprintf(stderr,
-				"erresc(38): Incorrect number of parameters (%d)\n",
-				*npar);
-			break;
-		}
-		r = attr[*npar + 2];
-		g = attr[*npar + 3];
-		b = attr[*npar + 4];
-		*npar += 4;
-		if (!BETWEEN(r, 0, 255) || !BETWEEN(g, 0, 255) || !BETWEEN(b, 0, 255))
-			fprintf(stderr, "erresc: bad rgb color (%u,%u,%u)\n",
-				r, g, b);
-		else
-			idx = TRUECOLOR(r, g, b);
+	parsed = st_tdefcolor(attr, *npar, l);
+	*npar = parsed.next_npar;
+
+	switch (parsed.kind) {
+	case ST_ZIG_COLOR_OK:
+		return parsed.idx;
+	case ST_ZIG_COLOR_BAD_COUNT:
+		fprintf(stderr,
+			"erresc(38): Incorrect number of parameters (%d)\n",
+			oldnpar);
 		break;
-	case 5: /* indexed color */
-		if (*npar + 2 >= l) {
-			fprintf(stderr,
-				"erresc(38): Incorrect number of parameters (%d)\n",
-				*npar);
-			break;
-		}
-		*npar += 2;
-		if (!BETWEEN(attr[*npar], 0, 255))
-			fprintf(stderr, "erresc: bad fgcolor %d\n", attr[*npar]);
-		else
-			idx = attr[*npar];
+	case ST_ZIG_COLOR_BAD_RGB:
+		fprintf(stderr, "erresc: bad rgb color (%u,%u,%u)\n",
+			parsed.r, parsed.g, parsed.b);
 		break;
-	case 0: /* implemented defined (only foreground) */
-	case 1: /* transparent */
-	case 3: /* direct color in CMY space */
-	case 4: /* direct color in CMYK space */
+	case ST_ZIG_COLOR_BAD_INDEX:
+		fprintf(stderr, "erresc: bad fgcolor %d\n", parsed.value);
+		break;
+	case ST_ZIG_COLOR_UNKNOWN:
 	default:
 		fprintf(stderr,
-		        "erresc(38): gfx attr %d unknown\n", attr[*npar]);
+		        "erresc(38): gfx attr %d unknown\n", parsed.value);
 		break;
 	}
 
-	return idx;
+	return -1;
 }
 
 void
 tsetattr(int *attr, int l)
 {
-	int i;
-	int32_t idx;
+	ZigAttrUpdate update;
 
-	for (i = 0; i < l; i++) {
-		switch (attr[i]) {
-		case 0:
-			term.c.attr.mode &= ~(
-				ATTR_BOLD       |
-				ATTR_FAINT      |
-				ATTR_ITALIC     |
-				ATTR_UNDERLINE  |
-				ATTR_BLINK      |
-				ATTR_REVERSE    |
-				ATTR_INVISIBLE  |
-				ATTR_STRUCK     );
-			term.c.attr.fg = defaultfg;
-			term.c.attr.bg = defaultbg;
-			break;
-		case 1:
-			term.c.attr.mode |= ATTR_BOLD;
-			break;
-		case 2:
-			term.c.attr.mode |= ATTR_FAINT;
-			break;
-		case 3:
-			term.c.attr.mode |= ATTR_ITALIC;
-			break;
-		case 4:
-			term.c.attr.mode |= ATTR_UNDERLINE;
-			break;
-		case 5: /* slow blink */
-			/* FALLTHROUGH */
-		case 6: /* rapid blink */
-			term.c.attr.mode |= ATTR_BLINK;
-			break;
-		case 7:
-			term.c.attr.mode |= ATTR_REVERSE;
-			break;
-		case 8:
-			term.c.attr.mode |= ATTR_INVISIBLE;
-			break;
-		case 9:
-			term.c.attr.mode |= ATTR_STRUCK;
-			break;
-		case 22:
-			term.c.attr.mode &= ~(ATTR_BOLD | ATTR_FAINT);
-			break;
-		case 23:
-			term.c.attr.mode &= ~ATTR_ITALIC;
-			break;
-		case 24:
-			term.c.attr.mode &= ~ATTR_UNDERLINE;
-			break;
-		case 25:
-			term.c.attr.mode &= ~ATTR_BLINK;
-			break;
-		case 27:
-			term.c.attr.mode &= ~ATTR_REVERSE;
-			break;
-		case 28:
-			term.c.attr.mode &= ~ATTR_INVISIBLE;
-			break;
-		case 29:
-			term.c.attr.mode &= ~ATTR_STRUCK;
-			break;
-		case 38:
-			if ((idx = tdefcolor(attr, &i, l)) >= 0)
-				term.c.attr.fg = idx;
-			break;
-		case 39:
-			term.c.attr.fg = defaultfg;
-			break;
-		case 48:
-			if ((idx = tdefcolor(attr, &i, l)) >= 0)
-				term.c.attr.bg = idx;
-			break;
-		case 49:
-			term.c.attr.bg = defaultbg;
-			break;
-		default:
-			if (BETWEEN(attr[i], 30, 37)) {
-				term.c.attr.fg = attr[i] - 30;
-			} else if (BETWEEN(attr[i], 40, 47)) {
-				term.c.attr.bg = attr[i] - 40;
-			} else if (BETWEEN(attr[i], 90, 97)) {
-				term.c.attr.fg = attr[i] - 90 + 8;
-			} else if (BETWEEN(attr[i], 100, 107)) {
-				term.c.attr.bg = attr[i] - 100 + 8;
-			} else {
-				fprintf(stderr,
-					"erresc(default): gfx attr %d unknown\n",
-					attr[i]);
-				csidump();
-			}
-			break;
-		}
+	update = st_tsetattr(
+		(ZigAttrState){
+			.mode = term.c.attr.mode,
+			.fg = term.c.attr.fg,
+			.bg = term.c.attr.bg,
+		},
+		defaultfg,
+		defaultbg,
+		attr,
+		l
+	);
+
+	term.c.attr.mode = update.state.mode;
+	term.c.attr.fg = update.state.fg;
+	term.c.attr.bg = update.state.bg;
+
+	switch (update.color_error.kind) {
+	case ST_ZIG_COLOR_BAD_COUNT:
+		fprintf(stderr,
+			"erresc(38): Incorrect number of parameters (%d)\n",
+			update.color_error.input_npar);
+		break;
+	case ST_ZIG_COLOR_BAD_RGB:
+		fprintf(stderr, "erresc: bad rgb color (%u,%u,%u)\n",
+			update.color_error.r,
+			update.color_error.g,
+			update.color_error.b);
+		break;
+	case ST_ZIG_COLOR_BAD_INDEX:
+		fprintf(stderr, "erresc: bad fgcolor %d\n", update.color_error.value);
+		break;
+	case ST_ZIG_COLOR_UNKNOWN:
+		fprintf(stderr,
+		        "erresc(38): gfx attr %d unknown\n", update.color_error.value);
+		break;
+	}
+
+	if (update.error_kind == ST_ZIG_ATTR_ERROR_UNKNOWN) {
+		fprintf(stderr,
+			"erresc(default): gfx attr %d unknown\n",
+			update.error_value);
+		csidump();
 	}
 }
 
@@ -1545,6 +1350,133 @@ tsetscroll(int t, int b)
 	}
 	term.top = t;
 	term.bot = b;
+}
+
+void
+tapplyerase(const ZigErasePlan *plan)
+{
+	int i;
+
+	for (i = 0; i < plan->count; ++i) {
+		tclearregion(
+			plan->rects[i].x1,
+			plan->rects[i].y1,
+			plan->rects[i].x2,
+			plan->rects[i].y2
+		);
+	}
+}
+
+void
+tapplycursor(const ZigCursorPlan *plan)
+{
+	switch (plan->kind) {
+	case ST_ZIG_CURSOR_MOVE_TO:
+		tmoveto(plan->x, plan->y);
+		break;
+	case ST_ZIG_CURSOR_MOVE_TO_ABS:
+		tmoveato(plan->x, plan->y);
+		break;
+	}
+}
+
+void
+tapplyedit(const ZigEditPlan *plan)
+{
+	switch (plan->kind) {
+	case ST_ZIG_EDIT_INSERT_BLANK:
+		tinsertblank(plan->count);
+		break;
+	case ST_ZIG_EDIT_SCROLL_UP:
+		tscrollup(term.top, plan->count, 0);
+		break;
+	case ST_ZIG_EDIT_SCROLL_DOWN:
+		tscrolldown(term.top, plan->count, 0);
+		break;
+	case ST_ZIG_EDIT_INSERT_BLANK_LINE:
+		tinsertblankline(plan->count);
+		break;
+	case ST_ZIG_EDIT_DELETE_LINE:
+		tdeleteline(plan->count);
+		break;
+	case ST_ZIG_EDIT_CLEAR_REGION:
+		tclearregion(plan->rect.x1, plan->rect.y1,
+			plan->rect.x2, plan->rect.y2);
+		break;
+	case ST_ZIG_EDIT_DELETE_CHAR:
+		tdeletechar(plan->count);
+		break;
+	}
+}
+
+void
+tapplylight(const ZigLightPlan *plan, char *buf, int *len)
+{
+	switch (plan->kind) {
+	case ST_ZIG_LIGHT_CLEAR_TAB_CURRENT:
+		term.tabs[term.c.x] = 0;
+		break;
+	case ST_ZIG_LIGHT_CLEAR_TAB_ALL:
+		memset(term.tabs, 0, term.col * sizeof(*term.tabs));
+		break;
+	case ST_ZIG_LIGHT_PUT_TAB:
+		tputtab(plan->value);
+		break;
+	case ST_ZIG_LIGHT_WRITE_VTIDENT:
+		ttywrite(vtiden, strlen(vtiden), 0);
+		break;
+	case ST_ZIG_LIGHT_WRITE_CURSOR_POSITION:
+		*len = snprintf(buf, 40, "\033[%i;%iR", plan->y, plan->x);
+		ttywrite(buf, *len, 0);
+		break;
+	}
+}
+
+void
+tapplystate(const ZigStatePlan *plan)
+{
+	switch (plan->kind) {
+	case ST_ZIG_STATE_SET_SCROLL:
+		tsetscroll(plan->top, plan->bottom);
+		tmoveato(0, 0);
+		break;
+	case ST_ZIG_STATE_SAVE_CURSOR:
+		tcursor(CURSOR_SAVE);
+		break;
+	case ST_ZIG_STATE_LOAD_CURSOR:
+		tcursor(CURSOR_LOAD);
+		break;
+	}
+}
+
+void
+tapplymisc(const ZigMiscPlan *plan)
+{
+	int count;
+
+	switch (plan->kind) {
+	case ST_ZIG_MISC_MEDIA_DUMP:
+		tdump();
+		break;
+	case ST_ZIG_MISC_MEDIA_DUMP_LINE:
+		tdumpline(term.c.y);
+		break;
+	case ST_ZIG_MISC_MEDIA_DUMP_SEL:
+		tdumpsel();
+		break;
+	case ST_ZIG_MISC_MEDIA_PRINT_OFF:
+		term.mode &= ~MODE_PRINT;
+		break;
+	case ST_ZIG_MISC_MEDIA_PRINT_ON:
+		term.mode |= MODE_PRINT;
+		break;
+	case ST_ZIG_MISC_REPEAT_LAST:
+		if (!term.lastc)
+			break;
+		for (count = plan->value; count > 0; --count)
+			tputc(term.lastc);
+		break;
+	}
 }
 
 void
@@ -1681,7 +1613,13 @@ void
 csihandle(void)
 {
 	char buf[40];
+	ZigEditPlan edit;
 	int len;
+	ZigCursorPlan cursor;
+	ZigErasePlan erase;
+	ZigLightPlan light;
+	ZigStatePlan state;
+	ZigMiscPlan misc;
 
 	switch (csiescseq.mode[0]) {
 	default:
@@ -1691,161 +1629,135 @@ csihandle(void)
 		/* die(""); */
 		break;
 	case '@': /* ICH -- Insert <n> blank char */
-		DEFAULT(csiescseq.arg[0], 1);
-		tinsertblank(csiescseq.arg[0]);
+		edit = st_planedit('@', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'A': /* CUU -- Cursor <n> Up */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(term.c.x, term.c.y-csiescseq.arg[0]);
+		cursor = st_plancursor('A', term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'B': /* CUD -- Cursor <n> Down */
 	case 'e': /* VPR --Cursor <n> Down */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(term.c.x, term.c.y+csiescseq.arg[0]);
+		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'i': /* MC -- Media Copy */
-		switch (csiescseq.arg[0]) {
-		case 0:
-			tdump();
-			break;
-		case 1:
-			tdumpline(term.c.y);
-			break;
-		case 2:
-			tdumpsel();
-			break;
-		case 4:
-			term.mode &= ~MODE_PRINT;
-			break;
-		case 5:
-			term.mode |= MODE_PRINT;
-			break;
-		}
+		misc = st_planmisc('i', 0, csiescseq.arg, csiescseq.narg);
+		tapplymisc(&misc);
 		break;
 	case 'c': /* DA -- Device Attributes */
-		if (csiescseq.arg[0] == 0)
-			ttywrite(vtiden, strlen(vtiden), 0);
+		light = st_planlight('c', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplylight(&light, buf, &len);
 		break;
 	case 'b': /* REP -- if last char is printable print it <n> more times */
-		DEFAULT(csiescseq.arg[0], 1);
-		if (term.lastc)
-			while (csiescseq.arg[0]-- > 0)
-				tputc(term.lastc);
+		misc = st_planmisc('b', 0, csiescseq.arg, csiescseq.narg);
+		tapplymisc(&misc);
 		break;
 	case 'C': /* CUF -- Cursor <n> Forward */
 	case 'a': /* HPR -- Cursor <n> Forward */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(term.c.x+csiescseq.arg[0], term.c.y);
+		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'D': /* CUB -- Cursor <n> Backward */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(term.c.x-csiescseq.arg[0], term.c.y);
+		cursor = st_plancursor('D', term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'E': /* CNL -- Cursor <n> Down and first col */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(0, term.c.y+csiescseq.arg[0]);
+		cursor = st_plancursor('E', term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'F': /* CPL -- Cursor <n> Up and first col */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(0, term.c.y-csiescseq.arg[0]);
+		cursor = st_plancursor('F', term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'g': /* TBC -- Tabulation clear */
-		switch (csiescseq.arg[0]) {
-		case 0: /* clear current tab stop */
-			term.tabs[term.c.x] = 0;
-			break;
-		case 3: /* clear all the tabs */
-			memset(term.tabs, 0, term.col * sizeof(*term.tabs));
-			break;
-		default:
+		light = st_planlight('g', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		if (light.kind == ST_ZIG_LIGHT_UNKNOWN)
 			goto unknown;
-		}
+		tapplylight(&light, buf, &len);
 		break;
 	case 'G': /* CHA -- Move to <col> */
 	case '`': /* HPA */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveto(csiescseq.arg[0]-1, term.c.y);
+		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'H': /* CUP -- Move to <row> <col> */
 	case 'f': /* HVP */
-		DEFAULT(csiescseq.arg[0], 1);
-		DEFAULT(csiescseq.arg[1], 1);
-		tmoveato(csiescseq.arg[1]-1, csiescseq.arg[0]-1);
+		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'I': /* CHT -- Cursor Forward Tabulation <n> tab stops */
-		DEFAULT(csiescseq.arg[0], 1);
-		tputtab(csiescseq.arg[0]);
+		light = st_planlight('I', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplylight(&light, buf, &len);
 		break;
 	case 'J': /* ED -- Clear screen */
-		switch (csiescseq.arg[0]) {
-		case 0: /* below */
-			tclearregion(term.c.x, term.c.y, term.col-1, term.c.y);
-			if (term.c.y < term.row-1) {
-				tclearregion(0, term.c.y+1, term.col-1,
-						term.row-1);
-			}
-			break;
-		case 1: /* above */
-			if (term.c.y > 1)
-				tclearregion(0, 0, term.col-1, term.c.y-1);
-			tclearregion(0, term.c.y, term.c.x, term.c.y);
-			break;
-		case 2: /* all */
-			tclearregion(0, 0, term.col-1, term.row-1);
-			break;
-		default:
+		erase = st_planerase('J', csiescseq.arg[0], term.c.x, term.c.y,
+			term.col, term.row);
+		if (erase.kind != ST_ZIG_ERASE_OK)
 			goto unknown;
-		}
+		tapplyerase(&erase);
 		break;
 	case 'K': /* EL -- Clear line */
-		switch (csiescseq.arg[0]) {
-		case 0: /* right */
-			tclearregion(term.c.x, term.c.y, term.col-1,
-					term.c.y);
-			break;
-		case 1: /* left */
-			tclearregion(0, term.c.y, term.c.x, term.c.y);
-			break;
-		case 2: /* all */
-			tclearregion(0, term.c.y, term.col-1, term.c.y);
-			break;
-		}
+		erase = st_planerase('K', csiescseq.arg[0], term.c.x, term.c.y,
+			term.col, term.row);
+		if (erase.kind != ST_ZIG_ERASE_OK)
+			goto unknown;
+		tapplyerase(&erase);
 		break;
 	case 'S': /* SU -- Scroll <n> line up */
-		DEFAULT(csiescseq.arg[0], 1);
-		tscrollup(term.top, csiescseq.arg[0], 0);
+		edit = st_planedit('S', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'T': /* SD -- Scroll <n> line down */
-		DEFAULT(csiescseq.arg[0], 1);
-		tscrolldown(term.top, csiescseq.arg[0], 0);
+		edit = st_planedit('T', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'L': /* IL -- Insert <n> blank lines */
-		DEFAULT(csiescseq.arg[0], 1);
-		tinsertblankline(csiescseq.arg[0]);
+		edit = st_planedit('L', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'l': /* RM -- Reset Mode */
 		tsetmode(csiescseq.priv, 0, csiescseq.arg, csiescseq.narg);
 		break;
 	case 'M': /* DL -- Delete <n> lines */
-		DEFAULT(csiescseq.arg[0], 1);
-		tdeleteline(csiescseq.arg[0]);
+		edit = st_planedit('M', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'X': /* ECH -- Erase <n> char */
-		DEFAULT(csiescseq.arg[0], 1);
-		tclearregion(term.c.x, term.c.y,
-				term.c.x + csiescseq.arg[0] - 1, term.c.y);
+		edit = st_planedit('X', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'P': /* DCH -- Delete <n> char */
-		DEFAULT(csiescseq.arg[0], 1);
-		tdeletechar(csiescseq.arg[0]);
+		edit = st_planedit('P', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplyedit(&edit);
 		break;
 	case 'Z': /* CBT -- Cursor Backward Tabulation <n> tab stops */
-		DEFAULT(csiescseq.arg[0], 1);
-		tputtab(-csiescseq.arg[0]);
+		light = st_planlight('Z', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplylight(&light, buf, &len);
 		break;
 	case 'd': /* VPA -- Move to <row> */
-		DEFAULT(csiescseq.arg[0], 1);
-		tmoveato(term.c.x, csiescseq.arg[0]-1);
+		cursor = st_plancursor('d', term.c.x, term.c.y,
+			csiescseq.arg, csiescseq.narg);
+		tapplycursor(&cursor);
 		break;
 	case 'h': /* SM -- Set terminal mode */
 		tsetmode(csiescseq.priv, 1, csiescseq.arg, csiescseq.narg);
@@ -1854,37 +1766,35 @@ csihandle(void)
 		tsetattr(csiescseq.arg, csiescseq.narg);
 		break;
 	case 'n': /* DSR – Device Status Report (cursor position) */
-		if (csiescseq.arg[0] == 6) {
-			len = snprintf(buf, sizeof(buf), "\033[%i;%iR",
-					term.c.y+1, term.c.x+1);
-			ttywrite(buf, len, 0);
-		}
+		light = st_planlight('n', csiescseq.arg, csiescseq.narg,
+			term.c.x, term.c.y);
+		tapplylight(&light, buf, &len);
 		break;
 	case 'r': /* DECSTBM -- Set Scrolling Region */
-		if (csiescseq.priv) {
+		state = st_planstate('r', csiescseq.priv, csiescseq.arg,
+			csiescseq.narg, term.row);
+		if (state.kind == ST_ZIG_STATE_UNKNOWN) {
 			goto unknown;
-		} else {
-			DEFAULT(csiescseq.arg[0], 1);
-			DEFAULT(csiescseq.arg[1], term.row);
-			tsetscroll(csiescseq.arg[0]-1, csiescseq.arg[1]-1);
-			tmoveato(0, 0);
 		}
+		tapplystate(&state);
 		break;
 	case 's': /* DECSC -- Save cursor position (ANSI.SYS) */
-		tcursor(CURSOR_SAVE);
+		state = st_planstate('s', csiescseq.priv, csiescseq.arg,
+			csiescseq.narg, term.row);
+		tapplystate(&state);
 		break;
 	case 'u': /* DECRC -- Restore cursor position (ANSI.SYS) */
-		tcursor(CURSOR_LOAD);
+		state = st_planstate('u', csiescseq.priv, csiescseq.arg,
+			csiescseq.narg, term.row);
+		tapplystate(&state);
 		break;
 	case ' ':
-		switch (csiescseq.mode[1]) {
-		case 'q': /* DECSCUSR -- Set Cursor Style */
-			if (xsetcursor(csiescseq.arg[0]))
-				goto unknown;
-			break;
-		default:
+		misc = st_planmisc(' ', csiescseq.mode[1], csiescseq.arg,
+			csiescseq.narg);
+		if (misc.kind == ST_ZIG_MISC_UNKNOWN)
 			goto unknown;
-		}
+		if (misc.kind == ST_ZIG_MISC_SET_CURSOR_STYLE && xsetcursor(misc.value))
+			goto unknown;
 		break;
 	}
 }

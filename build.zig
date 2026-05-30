@@ -1,8 +1,31 @@
 const std = @import("std");
 
+const version = "0.8.4";
+const libs = [_][]const u8{ "X11", "Xft", "Xrender", "fontconfig", "freetype", "harfbuzz", "m", "rt", "util" };
+const terminfo_entries = [_][]const u8{
+    "st",
+    "st-256color",
+    "st-bs",
+    "st-bs-256color",
+    "st-meta",
+    "st-meta-256color",
+    "st-mono",
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const install_step = b.getInstallStep();
+    const sed = requireProgram(b, "sed", "生成带版本号的 manpage");
+    const tic = requireProgram(b, "tic", "编译 terminfo 数据");
+    const pkg_config = b.graph.environ_map.get("PKG_CONFIG") orelse requireProgram(b, "pkg-config", "解析 X11、Xft、Fontconfig、HarfBuzz 等系统依赖");
+
+    requirePkgConfigPackage(b, pkg_config, "x11", "提供 Xlib 头文件和链接参数");
+    requirePkgConfigPackage(b, pkg_config, "xft", "提供 Xft 文本渲染依赖");
+    requirePkgConfigPackage(b, pkg_config, "xrender", "提供 Xrender 渲染依赖");
+    requirePkgConfigPackage(b, pkg_config, "fontconfig", "提供字体发现依赖");
+    requirePkgConfigPackage(b, pkg_config, "freetype2", "提供 FreeType 头文件和字体渲染依赖");
+    requirePkgConfigPackage(b, pkg_config, "harfbuzz", "提供 HarfBuzz 字形整形依赖");
 
     const root_module = b.createModule(.{
         .root_source_file = null,
@@ -11,43 +34,339 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
+    const base64_module = b.createModule(.{
+        .root_source_file = b.path("st_base64.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const utf8_module = b.createModule(.{
+        .root_source_file = b.path("st_utf8.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const csi_module = b.createModule(.{
+        .root_source_file = b.path("st_csi.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const color_module = b.createModule(.{
+        .root_source_file = b.path("st_color.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const attr_module = b.createModule(.{
+        .root_source_file = b.path("st_attr.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const erase_module = b.createModule(.{
+        .root_source_file = b.path("st_erase.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const cursor_module = b.createModule(.{
+        .root_source_file = b.path("st_cursor.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const edit_module = b.createModule(.{
+        .root_source_file = b.path("st_edit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const light_module = b.createModule(.{
+        .root_source_file = b.path("st_light.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const state_module = b.createModule(.{
+        .root_source_file = b.path("st_state.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const misc_module = b.createModule(.{
+        .root_source_file = b.path("st_misc.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const base64_obj = b.addObject(.{
+        .name = "st_base64",
+        .root_module = base64_module,
+    });
+
+    const utf8_obj = b.addObject(.{
+        .name = "st_utf8",
+        .root_module = utf8_module,
+    });
+
+    const csi_obj = b.addObject(.{
+        .name = "st_csi",
+        .root_module = csi_module,
+    });
+
+    const color_obj = b.addObject(.{
+        .name = "st_color",
+        .root_module = color_module,
+    });
+
+    const attr_obj = b.addObject(.{
+        .name = "st_attr",
+        .root_module = attr_module,
+    });
+
+    const erase_obj = b.addObject(.{
+        .name = "st_erase",
+        .root_module = erase_module,
+    });
+
+    const cursor_obj = b.addObject(.{
+        .name = "st_cursor",
+        .root_module = cursor_module,
+    });
+
+    const edit_obj = b.addObject(.{
+        .name = "st_edit",
+        .root_module = edit_module,
+    });
+
+    const light_obj = b.addObject(.{
+        .name = "st_light",
+        .root_module = light_module,
+    });
+
+    const state_obj = b.addObject(.{
+        .name = "st_state",
+        .root_module = state_module,
+    });
+
+    const misc_obj = b.addObject(.{
+        .name = "st_misc",
+        .root_module = misc_module,
+    });
+
     const exe = b.addExecutable(.{
         .name = "st",
         .root_module = root_module,
     });
 
+    root_module.addObject(base64_obj);
+    root_module.addObject(utf8_obj);
+    root_module.addObject(csi_obj);
+    root_module.addObject(color_obj);
+    root_module.addObject(attr_obj);
+    root_module.addObject(erase_obj);
+    root_module.addObject(cursor_obj);
+    root_module.addObject(edit_obj);
+    root_module.addObject(light_obj);
+    root_module.addObject(state_obj);
+    root_module.addObject(misc_obj);
+
     root_module.addCSourceFiles(.{
         .files = &.{ "st.c", "x.c", "boxdraw.c", "hb.c" },
         .flags = &.{
-            "-DVERSION=\"0.8.4\"",
+            b.fmt("-DVERSION=\"{s}\"", .{version}),
             "-D_XOPEN_SOURCE=600",
         },
     });
 
-    root_module.linkSystemLibrary("X11", .{});
-    root_module.linkSystemLibrary("Xft", .{});
-    root_module.linkSystemLibrary("Xrender", .{});
-    root_module.linkSystemLibrary("fontconfig", .{});
-    root_module.linkSystemLibrary("freetype", .{});
-    root_module.linkSystemLibrary("harfbuzz", .{});
-    root_module.linkSystemLibrary("m", .{});
-    root_module.linkSystemLibrary("rt", .{});
-    root_module.linkSystemLibrary("util", .{});
-
-    root_module.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
-    root_module.addIncludePath(.{ .cwd_relative = "/usr/include/libpng16" });
-    root_module.addIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
-    root_module.addIncludePath(.{ .cwd_relative = "/usr/include/glib-2.0" });
-    root_module.addIncludePath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu/glib-2.0/include" });
+    for (libs) |lib_name| {
+        root_module.linkSystemLibrary(lib_name, .{});
+    }
 
     b.installArtifact(exe);
 
+    install_step.dependOn(&b.addInstallBinFile(b.path("st-copyout"), "st-copyout").step);
+    install_step.dependOn(&b.addInstallBinFile(b.path("st-urlhandler"), "st-urlhandler").step);
+
+    const render_manpage = b.addSystemCommand(&.{ sed, b.fmt("s/VERSION/{s}/g", .{version}) });
+    render_manpage.addFileArg(b.path("st.1"));
+    const manpage = render_manpage.captureStdOut(.{ .basename = "st.1" });
+    install_step.dependOn(&b.addInstallFileWithDir(manpage, .prefix, "share/man/man1/st.1").step);
+
+    const build_terminfo = b.addSystemCommand(&.{tic});
+    build_terminfo.addArg("-sx");
+    build_terminfo.addArg("-o");
+    const terminfo_dir = build_terminfo.addOutputDirectoryArg("terminfo");
+    build_terminfo.addFileArg(b.path("st.info"));
+
+    const install_terminfo = b.addInstallDirectory(.{
+        .source_dir = terminfo_dir,
+        .install_dir = .prefix,
+        .install_subdir = "share/terminfo",
+    });
+    install_step.dependOn(&install_terminfo.step);
+
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
 
     const run_step = b.step("run", "Run st");
     run_step.dependOn(&run_cmd.step);
+
+    const terminfo_step = b.step("terminfo", "Install compiled terminfo under prefix");
+    terminfo_step.dependOn(&install_terminfo.step);
+
+    const clean_install_step = b.step("clean-install", "Remove files installed by this project from the current prefix");
+    clean_install_step.makeFn = makeCleanInstall;
+
+    const base64_tests = b.addTest(.{
+        .name = "st_base64_test",
+        .root_module = base64_module,
+    });
+    const utf8_tests = b.addTest(.{
+        .name = "st_utf8_test",
+        .root_module = utf8_module,
+    });
+    const csi_tests = b.addTest(.{
+        .name = "st_csi_test",
+        .root_module = csi_module,
+    });
+    const color_tests = b.addTest(.{
+        .name = "st_color_test",
+        .root_module = color_module,
+    });
+    const attr_tests = b.addTest(.{
+        .name = "st_attr_test",
+        .root_module = attr_module,
+    });
+    const erase_tests = b.addTest(.{
+        .name = "st_erase_test",
+        .root_module = erase_module,
+    });
+    const cursor_tests = b.addTest(.{
+        .name = "st_cursor_test",
+        .root_module = cursor_module,
+    });
+    const edit_tests = b.addTest(.{
+        .name = "st_edit_test",
+        .root_module = edit_module,
+    });
+    const light_tests = b.addTest(.{
+        .name = "st_light_test",
+        .root_module = light_module,
+    });
+    const state_tests = b.addTest(.{
+        .name = "st_state_test",
+        .root_module = state_module,
+    });
+    const misc_tests = b.addTest(.{
+        .name = "st_misc_test",
+        .root_module = misc_module,
+    });
+    const run_base64_tests = b.addRunArtifact(base64_tests);
+    const run_utf8_tests = b.addRunArtifact(utf8_tests);
+    const run_csi_tests = b.addRunArtifact(csi_tests);
+    const run_color_tests = b.addRunArtifact(color_tests);
+    const run_attr_tests = b.addRunArtifact(attr_tests);
+    const run_erase_tests = b.addRunArtifact(erase_tests);
+    const run_cursor_tests = b.addRunArtifact(cursor_tests);
+    const run_edit_tests = b.addRunArtifact(edit_tests);
+    const run_light_tests = b.addRunArtifact(light_tests);
+    const run_state_tests = b.addRunArtifact(state_tests);
+    const run_misc_tests = b.addRunArtifact(misc_tests);
+    const test_step = b.step("test", "Run Zig unit tests");
+    test_step.dependOn(&run_base64_tests.step);
+    test_step.dependOn(&run_utf8_tests.step);
+    test_step.dependOn(&run_csi_tests.step);
+    test_step.dependOn(&run_color_tests.step);
+    test_step.dependOn(&run_attr_tests.step);
+    test_step.dependOn(&run_erase_tests.step);
+    test_step.dependOn(&run_cursor_tests.step);
+    test_step.dependOn(&run_edit_tests.step);
+    test_step.dependOn(&run_light_tests.step);
+    test_step.dependOn(&run_state_tests.step);
+    test_step.dependOn(&run_misc_tests.step);
+}
+
+fn requireProgram(b: *std.Build, name: []const u8, reason: []const u8) []const u8 {
+    return b.findProgram(&.{name}, &.{}) catch {
+        std.process.fatal(
+            "缺少构建工具 `{s}`。\n用途: {s}\n验证命令: `command -v {s}`\n安装后重试 `zig build`。",
+            .{ name, reason, name },
+        );
+    };
+}
+
+fn requirePkgConfigPackage(b: *std.Build, pkg_config: []const u8, pkg_name: []const u8, reason: []const u8) void {
+    var exit_code: u8 = 0;
+    const stdout = b.runAllowFail(&.{ pkg_config, "--exists", pkg_name }, &exit_code, .ignore) catch |err| switch (err) {
+        error.ExitCodeFailure => std.process.fatal(
+            "缺少 pkg-config 包 `{s}`。\n用途: {s}\n验证命令: `{s} --modversion {s}`\n请安装对应的开发包后重试。",
+            .{ pkg_name, reason, pkg_config, pkg_name },
+        ),
+        error.FileNotFound, error.InvalidName => std.process.fatal(
+            "无法执行 pkg-config 命令 `{s}`。\n如果设置了 `PKG_CONFIG` 环境变量，请确认它指向有效可执行文件。",
+            .{pkg_config},
+        ),
+        error.ProcessTerminated => std.process.fatal(
+            "pkg-config 在检查 `{s}` 时异常终止。\n执行命令: `{s} --exists {s}`",
+            .{ pkg_name, pkg_config, pkg_name },
+        ),
+        else => std.process.fatal(
+            "检查 pkg-config 包 `{s}` 失败: {t}",
+            .{ pkg_name, err },
+        ),
+    };
+    b.allocator.free(stdout);
+}
+
+fn makeCleanInstall(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+    _ = options;
+    const b = step.owner;
+    const cwd = std.Io.Dir.cwd();
+
+    deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st"));
+    deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st-copyout"));
+    deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st-urlhandler"));
+    deleteInstallFile(step, cwd, b.getInstallPath(.prefix, "share/man/man1/st.1"));
+
+    for (terminfo_entries) |name| {
+        deleteInstallFile(step, cwd, b.getInstallPath(.prefix, b.fmt("share/terminfo/s/{s}", .{name})));
+    }
+
+    deleteInstallDirIfEmpty(step, cwd, b.getInstallPath(.prefix, "share/terminfo/s"));
+    deleteInstallDirIfEmpty(step, cwd, b.getInstallPath(.prefix, "share/terminfo"));
+    deleteInstallDirIfEmpty(step, cwd, b.getInstallPath(.prefix, "share/man/man1"));
+    deleteInstallDirIfEmpty(step, cwd, b.getInstallPath(.prefix, "share/man"));
+    deleteInstallDirIfEmpty(step, cwd, b.getInstallPath(.prefix, "share"));
+    deleteInstallDirIfEmpty(step, cwd, b.getInstallPath(.bin, ""));
+}
+
+fn deleteInstallFile(step: *std.Build.Step, cwd: std.Io.Dir, path: []const u8) void {
+    const io = step.owner.graph.io;
+    cwd.deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => std.process.fatal("删除安装文件失败 `{s}`: {t}", .{ path, err }),
+    };
+}
+
+fn deleteInstallDirIfEmpty(step: *std.Build.Step, cwd: std.Io.Dir, path: []const u8) void {
+    const io = step.owner.graph.io;
+    cwd.deleteDir(io, path) catch |err| switch (err) {
+        error.FileNotFound, error.DirNotEmpty => {},
+        else => std.process.fatal("删除安装目录失败 `{s}`: {t}", .{ path, err }),
+    };
 }
