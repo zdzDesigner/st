@@ -18,8 +18,8 @@
 				(t1.tv_nsec-t2.tv_nsec)/1E6)
 #define MODBIT(x, set, bit)	((set) ? ((x) |= (bit)) : ((x) &= ~(bit)))
 
-#define TRUECOLOR(r,g,b)	(1 << 24 | (r) << 16 | (g) << 8 | (b))
-#define IS_TRUECOL(x)		(1 << 24 & (x))
+#define TRUECOLOR(r,g,b)	(1U << 24 | (unsigned int)(r) << 16 | (unsigned int)(g) << 8 | (unsigned int)(b))
+#define IS_TRUECOL(x)		(1U << 24 & (x))
 
 enum glyph_attribute {
 	ATTR_NULL       = 0,

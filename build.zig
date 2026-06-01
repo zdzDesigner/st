@@ -111,6 +111,55 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
+    const mode_module = b.createModule(.{
+        .root_source_file = b.path("st_mode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const strparse_module = b.createModule(.{
+        .root_source_file = b.path("st_strparse.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const strhandle_module = b.createModule(.{
+        .root_source_file = b.path("st_strhandle.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const esc_module = b.createModule(.{
+        .root_source_file = b.path("st_esc.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const control_module = b.createModule(.{
+        .root_source_file = b.path("st_control.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const putc_decode_module = b.createModule(.{
+        .root_source_file = b.path("st_putc_decode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const setchar_module = b.createModule(.{
+        .root_source_file = b.path("st_setchar.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const base64_obj = b.addObject(.{
         .name = "st_base64",
         .root_module = base64_module,
@@ -166,6 +215,41 @@ pub fn build(b: *std.Build) void {
         .root_module = misc_module,
     });
 
+    const mode_obj = b.addObject(.{
+        .name = "st_mode",
+        .root_module = mode_module,
+    });
+
+    const strparse_obj = b.addObject(.{
+        .name = "st_strparse",
+        .root_module = strparse_module,
+    });
+
+    const strhandle_obj = b.addObject(.{
+        .name = "st_strhandle",
+        .root_module = strhandle_module,
+    });
+
+    const esc_obj = b.addObject(.{
+        .name = "st_esc",
+        .root_module = esc_module,
+    });
+
+    const control_obj = b.addObject(.{
+        .name = "st_control",
+        .root_module = control_module,
+    });
+
+    const putc_decode_obj = b.addObject(.{
+        .name = "st_putc_decode",
+        .root_module = putc_decode_module,
+    });
+
+    const setchar_obj = b.addObject(.{
+        .name = "st_setchar",
+        .root_module = setchar_module,
+    });
+
     const exe = b.addExecutable(.{
         .name = "st",
         .root_module = root_module,
@@ -182,6 +266,13 @@ pub fn build(b: *std.Build) void {
     root_module.addObject(light_obj);
     root_module.addObject(state_obj);
     root_module.addObject(misc_obj);
+    root_module.addObject(mode_obj);
+    root_module.addObject(strparse_obj);
+    root_module.addObject(strhandle_obj);
+    root_module.addObject(esc_obj);
+    root_module.addObject(control_obj);
+    root_module.addObject(putc_decode_obj);
+    root_module.addObject(setchar_obj);
 
     root_module.addCSourceFiles(.{
         .files = &.{ "st.c", "x.c", "boxdraw.c", "hb.c" },
@@ -276,6 +367,34 @@ pub fn build(b: *std.Build) void {
         .name = "st_misc_test",
         .root_module = misc_module,
     });
+    const mode_tests = b.addTest(.{
+        .name = "st_mode_test",
+        .root_module = mode_module,
+    });
+    const strparse_tests = b.addTest(.{
+        .name = "st_strparse_test",
+        .root_module = strparse_module,
+    });
+    const strhandle_tests = b.addTest(.{
+        .name = "st_strhandle_test",
+        .root_module = strhandle_module,
+    });
+    const esc_tests = b.addTest(.{
+        .name = "st_esc_test",
+        .root_module = esc_module,
+    });
+    const control_tests = b.addTest(.{
+        .name = "st_control_test",
+        .root_module = control_module,
+    });
+    const putc_decode_tests = b.addTest(.{
+        .name = "st_putc_decode_test",
+        .root_module = putc_decode_module,
+    });
+    const setchar_tests = b.addTest(.{
+        .name = "st_setchar_test",
+        .root_module = setchar_module,
+    });
     const run_base64_tests = b.addRunArtifact(base64_tests);
     const run_utf8_tests = b.addRunArtifact(utf8_tests);
     const run_csi_tests = b.addRunArtifact(csi_tests);
@@ -287,6 +406,13 @@ pub fn build(b: *std.Build) void {
     const run_light_tests = b.addRunArtifact(light_tests);
     const run_state_tests = b.addRunArtifact(state_tests);
     const run_misc_tests = b.addRunArtifact(misc_tests);
+    const run_mode_tests = b.addRunArtifact(mode_tests);
+    const run_strparse_tests = b.addRunArtifact(strparse_tests);
+    const run_strhandle_tests = b.addRunArtifact(strhandle_tests);
+    const run_esc_tests = b.addRunArtifact(esc_tests);
+    const run_control_tests = b.addRunArtifact(control_tests);
+    const run_putc_decode_tests = b.addRunArtifact(putc_decode_tests);
+    const run_setchar_tests = b.addRunArtifact(setchar_tests);
     const test_step = b.step("test", "Run Zig unit tests");
     test_step.dependOn(&run_base64_tests.step);
     test_step.dependOn(&run_utf8_tests.step);
@@ -299,6 +425,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_light_tests.step);
     test_step.dependOn(&run_state_tests.step);
     test_step.dependOn(&run_misc_tests.step);
+    test_step.dependOn(&run_mode_tests.step);
+    test_step.dependOn(&run_strparse_tests.step);
+    test_step.dependOn(&run_strhandle_tests.step);
+    test_step.dependOn(&run_esc_tests.step);
+    test_step.dependOn(&run_control_tests.step);
+    test_step.dependOn(&run_putc_decode_tests.step);
+    test_step.dependOn(&run_setchar_tests.step);
 }
 
 fn requireProgram(b: *std.Build, name: []const u8, reason: []const u8) []const u8 {

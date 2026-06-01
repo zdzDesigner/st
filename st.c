@@ -1138,39 +1138,9 @@ tmoveto(int x, int y)
 void
 tsetchar(Rune u, Glyph *attr, int x, int y)
 {
-	static char *vt100_0[62] = { /* 0x41 - 0x7e */
-		"↑", "↓", "→", "←", "█", "▚", "☃", /* A - G */
-		0, 0, 0, 0, 0, 0, 0, 0, /* H - O */
-		0, 0, 0, 0, 0, 0, 0, 0, /* P - W */
-		0, 0, 0, 0, 0, 0, 0, " ", /* X - _ */
-		"◆", "▒", "␉", "␌", "␍", "␊", "°", "±", /* ` - g */
-		"␤", "␋", "┘", "┐", "┌", "└", "┼", "⎺", /* h - o */
-		"⎻", "─", "⎼", "⎽", "├", "┤", "┴", "┬", /* p - w */
-		"│", "≤", "≥", "π", "≠", "£", "·", /* x - ~ */
-	};
-
-	/*
-	 * The table is proudly stolen from rxvt.
-	 */
-	if (term.trantbl[term.charset] == CS_GRAPHIC0 &&
-	   BETWEEN(u, 0x41, 0x7e) && vt100_0[u - 0x41])
-		utf8decode(vt100_0[u - 0x41], &u, UTF_SIZ);
-
-	if (term.line[y][x].mode & ATTR_WIDE) {
-		if (x+1 < term.col) {
-			term.line[y][x+1].u = ' ';
-			term.line[y][x+1].mode &= ~ATTR_WDUMMY;
-		}
-	} else if (term.line[y][x].mode & ATTR_WDUMMY) {
-		term.line[y][x-1].u = ' ';
-		term.line[y][x-1].mode &= ~ATTR_WIDE;
-	}
-
-	term.dirty[y] = 1;
-	term.line[y][x] = *attr;
-	term.line[y][x].u = u;
-
-	if (isboxdraw(u))
+	st_tsetchar(u, (const ZigGlyph *)attr, (ZigGlyph *)term.line[y],
+		&term.dirty[y], x, term.col, term.trantbl[term.charset]);
+	if (isboxdraw(term.line[y][x].u))
 		term.line[y][x].mode |= ATTR_BOXDRAW;
 }
 
@@ -1482,129 +1452,105 @@ tapplymisc(const ZigMiscPlan *plan)
 void
 tsetmode(int priv, int set, int *args, int narg)
 {
+	ZigModePlan plan;
 	int alt, *lim;
 
 	for (lim = args + narg; args < lim; ++args) {
-		if (priv) {
-			switch (*args) {
-			case 1: /* DECCKM -- Cursor key */
-				xsetmode(set, MODE_APPCURSOR);
+		plan = st_planmode(priv, *args);
+
+		switch (plan.kind) {
+		case ST_ZIG_MODE_IGNORE:
+			break;
+		case ST_ZIG_MODE_APPCURSOR:
+			xsetmode(set, MODE_APPCURSOR);
+			break;
+		case ST_ZIG_MODE_REVERSE:
+			xsetmode(set, MODE_REVERSE);
+			break;
+		case ST_ZIG_MODE_ORIGIN:
+			MODBIT(term.c.state, set, CURSOR_ORIGIN);
+			tmoveato(0, 0);
+			break;
+		case ST_ZIG_MODE_WRAP:
+			MODBIT(term.mode, set, MODE_WRAP);
+			break;
+		case ST_ZIG_MODE_CURSOR_VISIBILITY:
+			xsetmode(!set, MODE_HIDE);
+			break;
+		case ST_ZIG_MODE_MOUSE_X10:
+			xsetpointermotion(0);
+			xsetmode(0, MODE_MOUSE);
+			xsetmode(set, MODE_MOUSEX10);
+			break;
+		case ST_ZIG_MODE_MOUSE_BTN:
+			xsetpointermotion(0);
+			xsetmode(0, MODE_MOUSE);
+			xsetmode(set, MODE_MOUSEBTN);
+			break;
+		case ST_ZIG_MODE_MOUSE_MOTION:
+			xsetpointermotion(0);
+			xsetmode(0, MODE_MOUSE);
+			xsetmode(set, MODE_MOUSEMOTION);
+			break;
+		case ST_ZIG_MODE_MOUSE_MANY:
+			xsetpointermotion(set);
+			xsetmode(0, MODE_MOUSE);
+			xsetmode(set, MODE_MOUSEMANY);
+			break;
+		case ST_ZIG_MODE_FOCUS:
+			xsetmode(set, MODE_FOCUS);
+			break;
+		case ST_ZIG_MODE_MOUSE_SGR:
+			xsetmode(set, MODE_MOUSESGR);
+			break;
+		case ST_ZIG_MODE_8BIT:
+			xsetmode(set, MODE_8BIT);
+			break;
+		case ST_ZIG_MODE_ALT1049:
+			if (!allowaltscreen)
 				break;
-			case 5: /* DECSCNM -- Reverse video */
-				xsetmode(set, MODE_REVERSE);
+			tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
+			/* FALLTHROUGH */
+		case ST_ZIG_MODE_ALT47:
+			if (!allowaltscreen)
 				break;
-			case 6: /* DECOM -- Origin */
-				MODBIT(term.c.state, set, CURSOR_ORIGIN);
-				tmoveato(0, 0);
-				break;
-			case 7: /* DECAWM -- Auto wrap */
-				MODBIT(term.mode, set, MODE_WRAP);
-				break;
-			case 0:  /* Error (IGNORED) */
-			case 2:  /* DECANM -- ANSI/VT52 (IGNORED) */
-			case 3:  /* DECCOLM -- Column  (IGNORED) */
-			case 4:  /* DECSCLM -- Scroll (IGNORED) */
-			case 8:  /* DECARM -- Auto repeat (IGNORED) */
-			case 18: /* DECPFF -- Printer feed (IGNORED) */
-			case 19: /* DECPEX -- Printer extent (IGNORED) */
-			case 42: /* DECNRCM -- National characters (IGNORED) */
-			case 12: /* att610 -- Start blinking cursor (IGNORED) */
-				break;
-			case 25: /* DECTCEM -- Text Cursor Enable Mode */
-				xsetmode(!set, MODE_HIDE);
-				break;
-			case 9:    /* X10 mouse compatibility mode */
-				xsetpointermotion(0);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEX10);
-				break;
-			case 1000: /* 1000: report button press */
-				xsetpointermotion(0);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEBTN);
-				break;
-			case 1002: /* 1002: report motion on button press */
-				xsetpointermotion(0);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEMOTION);
-				break;
-			case 1003: /* 1003: enable all mouse motions */
-				xsetpointermotion(set);
-				xsetmode(0, MODE_MOUSE);
-				xsetmode(set, MODE_MOUSEMANY);
-				break;
-			case 1004: /* 1004: send focus events to tty */
-				xsetmode(set, MODE_FOCUS);
-				break;
-			case 1006: /* 1006: extended reporting mode */
-				xsetmode(set, MODE_MOUSESGR);
-				break;
-			case 1034:
-				xsetmode(set, MODE_8BIT);
-				break;
-			case 1049: /* swap screen & set/restore cursor as xterm */
-				if (!allowaltscreen)
-					break;
-				tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
-				/* FALLTHROUGH */
-			case 47: /* swap screen */
-			case 1047:
-				if (!allowaltscreen)
-					break;
-				alt = IS_SET(MODE_ALTSCREEN);
-				if (alt) {
-					tclearregion(0, 0, term.col-1,
-							term.row-1);
-				}
-				if (set ^ alt) /* set is always 1 or 0 */
-					tswapscreen();
-				if (*args != 1049)
-					break;
-				/* FALLTHROUGH */
-			case 1048:
-				tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
-				break;
-			case 2004: /* 2004: bracketed paste mode */
-				xsetmode(set, MODE_BRCKTPASTE);
-				break;
-			/* Not implemented mouse modes. See comments there. */
-			case 1001: /* mouse highlight mode; can hang the
-				      terminal by design when implemented. */
-			case 1005: /* UTF-8 mouse mode; will confuse
-				      applications not supporting UTF-8
-				      and luit. */
-			case 1015: /* urxvt mangled mouse mode; incompatible
-				      and can be mistaken for other control
-				      codes. */
-				break;
-			default:
-				fprintf(stderr,
-					"erresc: unknown private set/reset mode %d\n",
-					*args);
-				break;
+			alt = IS_SET(MODE_ALTSCREEN);
+			if (alt) {
+				tclearregion(0, 0, term.col-1, term.row-1);
 			}
-		} else {
-			switch (*args) {
-			case 0:  /* Error (IGNORED) */
+			if (set ^ alt)
+				tswapscreen();
+			if (*args != 1049)
 				break;
-			case 2:
-				xsetmode(set, MODE_KBDLOCK);
-				break;
-			case 4:  /* IRM -- Insertion-replacement */
-				MODBIT(term.mode, set, MODE_INSERT);
-				break;
-			case 12: /* SRM -- Send/Receive */
-				MODBIT(term.mode, !set, MODE_ECHO);
-				break;
-			case 20: /* LNM -- Linefeed/new line */
-				MODBIT(term.mode, set, MODE_CRLF);
-				break;
-			default:
-				fprintf(stderr,
-					"erresc: unknown set/reset mode %d\n",
-					*args);
-				break;
-			}
+			/* FALLTHROUGH */
+		case ST_ZIG_MODE_CURSOR1048:
+			tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
+			break;
+		case ST_ZIG_MODE_BRACKETED_PASTE:
+			xsetmode(set, MODE_BRCKTPASTE);
+			break;
+		case ST_ZIG_MODE_KBDLOCK:
+			xsetmode(set, MODE_KBDLOCK);
+			break;
+		case ST_ZIG_MODE_INSERT:
+			MODBIT(term.mode, set, MODE_INSERT);
+			break;
+		case ST_ZIG_MODE_ECHO:
+			MODBIT(term.mode, !set, MODE_ECHO);
+			break;
+		case ST_ZIG_MODE_CRLF:
+			MODBIT(term.mode, set, MODE_CRLF);
+			break;
+		case ST_ZIG_MODE_PRIVATE_UNKNOWN:
+			fprintf(stderr,
+				"erresc: unknown private set/reset mode %d\n",
+				*args);
+			break;
+		case ST_ZIG_MODE_REGULAR_UNKNOWN:
+			fprintf(stderr,
+				"erresc: unknown set/reset mode %d\n",
+				*args);
+			break;
 		}
 	}
 }
@@ -1832,70 +1778,70 @@ csireset(void)
 void
 strhandle(void)
 {
+	ZigStrHandlePlan plan;
 	char *p = NULL, *dec;
 	int j, narg, par;
 
 	term.esc &= ~(ESC_STR_END|ESC_STR);
 	strparse();
 	par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
+	plan = st_planstrhandle(strescseq.type, narg, par);
 
-	switch (strescseq.type) {
-	case ']': /* OSC -- Operating System Command */
-		switch (par) {
-		case 0:
-			if (narg > 1) {
-				xsettitle(strescseq.args[1]);
-				xseticontitle(strescseq.args[1]);
-			}
-			return;
-		case 1:
-			if (narg > 1)
-				xseticontitle(strescseq.args[1]);
-			return;
-		case 2:
-			if (narg > 1)
-				xsettitle(strescseq.args[1]);
-			return;
-		case 52:
-			if (narg > 2 && allowwindowops) {
-				dec = base64dec(strescseq.args[2]);
-				if (dec) {
-					xsetsel(dec);
-					xclipcopy();
-				} else {
-					fprintf(stderr, "erresc: invalid base64\n");
-				}
-			}
-			return;
-		case 4: /* color set */
-			if (narg < 3)
-				break;
-			p = strescseq.args[2];
-			/* FALLTHROUGH */
-		case 104: /* color reset, here p = NULL */
-			j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
-			if (xsetcolorname(j, p)) {
-				if (par == 104 && narg <= 1)
-					return; /* color reset without parameter */
-				fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
-				        j, p ? p : "(null)");
-			} else {
-				/*
-				 * TODO if defaultbg color is changed, borders
-				 * are dirty
-				 */
-				redraw();
-			}
-			return;
-		}
-		break;
-	case 'k': /* old title set compatibility */
+	switch (plan.kind) {
+	case 1:
+		xsettitle(strescseq.args[1]);
+		xseticontitle(strescseq.args[1]);
+		return;
+	case 2:
+		xseticontitle(strescseq.args[1]);
+		return;
+	case 3:
+		xsettitle(strescseq.args[1]);
+		return;
+	case 4:
 		xsettitle(strescseq.args[0]);
 		return;
-	case 'P': /* DCS -- Device Control String */
-	case '_': /* APC -- Application Program Command */
-	case '^': /* PM -- Privacy Message */
+	case 5:
 		return;
+	case 0:
+		if (narg > 2 && allowwindowops) {
+			dec = base64dec(strescseq.args[2]);
+			if (dec) {
+				xsetsel(dec);
+				xclipcopy();
+			} else {
+				fprintf(stderr, "erresc: invalid base64\n");
+			}
+		}
+		return;
+	case 7:
+		p = strescseq.args[2];
+		j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+		if (xsetcolorname(j, p)) {
+			fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
+			        j, p ? p : "(null)");
+		} else {
+			redraw();
+		}
+		return;
+	case 8:
+		j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+		if (xsetcolorname(j, p)) {
+			if (narg <= 1)
+				return;
+			fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
+			        j, p ? p : "(null)");
+		} else {
+			redraw();
+		}
+		return;
+	case 6:
+		fprintf(stderr, "erresc: unknown str ");
+		strdump();
+		return;
+	}
+
+	switch (strescseq.type) {
 	}
 
 	fprintf(stderr, "erresc: unknown str ");
@@ -1905,22 +1851,26 @@ strhandle(void)
 void
 strparse(void)
 {
-	int c;
-	char *p = strescseq.buf;
+	ZigStrParse parsed;
+	char *p;
+	int i;
+	size_t start;
 
-	strescseq.narg = 0;
 	strescseq.buf[strescseq.len] = '\0';
+	strescseq.narg = 0;
 
-	if (*p == '\0')
+	if (*strescseq.buf == '\0')
 		return;
 
-	while (strescseq.narg < STR_ARG_SIZ) {
-		strescseq.args[strescseq.narg++] = p;
-		while ((c = *p) != ';' && c != '\0')
-			++p;
-		if (c == '\0')
-			return;
-		*p++ = '\0';
+	parsed = st_strparse((const unsigned char *)strescseq.buf, strescseq.len);
+	strescseq.narg = parsed.narg;
+	start = 0;
+	for (i = 0; i < strescseq.narg; ++i) {
+		strescseq.args[i] = &strescseq.buf[start];
+		p = &strescseq.buf[parsed.ends[i]];
+		if (*p == ';')
+			*p = '\0';
+		start = parsed.ends[i] + 1;
 	}
 }
 
@@ -2163,93 +2113,52 @@ tstrsequence(uchar c)
 void
 tcontrolcode(uchar ascii)
 {
-	switch (ascii) {
-	case '\t':   /* HT */
+	ZigControlPlan plan = st_plancontrol(ascii);
+
+	switch (plan.kind) {
+	case 1:
 		tputtab(1);
 		return;
-	case '\b':   /* BS */
+	case 2:
 		tmoveto(term.c.x-1, term.c.y);
 		return;
-	case '\r':   /* CR */
+	case 3:
 		tmoveto(0, term.c.y);
 		return;
-	case '\f':   /* LF */
-	case '\v':   /* VT */
-	case '\n':   /* LF */
-		/* go to first col if the mode is set */
+	case 4:
 		tnewline(IS_SET(MODE_CRLF));
 		return;
-	case '\a':   /* BEL */
+	case 5:
 		if (term.esc & ESC_STR_END) {
-			/* backwards compatibility to xterm */
 			strhandle();
 		} else {
 			xbell();
 		}
 		break;
-	case '\033': /* ESC */
+	case 6:
 		csireset();
 		term.esc &= ~(ESC_CSI|ESC_ALTCHARSET|ESC_TEST);
 		term.esc |= ESC_START;
 		return;
-	case '\016': /* SO (LS1 -- Locking shift 1) */
-	case '\017': /* SI (LS0 -- Locking shift 0) */
-		term.charset = 1 - (ascii - '\016');
+	case 7:
+		term.charset = plan.value;
 		return;
-	case '\032': /* SUB */
+	case 8:
 		tsetchar('?', &term.c.attr, term.c.x, term.c.y);
 		/* FALLTHROUGH */
-	case '\030': /* CAN */
+	case 9:
 		csireset();
 		break;
-	case '\005': /* ENQ (IGNORED) */
-	case '\000': /* NUL (IGNORED) */
-	case '\021': /* XON (IGNORED) */
-	case '\023': /* XOFF (IGNORED) */
-	case 0177:   /* DEL (IGNORED) */
-		return;
-	case 0x80:   /* TODO: PAD */
-	case 0x81:   /* TODO: HOP */
-	case 0x82:   /* TODO: BPH */
-	case 0x83:   /* TODO: NBH */
-	case 0x84:   /* TODO: IND */
+	case 10:
+		tnewline(1);
 		break;
-	case 0x85:   /* NEL -- Next line */
-		tnewline(1); /* always go to first col */
-		break;
-	case 0x86:   /* TODO: SSA */
-	case 0x87:   /* TODO: ESA */
-		break;
-	case 0x88:   /* HTS -- Horizontal tab stop */
+	case 11:
 		term.tabs[term.c.x] = 1;
 		break;
-	case 0x89:   /* TODO: HTJ */
-	case 0x8a:   /* TODO: VTS */
-	case 0x8b:   /* TODO: PLD */
-	case 0x8c:   /* TODO: PLU */
-	case 0x8d:   /* TODO: RI */
-	case 0x8e:   /* TODO: SS2 */
-	case 0x8f:   /* TODO: SS3 */
-	case 0x91:   /* TODO: PU1 */
-	case 0x92:   /* TODO: PU2 */
-	case 0x93:   /* TODO: STS */
-	case 0x94:   /* TODO: CCH */
-	case 0x95:   /* TODO: MW */
-	case 0x96:   /* TODO: SPA */
-	case 0x97:   /* TODO: EPA */
-	case 0x98:   /* TODO: SOS */
-	case 0x99:   /* TODO: SGCI */
-		break;
-	case 0x9a:   /* DECID -- Identify Terminal */
+	case 12:
 		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
-	case 0x9b:   /* TODO: CSI */
-	case 0x9c:   /* TODO: ST */
-		break;
-	case 0x90:   /* DCS -- Device Control String */
-	case 0x9d:   /* OSC -- Operating System Command */
-	case 0x9e:   /* PM -- Privacy Message */
-	case 0x9f:   /* APC -- Application Program Command */
+	case 13:
 		tstrsequence(ascii);
 		return;
 	}
@@ -2264,75 +2173,69 @@ tcontrolcode(uchar ascii)
 int
 eschandle(uchar ascii)
 {
-	switch (ascii) {
-	case '[':
+	ZigEscPlan plan = st_planesc(ascii);
+
+	switch (plan.kind) {
+	case 1:
 		term.esc |= ESC_CSI;
-		return 0;
-	case '#':
-		term.esc |= ESC_TEST;
-		return 0;
-	case '%':
-		term.esc |= ESC_UTF8;
-		return 0;
-	case 'P': /* DCS -- Device Control String */
-	case '_': /* APC -- Application Program Command */
-	case '^': /* PM -- Privacy Message */
-	case ']': /* OSC -- Operating System Command */
-	case 'k': /* old title set compatibility */
-		tstrsequence(ascii);
-		return 0;
-	case 'n': /* LS2 -- Locking shift 2 */
-	case 'o': /* LS3 -- Locking shift 3 */
-		term.charset = 2 + (ascii - 'n');
 		break;
-	case '(': /* GZD4 -- set primary charset G0 */
-	case ')': /* G1D4 -- set secondary charset G1 */
-	case '*': /* G2D4 -- set tertiary charset G2 */
-	case '+': /* G3D4 -- set quaternary charset G3 */
-		term.icharset = ascii - '(';
+	case 2:
+		term.esc |= ESC_TEST;
+		break;
+	case 3:
+		term.esc |= ESC_UTF8;
+		break;
+	case 4:
+		tstrsequence(ascii);
+		break;
+	case 5:
+		term.charset = plan.value;
+		break;
+	case 6:
+		term.icharset = plan.value;
 		term.esc |= ESC_ALTCHARSET;
-		return 0;
-	case 'D': /* IND -- Linefeed */
+		break;
+	case 7:
 		if (term.c.y == term.bot) {
 			tscrollup(term.top, 1, 1);
 		} else {
 			tmoveto(term.c.x, term.c.y+1);
 		}
 		break;
-	case 'E': /* NEL -- Next line */
-		tnewline(1); /* always go to first col */
+	case 8:
+		tnewline(1);
 		break;
-	case 'H': /* HTS -- Horizontal tab stop */
+	case 9:
 		term.tabs[term.c.x] = 1;
 		break;
-	case 'M': /* RI -- Reverse index */
+	case 10:
 		if (term.c.y == term.top) {
 			tscrolldown(term.top, 1, 1);
 		} else {
 			tmoveto(term.c.x, term.c.y-1);
 		}
 		break;
-	case 'Z': /* DECID -- Identify Terminal */
+	case 11:
 		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
-	case 'c': /* RIS -- Reset to initial state */
+	case 12:
 		treset();
 		resettitle();
 		xloadcols();
 		break;
-	case '=': /* DECPAM -- Application keypad */
+	case 13:
 		xsetmode(1, MODE_APPKEYPAD);
 		break;
-	case '>': /* DECPNM -- Normal keypad */
+	case 14:
 		xsetmode(0, MODE_APPKEYPAD);
 		break;
-	case '7': /* DECSC -- Save Cursor */
+	case 15:
 		tcursor(CURSOR_SAVE);
 		break;
-	case '8': /* DECRC -- Restore Cursor */
+	case 16:
 		tcursor(CURSOR_LOAD);
 		break;
-	case '\\': /* ST -- String Terminator */
+	case 17:
 		if (term.esc & ESC_STR_END)
 			strhandle();
 		break;
@@ -2341,26 +2244,28 @@ eschandle(uchar ascii)
 			(uchar) ascii, isprint(ascii)? ascii:'.');
 		break;
 	}
-	return 1;
+	return plan.ret;
 }
 
 void
 tputc(Rune u)
 {
 	char c[UTF_SIZ];
+	ZigPutcDecode decoded;
+	ZigPutcWriteResult write;
+	ZigPutcPreparePlan prepare;
+	ZigStrCollectExec collect_exec;
+	ZigEscFlowExec escflow;
+	ZigEscFlowAfter escafter;
 	int control;
 	int width, len;
 	Glyph *gp;
 
-	control = ISCONTROL(u);
-	if (u < 127 || !IS_SET(MODE_UTF8)) {
-		c[0] = u;
-		width = len = 1;
-	} else {
-		len = utf8encode(u, c);
-		if (!control && (width = wcwidth(u)) == -1)
-			width = 1;
-	}
+	decoded = st_putcdecode(u, IS_SET(MODE_UTF8));
+	control = decoded.control;
+	width = decoded.width;
+	len = decoded.len;
+	memcpy(c, decoded.bytes, sizeof(decoded.bytes));
 
 	if (IS_SET(MODE_PRINT))
 		tprinter(c, len);
@@ -2372,14 +2277,18 @@ tputc(Rune u)
 	 * character.
 	 */
 	if (term.esc & ESC_STR) {
-		if (u == '\a' || u == 030 || u == 032 || u == 033 ||
-		   ISCONTROLC1(u)) {
-			term.esc &= ~(ESC_START|ESC_STR);
-			term.esc |= ESC_STR_END;
+		collect_exec = st_tcollectstr(u, term.esc,
+			(unsigned char *)strescseq.buf, strescseq.len,
+			(const unsigned char *)c, len, strescseq.siz);
+		if (collect_exec.kind == 1) {
+			term.esc = collect_exec.new_esc;
 			goto check_control_code;
 		}
 
-		if (strescseq.len+len >= strescseq.siz) {
+		if (collect_exec.kind == 3)
+			return;
+
+		if (collect_exec.kind == 2) {
 			/*
 			 * Here is a bug in terminals. If the user never sends
 			 * some code to stop the str or esc command, then st
@@ -2393,14 +2302,14 @@ tputc(Rune u)
 			 * term.esc = 0;
 			 * strhandle();
 			 */
-			if (strescseq.siz > (SIZE_MAX - UTF_SIZ) / 2)
-				return;
-			strescseq.siz *= 2;
+			strescseq.siz = collect_exec.new_size;
 			strescseq.buf = xrealloc(strescseq.buf, strescseq.siz);
+			collect_exec = st_tcollectstr(u, term.esc,
+				(unsigned char *)strescseq.buf, strescseq.len,
+				(const unsigned char *)c, len, strescseq.siz);
 		}
 
-		memmove(&strescseq.buf[strescseq.len], c, len);
-		strescseq.len += len;
+		strescseq.len = collect_exec.new_len;
 		return;
 	}
 
@@ -2415,68 +2324,65 @@ check_control_code:
 		/*
 		 * control codes are not shown ever
 		 */
-		if (!term.esc)
+		if (st_tcontrolafter(term.esc))
 			term.lastc = 0;
 		return;
 	} else if (term.esc & ESC_START) {
-		if (term.esc & ESC_CSI) {
-			csiescseq.buf[csiescseq.len++] = u;
-			if (BETWEEN(u, 0x40, 0x7E)
-					|| csiescseq.len >= \
-					sizeof(csiescseq.buf)-1) {
+		escflow = st_tescflow(term.esc, u, (unsigned char *)csiescseq.buf,
+			csiescseq.len, sizeof(csiescseq.buf));
+		if (escflow.kind == 1) {
+			csiescseq.len = escflow.new_csi_len;
+			if (escflow.finish) {
 				term.esc = 0;
 				csiparse();
 				csihandle();
 			}
 			return;
-		} else if (term.esc & ESC_UTF8) {
+		} else if (escflow.kind == 2) {
 			tdefutf8(u);
-		} else if (term.esc & ESC_ALTCHARSET) {
+		} else if (escflow.kind == 3) {
 			tdeftran(u);
-		} else if (term.esc & ESC_TEST) {
+		} else if (escflow.kind == 4) {
 			tdectest(u);
 		} else {
-			if (!eschandle(u))
+			escafter = st_tescflowafter(escflow.kind, eschandle(u));
+			if (escafter.stop && !escafter.clear_esc)
 				return;
 			/* sequence already finished */
 		}
-		term.esc = 0;
+		escafter = st_tescflowafter(escflow.kind, 1);
+		if (escafter.clear_esc)
+			term.esc = 0;
 		/*
 		 * All characters which form part of a sequence are not
 		 * printed
 		 */
 		return;
 	}
-	if (selected(term.c.x, term.c.y))
+	prepare = st_tputcprepare(selected(term.c.x, term.c.y),
+		IS_SET(MODE_WRAP), term.c.state, term.c.x, width, term.col);
+	if (prepare.clear_selection)
 		selclear();
 
 	gp = &term.line[term.c.y][term.c.x];
-	if (IS_SET(MODE_WRAP) && (term.c.state & CURSOR_WRAPNEXT)) {
+	if (prepare.wrapnext) {
 		gp->mode |= ATTR_WRAP;
 		tnewline(1);
 		gp = &term.line[term.c.y][term.c.x];
 	}
 
-	if (IS_SET(MODE_INSERT) && term.c.x+width < term.col)
-		memmove(gp+width, gp, (term.col - term.c.x - width) * sizeof(Glyph));
-
-	if (term.c.x+width > term.col) {
+	if (prepare.overflow) {
 		tnewline(1);
 		gp = &term.line[term.c.y][term.c.x];
 	}
 
-	tsetchar(u, &term.c.attr, term.c.x, term.c.y);
+	write = st_tputcwrite(u, width, (const ZigGlyph *)&term.c.attr,
+		(ZigGlyph *)term.line[term.c.y], &term.dirty[term.c.y],
+		term.c.x, term.col, term.trantbl[term.charset],
+		IS_SET(MODE_INSERT));
 	term.lastc = u;
-
-	if (width == 2) {
-		gp->mode |= ATTR_WIDE;
-		if (term.c.x+1 < term.col) {
-			gp[1].u = '\0';
-			gp[1].mode = ATTR_WDUMMY;
-		}
-	}
-	if (term.c.x+width < term.col) {
-		tmoveto(term.c.x+width, term.c.y);
+	if (write.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
+		tmoveto(write.next_x, term.c.y);
 	} else {
 		term.c.state |= CURSOR_WRAPNEXT;
 	}

@@ -97,6 +97,83 @@ typedef struct {
 	int extra;
 } ZigMiscPlan;
 
+typedef struct {
+	int kind;
+} ZigModePlan;
+
+typedef struct {
+	int narg;
+	size_t ends[ST_ZIG_CSI_ARG_SIZ];
+} ZigStrParse;
+
+typedef struct {
+	int kind;
+} ZigStrHandlePlan;
+
+typedef struct {
+	int kind;
+	int value;
+	int ret;
+} ZigEscPlan;
+
+typedef struct {
+	int kind;
+	int value;
+} ZigControlPlan;
+
+typedef struct {
+	int control;
+	int width;
+	int len;
+	unsigned char bytes[4];
+} ZigPutcDecode;
+
+typedef struct {
+	int kind;
+	size_t new_size;
+} ZigStrCollectPlan;
+
+typedef struct {
+	int kind;
+	int finish;
+} ZigEscFlowPlan;
+
+typedef struct {
+	int kind;
+	int finish;
+	size_t new_csi_len;
+} ZigEscFlowExec;
+
+typedef struct {
+	int clear_esc;
+	int stop;
+} ZigEscFlowAfter;
+
+typedef struct {
+	uint32_t u;
+	unsigned short mode;
+	uint32_t fg;
+	uint32_t bg;
+} ZigGlyph;
+
+typedef struct {
+	int advance;
+	int next_x;
+} ZigPutcWriteResult;
+
+typedef struct {
+	int clear_selection;
+	int wrapnext;
+	int overflow;
+} ZigPutcPreparePlan;
+
+typedef struct {
+	int kind;
+	int new_esc;
+	size_t new_len;
+	size_t new_size;
+} ZigStrCollectExec;
+
 enum {
 	ST_ZIG_ATTR_ERROR_NONE = 0,
 	ST_ZIG_ATTR_ERROR_UNKNOWN = 1,
@@ -153,6 +230,43 @@ enum {
 	ST_ZIG_MISC_UNKNOWN = 8,
 };
 
+enum {
+	ST_ZIG_MODE_IGNORE = 0,
+	ST_ZIG_MODE_PRIVATE_UNKNOWN = 1,
+	ST_ZIG_MODE_REGULAR_UNKNOWN = 2,
+	ST_ZIG_MODE_APPCURSOR = 3,
+	ST_ZIG_MODE_REVERSE = 4,
+	ST_ZIG_MODE_ORIGIN = 5,
+	ST_ZIG_MODE_WRAP = 6,
+	ST_ZIG_MODE_CURSOR_VISIBILITY = 7,
+	ST_ZIG_MODE_MOUSE_X10 = 8,
+	ST_ZIG_MODE_MOUSE_BTN = 9,
+	ST_ZIG_MODE_MOUSE_MOTION = 10,
+	ST_ZIG_MODE_MOUSE_MANY = 11,
+	ST_ZIG_MODE_FOCUS = 12,
+	ST_ZIG_MODE_MOUSE_SGR = 13,
+	ST_ZIG_MODE_8BIT = 14,
+	ST_ZIG_MODE_ALT1049 = 15,
+	ST_ZIG_MODE_ALT47 = 16,
+	ST_ZIG_MODE_CURSOR1048 = 17,
+	ST_ZIG_MODE_BRACKETED_PASTE = 18,
+	ST_ZIG_MODE_KBDLOCK = 19,
+	ST_ZIG_MODE_INSERT = 20,
+	ST_ZIG_MODE_ECHO = 21,
+	ST_ZIG_MODE_CRLF = 22,
+};
+
+enum {
+	ST_ZIG_PUTC_ADVANCE_MOVE = 0,
+	ST_ZIG_PUTC_ADVANCE_WRAPNEXT = 1,
+};
+
+enum {
+	ST_ZIG_SETCHAR_FIX_NONE = 0,
+	ST_ZIG_SETCHAR_FIX_CLEAR_RIGHT_DUMMY = 1,
+	ST_ZIG_SETCHAR_FIX_CLEAR_LEFT_WIDE = 2,
+};
+
 char *st_base64dec(const char *);
 ZigUtf8Decode st_utf8decode(const unsigned char *, size_t);
 size_t st_utf8encode(uint32_t, unsigned char *);
@@ -165,5 +279,18 @@ ZigEditPlan st_planedit(char, const int *, int, int, int);
 ZigLightPlan st_planlight(char, const int *, int, int, int);
 ZigStatePlan st_planstate(char, int, const int *, int, int);
 ZigMiscPlan st_planmisc(char, char, const int *, int);
+ZigModePlan st_planmode(int, int);
+ZigStrParse st_strparse(const unsigned char *, size_t);
+ZigStrHandlePlan st_planstrhandle(char, int, int);
+ZigEscPlan st_planesc(unsigned char);
+ZigControlPlan st_plancontrol(unsigned char);
+ZigPutcDecode st_putcdecode(uint32_t, int);
+void st_tsetchar(uint32_t, const ZigGlyph *, ZigGlyph *, int *, int, int, int);
+ZigPutcWriteResult st_tputcwrite(uint32_t, int, const ZigGlyph *, ZigGlyph *, int *, int, int, int, int);
+ZigPutcPreparePlan st_tputcprepare(int, int, int, int, int, int);
+ZigStrCollectExec st_tcollectstr(uint32_t, int, unsigned char *, size_t, const unsigned char *, size_t, size_t);
+ZigEscFlowExec st_tescflow(int, uint32_t, unsigned char *, size_t, size_t);
+int st_tcontrolafter(int);
+ZigEscFlowAfter st_tescflowafter(int, int);
 
 #endif
