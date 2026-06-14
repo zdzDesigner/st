@@ -1,3 +1,9 @@
+//! st_strparse.zig 负责 OSC/DCS 等字符串序列参数边界解析。
+//! [输入]: `strescseq.buf` 和长度，由 C 侧 STR 收集逻辑维护。
+//! [输出]: `ZigStrParse`，包含参数数量和每个参数结束位置。
+//! [副作用边界]: 不分配、不解码 base64、不设置 title/selection；这些仍在 `strhandle(...)` 的 C 壳中执行。
+//! [定位]: 替代 C 侧字符串参数扫描，保留 C 对字符串生命周期的所有权。
+
 const std = @import("std");
 
 const str_arg_siz = 16;

@@ -1,3 +1,9 @@
+//! st_base64.zig 是 `base64dec(...)` 的 Zig 迁移入口。
+//! [输入]: C 侧传入以 NUL 结尾的 base64 字符串。
+//! [输出]: 返回由 Zig 分配并以 NUL 结尾的解码字符串，失败时返回 null。
+//! [副作用边界]: 这里只负责解码和结果分配；调用方仍在 C 侧决定如何使用、释放或写入 X selection。
+//! [定位]: 这是字符串处理辅助模块，不直接访问 `term`、`sel` 或 X11 状态。
+
 const std = @import("std");
 
 const allocator = std.heap.c_allocator;

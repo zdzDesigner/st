@@ -1,3 +1,9 @@
+//! st_strhandle.zig 负责 OSC/DCS 字符串序列的动作分类。
+//! [输入]: 字符串序列类型、参数数量和第一个参数的整数值。
+//! [输出]: `ZigStrHandlePlan`，告诉 C 侧应设置标题、图标标题、selection 或忽略/unknown。
+//! [副作用边界]: 不调用 `xsettitle(...)`、`xsetsel(...)`、`xclipcopy(...)`；X11/clipboard 副作用留在 C。
+//! [定位]: 收薄 `strhandle(...)` 的分支判断，但保留 C 对外部 UI 状态的控制。
+
 const std = @import("std");
 
 pub const ZigStrHandlePlan = extern struct {

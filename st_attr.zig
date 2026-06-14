@@ -1,4 +1,11 @@
+//! st_attr.zig 负责 SGR 属性更新逻辑，是 `tsetattr(...)` 的 Zig 迁移主体。
+//! [输入]: 当前 glyph 属性、默认前景/背景色，以及 CSI `m` 参数数组。
+//! [输出]: 新的属性状态、普通属性错误和颜色解析错误。
+//! [副作用边界]: 只计算 `term.c.attr` 应变成什么；错误打印、`csidump()` 和 C 全局状态写回仍在 C 侧。
+//! [定位]: 把复杂 SGR 分支从 `st.c` 收敛为一个可测试的属性状态转换器。
+
 const std = @import("std");
+
 const color = @import("st_color_core.zig");
 
 const ZigAttrState = extern struct {

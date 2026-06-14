@@ -1,3 +1,9 @@
+//! st_light.zig 负责轻量 CSI 动作的规划。
+//! [输入]: CSI mode、参数数组、当前光标坐标。
+//! [输出]: `ZigLightPlan`，描述清 tab、移动 tab、写设备标识或报告光标位置。
+//! [副作用边界]: 不写 tty、不修改 tab 数组、不移动 tab；C 侧 `tapplylight(...)` 执行这些动作。
+//! [定位]: 收敛 `csihandle(...)` 中 `c/g/I/Z/n` 等轻量分支。
+
 const std = @import("std");
 
 pub const ZigLightPlan = extern struct {

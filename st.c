@@ -206,7 +206,6 @@ static int twrite(const char *, int, int);
 static void tcontrolcode(uchar );
 static void tdectest(char );
 static void tdefutf8(char);
-static int32_t tdefcolor(int *, int *, int);
 static void tdeftran(char);
 static void tstrsequence(uchar);
 
@@ -310,29 +309,13 @@ selinit(void)
 int
 tlinelen(int y)
 {
-	int i = term.col;
-
-	if (TLINE(y)[i - 1].mode & ATTR_WRAP)
-		return i;
-
-	while (i > 0 && TLINE(y)[i - 1].u == ' ')
-		--i;
-
-	return i;
+	return st_tlinelen((const ZigGlyph *)TLINE(y), term.col);
 }
 
 int
 tlinehistlen(int y)
 {
-	int i = term.col;
-
-	if (TLINE_HIST(y)[i - 1].mode & ATTR_WRAP)
-		return i;
-
-	while (i > 0 && TLINE_HIST(y)[i - 1].u == ' ')
-		--i;
-
-	return i;
+	return st_tlinelen((const ZigGlyph *)TLINE_HIST(y), term.col);
 }
 
 void
@@ -384,17 +367,15 @@ selextend(int col, int row, int type, int done)
 void
 selnormalize(void)
 {
+	ZigSelBounds bounds;
 	int i;
 
-	if (sel.type == SEL_REGULAR && sel.ob.y != sel.oe.y) {
-		sel.nb.x = sel.ob.y < sel.oe.y ? sel.ob.x : sel.oe.x;
-		sel.ne.x = sel.ob.y < sel.oe.y ? sel.oe.x : sel.ob.x;
-	} else {
-		sel.nb.x = MIN(sel.ob.x, sel.oe.x);
-		sel.ne.x = MAX(sel.ob.x, sel.oe.x);
-	}
-	sel.nb.y = MIN(sel.ob.y, sel.oe.y);
-	sel.ne.y = MAX(sel.ob.y, sel.oe.y);
+	bounds = st_planselnormalize(sel.type, sel.ob.x, sel.ob.y,
+		sel.oe.x, sel.oe.y);
+	sel.nb.x = bounds.nb_x;
+	sel.nb.y = bounds.nb_y;
+	sel.ne.x = bounds.ne_x;
+	sel.ne.y = bounds.ne_y;
 
 	selsnap(&sel.nb.x, &sel.nb.y, -1);
 	selsnap(&sel.ne.x, &sel.ne.y, +1);
@@ -412,17 +393,9 @@ selnormalize(void)
 int
 selected(int x, int y)
 {
-	if (sel.mode == SEL_EMPTY || sel.ob.x == -1 ||
-			sel.alt != IS_SET(MODE_ALTSCREEN))
-		return 0;
-
-	if (sel.type == SEL_RECTANGULAR)
-		return BETWEEN(y, sel.nb.y, sel.ne.y)
-		    && BETWEEN(x, sel.nb.x, sel.ne.x);
-
-	return BETWEEN(y, sel.nb.y, sel.ne.y)
-	    && (y != sel.nb.y || x >= sel.nb.x)
-	    && (y != sel.ne.y || x <= sel.ne.x);
+	return st_selected(x, y, sel.mode, sel.ob.x, sel.alt,
+		IS_SET(MODE_ALTSCREEN), sel.type, sel.nb.x, sel.nb.y,
+		sel.ne.x, sel.ne.y);
 }
 
 void
@@ -1222,40 +1195,6 @@ tdeleteline(int n)
 		tscrollup(term.c.y, n, 0);
 }
 
-int32_t
-tdefcolor(int *attr, int *npar, int l)
-{
-	ZigColorParse parsed;
-	int oldnpar = *npar;
-
-	parsed = st_tdefcolor(attr, *npar, l);
-	*npar = parsed.next_npar;
-
-	switch (parsed.kind) {
-	case ST_ZIG_COLOR_OK:
-		return parsed.idx;
-	case ST_ZIG_COLOR_BAD_COUNT:
-		fprintf(stderr,
-			"erresc(38): Incorrect number of parameters (%d)\n",
-			oldnpar);
-		break;
-	case ST_ZIG_COLOR_BAD_RGB:
-		fprintf(stderr, "erresc: bad rgb color (%u,%u,%u)\n",
-			parsed.r, parsed.g, parsed.b);
-		break;
-	case ST_ZIG_COLOR_BAD_INDEX:
-		fprintf(stderr, "erresc: bad fgcolor %d\n", parsed.value);
-		break;
-	case ST_ZIG_COLOR_UNKNOWN:
-	default:
-		fprintf(stderr,
-		        "erresc(38): gfx attr %d unknown\n", parsed.value);
-		break;
-	}
-
-	return -1;
-}
-
 void
 tsetattr(int *attr, int l)
 {
@@ -1575,172 +1514,81 @@ csihandle(void)
 		/* die(""); */
 		break;
 	case '@': /* ICH -- Insert <n> blank char */
-		edit = st_planedit('@', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
+	case 'S': /* SU -- Scroll <n> line up */
+	case 'T': /* SD -- Scroll <n> line down */
+	case 'L': /* IL -- Insert <n> blank lines */
+	case 'M': /* DL -- Delete <n> lines */
+	case 'X': /* ECH -- Erase <n> char */
+	case 'P': /* DCH -- Delete <n> char */
+		edit = st_planedit(csiescseq.mode[0], csiescseq.arg,
+			csiescseq.narg, term.c.x, term.c.y);
 		tapplyedit(&edit);
 		break;
 	case 'A': /* CUU -- Cursor <n> Up */
-		cursor = st_plancursor('A', term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
 	case 'B': /* CUD -- Cursor <n> Down */
 	case 'e': /* VPR --Cursor <n> Down */
+	case 'C': /* CUF -- Cursor <n> Forward */
+	case 'a': /* HPR -- Cursor <n> Forward */
+	case 'D': /* CUB -- Cursor <n> Backward */
+	case 'E': /* CNL -- Cursor <n> Down and first col */
+	case 'F': /* CPL -- Cursor <n> Up and first col */
+	case 'G': /* CHA -- Move to <col> */
+	case '`': /* HPA */
+	case 'H': /* CUP -- Move to <row> <col> */
+	case 'f': /* HVP */
+	case 'd': /* VPA -- Move to <row> */
 		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
 			csiescseq.arg, csiescseq.narg);
 		tapplycursor(&cursor);
 		break;
 	case 'i': /* MC -- Media Copy */
-		misc = st_planmisc('i', 0, csiescseq.arg, csiescseq.narg);
-		tapplymisc(&misc);
-		break;
-	case 'c': /* DA -- Device Attributes */
-		light = st_planlight('c', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplylight(&light, buf, &len);
-		break;
 	case 'b': /* REP -- if last char is printable print it <n> more times */
-		misc = st_planmisc('b', 0, csiescseq.arg, csiescseq.narg);
-		tapplymisc(&misc);
-		break;
-	case 'C': /* CUF -- Cursor <n> Forward */
-	case 'a': /* HPR -- Cursor <n> Forward */
-		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'D': /* CUB -- Cursor <n> Backward */
-		cursor = st_plancursor('D', term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'E': /* CNL -- Cursor <n> Down and first col */
-		cursor = st_plancursor('E', term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'F': /* CPL -- Cursor <n> Up and first col */
-		cursor = st_plancursor('F', term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'g': /* TBC -- Tabulation clear */
-		light = st_planlight('g', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		if (light.kind == ST_ZIG_LIGHT_UNKNOWN)
-			goto unknown;
-		tapplylight(&light, buf, &len);
-		break;
-	case 'G': /* CHA -- Move to <col> */
-	case '`': /* HPA */
-		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'H': /* CUP -- Move to <row> <col> */
-	case 'f': /* HVP */
-		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'I': /* CHT -- Cursor Forward Tabulation <n> tab stops */
-		light = st_planlight('I', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplylight(&light, buf, &len);
-		break;
-	case 'J': /* ED -- Clear screen */
-		erase = st_planerase('J', csiescseq.arg[0], term.c.x, term.c.y,
-			term.col, term.row);
-		if (erase.kind != ST_ZIG_ERASE_OK)
-			goto unknown;
-		tapplyerase(&erase);
-		break;
-	case 'K': /* EL -- Clear line */
-		erase = st_planerase('K', csiescseq.arg[0], term.c.x, term.c.y,
-			term.col, term.row);
-		if (erase.kind != ST_ZIG_ERASE_OK)
-			goto unknown;
-		tapplyerase(&erase);
-		break;
-	case 'S': /* SU -- Scroll <n> line up */
-		edit = st_planedit('S', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplyedit(&edit);
-		break;
-	case 'T': /* SD -- Scroll <n> line down */
-		edit = st_planedit('T', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplyedit(&edit);
-		break;
-	case 'L': /* IL -- Insert <n> blank lines */
-		edit = st_planedit('L', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplyedit(&edit);
-		break;
-	case 'l': /* RM -- Reset Mode */
-		tsetmode(csiescseq.priv, 0, csiescseq.arg, csiescseq.narg);
-		break;
-	case 'M': /* DL -- Delete <n> lines */
-		edit = st_planedit('M', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplyedit(&edit);
-		break;
-	case 'X': /* ECH -- Erase <n> char */
-		edit = st_planedit('X', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplyedit(&edit);
-		break;
-	case 'P': /* DCH -- Delete <n> char */
-		edit = st_planedit('P', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplyedit(&edit);
-		break;
-	case 'Z': /* CBT -- Cursor Backward Tabulation <n> tab stops */
-		light = st_planlight('Z', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplylight(&light, buf, &len);
-		break;
-	case 'd': /* VPA -- Move to <row> */
-		cursor = st_plancursor('d', term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
-		break;
-	case 'h': /* SM -- Set terminal mode */
-		tsetmode(csiescseq.priv, 1, csiescseq.arg, csiescseq.narg);
-		break;
-	case 'm': /* SGR -- Terminal attribute (color) */
-		tsetattr(csiescseq.arg, csiescseq.narg);
-		break;
-	case 'n': /* DSR – Device Status Report (cursor position) */
-		light = st_planlight('n', csiescseq.arg, csiescseq.narg,
-			term.c.x, term.c.y);
-		tapplylight(&light, buf, &len);
-		break;
-	case 'r': /* DECSTBM -- Set Scrolling Region */
-		state = st_planstate('r', csiescseq.priv, csiescseq.arg,
-			csiescseq.narg, term.row);
-		if (state.kind == ST_ZIG_STATE_UNKNOWN) {
-			goto unknown;
-		}
-		tapplystate(&state);
-		break;
-	case 's': /* DECSC -- Save cursor position (ANSI.SYS) */
-		state = st_planstate('s', csiescseq.priv, csiescseq.arg,
-			csiescseq.narg, term.row);
-		tapplystate(&state);
-		break;
-	case 'u': /* DECRC -- Restore cursor position (ANSI.SYS) */
-		state = st_planstate('u', csiescseq.priv, csiescseq.arg,
-			csiescseq.narg, term.row);
-		tapplystate(&state);
-		break;
 	case ' ':
-		misc = st_planmisc(' ', csiescseq.mode[1], csiescseq.arg,
-			csiescseq.narg);
+		misc = st_planmisc(csiescseq.mode[0], csiescseq.mode[1],
+			csiescseq.arg, csiescseq.narg);
 		if (misc.kind == ST_ZIG_MISC_UNKNOWN)
 			goto unknown;
 		if (misc.kind == ST_ZIG_MISC_SET_CURSOR_STYLE && xsetcursor(misc.value))
 			goto unknown;
+		tapplymisc(&misc);
+		break;
+	case 'c': /* DA -- Device Attributes */
+	case 'g': /* TBC -- Tabulation clear */
+	case 'I': /* CHT -- Cursor Forward Tabulation <n> tab stops */
+	case 'Z': /* CBT -- Cursor Backward Tabulation <n> tab stops */
+	case 'n': /* DSR - Device Status Report (cursor position) */
+		light = st_planlight(csiescseq.mode[0], csiescseq.arg,
+			csiescseq.narg, term.c.x, term.c.y);
+		if (light.kind == ST_ZIG_LIGHT_UNKNOWN)
+			goto unknown;
+		tapplylight(&light, buf, &len);
+		break;
+	case 'J': /* ED -- Clear screen */
+	case 'K': /* EL -- Clear line */
+		erase = st_planerase(csiescseq.mode[0], csiescseq.arg[0],
+			term.c.x, term.c.y,
+			term.col, term.row);
+		if (erase.kind != ST_ZIG_ERASE_OK)
+			goto unknown;
+		tapplyerase(&erase);
+		break;
+	case 'l': /* RM -- Reset Mode */
+	case 'h': /* SM -- Set terminal mode */
+		tsetmode(csiescseq.priv, csiescseq.mode[0] == 'h',
+			csiescseq.arg, csiescseq.narg);
+		break;
+	case 'm': /* SGR -- Terminal attribute (color) */
+		tsetattr(csiescseq.arg, csiescseq.narg);
+		break;
+	case 'r': /* DECSTBM -- Set Scrolling Region */
+	case 's': /* DECSC -- Save cursor position (ANSI.SYS) */
+	case 'u': /* DECRC -- Restore cursor position (ANSI.SYS) */
+		state = st_planstate(csiescseq.mode[0], csiescseq.priv,
+			csiescseq.arg, csiescseq.narg, term.row);
+		if (state.kind == ST_ZIG_STATE_UNKNOWN) {
+			goto unknown;
+		}
+		tapplystate(&state);
 		break;
 	}
 }
@@ -2113,57 +1961,51 @@ tstrsequence(uchar c)
 void
 tcontrolcode(uchar ascii)
 {
-	ZigControlPlan plan = st_plancontrol(ascii);
+	ZigControlExec exec = st_tcontrolexec(ascii, &term.esc,
+		&term.charset, term.tabs, term.c.x);
 
-	switch (plan.kind) {
-	case 1:
+	switch (exec.action) {
+	case ST_ZIG_CTL_ACTION_TAB:
 		tputtab(1);
 		return;
-	case 2:
+	case ST_ZIG_CTL_ACTION_BACKSPACE:
 		tmoveto(term.c.x-1, term.c.y);
 		return;
-	case 3:
+	case ST_ZIG_CTL_ACTION_CARRIAGE_RETURN:
 		tmoveto(0, term.c.y);
 		return;
-	case 4:
+	case ST_ZIG_CTL_ACTION_LINEFEED:
 		tnewline(IS_SET(MODE_CRLF));
 		return;
-	case 5:
+	case ST_ZIG_CTL_ACTION_BELL:
 		if (term.esc & ESC_STR_END) {
 			strhandle();
 		} else {
 			xbell();
 		}
 		break;
-	case 6:
+	case ST_ZIG_CTL_ACTION_ESCAPE:
 		csireset();
-		term.esc &= ~(ESC_CSI|ESC_ALTCHARSET|ESC_TEST);
-		term.esc |= ESC_START;
 		return;
-	case 7:
-		term.charset = plan.value;
-		return;
-	case 8:
+	case ST_ZIG_CTL_ACTION_SUBSTITUTE:
 		tsetchar('?', &term.c.attr, term.c.x, term.c.y);
 		/* FALLTHROUGH */
-	case 9:
+	case ST_ZIG_CTL_ACTION_CANCEL:
 		csireset();
 		break;
-	case 10:
+	case ST_ZIG_CTL_ACTION_NEXT_LINE:
 		tnewline(1);
 		break;
-	case 11:
-		term.tabs[term.c.x] = 1;
-		break;
-	case 12:
+	case ST_ZIG_CTL_ACTION_DECID:
 		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
-	case 13:
+	case ST_ZIG_CTL_ACTION_START_STR:
 		tstrsequence(ascii);
 		return;
 	}
 	/* only CAN, SUB, \a and C1 chars interrupt a sequence */
-	term.esc &= ~(ESC_STR_END|ESC_STR);
+	if (exec.clear_str)
+		term.esc &= ~(ESC_STR_END|ESC_STR);
 }
 
 /*
@@ -2173,78 +2015,60 @@ tcontrolcode(uchar ascii)
 int
 eschandle(uchar ascii)
 {
-	ZigEscPlan plan = st_planesc(ascii);
+	ZigEscExec exec = st_tescexec(ascii, &term.esc, &term.charset,
+		&term.icharset, term.tabs, term.c.x);
 
-	switch (plan.kind) {
-	case 1:
-		term.esc |= ESC_CSI;
-		break;
-	case 2:
-		term.esc |= ESC_TEST;
-		break;
-	case 3:
-		term.esc |= ESC_UTF8;
-		break;
-	case 4:
+	switch (exec.action) {
+	case ST_ZIG_ESC_ACTION_START_STR:
 		tstrsequence(ascii);
 		break;
-	case 5:
-		term.charset = plan.value;
-		break;
-	case 6:
-		term.icharset = plan.value;
-		term.esc |= ESC_ALTCHARSET;
-		break;
-	case 7:
+	case ST_ZIG_ESC_ACTION_IND:
 		if (term.c.y == term.bot) {
 			tscrollup(term.top, 1, 1);
 		} else {
 			tmoveto(term.c.x, term.c.y+1);
 		}
 		break;
-	case 8:
+	case ST_ZIG_ESC_ACTION_NEL:
 		tnewline(1);
 		break;
-	case 9:
-		term.tabs[term.c.x] = 1;
-		break;
-	case 10:
+	case ST_ZIG_ESC_ACTION_RI:
 		if (term.c.y == term.top) {
 			tscrolldown(term.top, 1, 1);
 		} else {
 			tmoveto(term.c.x, term.c.y-1);
 		}
 		break;
-	case 11:
+	case ST_ZIG_ESC_ACTION_DECID:
 		ttywrite(vtiden, strlen(vtiden), 0);
 		break;
-	case 12:
+	case ST_ZIG_ESC_ACTION_RIS:
 		treset();
 		resettitle();
 		xloadcols();
 		break;
-	case 13:
+	case ST_ZIG_ESC_ACTION_KEYPAD_APP:
 		xsetmode(1, MODE_APPKEYPAD);
 		break;
-	case 14:
+	case ST_ZIG_ESC_ACTION_KEYPAD_NORMAL:
 		xsetmode(0, MODE_APPKEYPAD);
 		break;
-	case 15:
+	case ST_ZIG_ESC_ACTION_CURSOR_SAVE:
 		tcursor(CURSOR_SAVE);
 		break;
-	case 16:
+	case ST_ZIG_ESC_ACTION_CURSOR_LOAD:
 		tcursor(CURSOR_LOAD);
 		break;
-	case 17:
+	case ST_ZIG_ESC_ACTION_ST:
 		if (term.esc & ESC_STR_END)
 			strhandle();
 		break;
-	default:
+	case ST_ZIG_ESC_ACTION_UNKNOWN:
 		fprintf(stderr, "erresc: unknown sequence ESC 0x%02X '%c'\n",
 			(uchar) ascii, isprint(ascii)? ascii:'.');
 		break;
 	}
-	return plan.ret;
+	return exec.ret;
 }
 
 void
@@ -2258,6 +2082,7 @@ tputc(Rune u)
 	ZigEscFlowExec escflow;
 	ZigEscFlowAfter escafter;
 	int control;
+	int esc_action_done;
 	int width, len;
 	Glyph *gp;
 
@@ -2280,15 +2105,15 @@ tputc(Rune u)
 		collect_exec = st_tcollectstr(u, term.esc,
 			(unsigned char *)strescseq.buf, strescseq.len,
 			(const unsigned char *)c, len, strescseq.siz);
-		if (collect_exec.kind == 1) {
+		if (collect_exec.kind == ST_ZIG_STR_COLLECT_FINISH) {
 			term.esc = collect_exec.new_esc;
 			goto check_control_code;
 		}
 
-		if (collect_exec.kind == 3)
+		if (collect_exec.kind == ST_ZIG_STR_COLLECT_ABORT)
 			return;
 
-		if (collect_exec.kind == 2) {
+		if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW) {
 			/*
 			 * Here is a bug in terminals. If the user never sends
 			 * some code to stop the str or esc command, then st
@@ -2330,29 +2155,35 @@ check_control_code:
 	} else if (term.esc & ESC_START) {
 		escflow = st_tescflow(term.esc, u, (unsigned char *)csiescseq.buf,
 			csiescseq.len, sizeof(csiescseq.buf));
-		if (escflow.kind == 1) {
+		esc_action_done = 1;
+		switch (escflow.kind) {
+		case ST_ZIG_ESC_FLOW_CSI:
 			csiescseq.len = escflow.new_csi_len;
-			if (escflow.finish) {
-				term.esc = 0;
+			esc_action_done = escflow.handle_csi;
+			if (escflow.handle_csi) {
 				csiparse();
 				csihandle();
 			}
-			return;
-		} else if (escflow.kind == 2) {
+			break;
+		case ST_ZIG_ESC_FLOW_UTF8:
 			tdefutf8(u);
-		} else if (escflow.kind == 3) {
+			break;
+		case ST_ZIG_ESC_FLOW_ALTCHARSET:
 			tdeftran(u);
-		} else if (escflow.kind == 4) {
+			break;
+		case ST_ZIG_ESC_FLOW_TEST:
 			tdectest(u);
-		} else {
-			escafter = st_tescflowafter(escflow.kind, eschandle(u));
-			if (escafter.stop && !escafter.clear_esc)
-				return;
+			break;
+		default:
+			esc_action_done = eschandle(u);
 			/* sequence already finished */
+			break;
 		}
-		escafter = st_tescflowafter(escflow.kind, 1);
+		escafter = st_tescflowafter(escflow.kind, esc_action_done);
+		if (escafter.stop && !escafter.clear_esc)
+			return;
 		if (escafter.clear_esc)
-			term.esc = 0;
+			term.esc = escafter.new_esc;
 		/*
 		 * All characters which form part of a sequence are not
 		 * printed

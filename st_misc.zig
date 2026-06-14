@@ -1,3 +1,9 @@
+//! st_misc.zig 负责 CSI 杂项序列的纯规划。
+//! [输入]: CSI 主 mode、第二 mode 字节和参数数组。
+//! [输出]: `ZigMiscPlan`，描述 media copy、repeat last char 或 cursor style 设置。
+//! [副作用边界]: 不调用 `tdump(...)`、`tputc(...)`、`xsetcursor(...)`；C 侧根据 plan 执行真实动作。
+//! [定位]: 收敛 `csihandle(...)` 中 `i/b/space` 分支。
+
 const std = @import("std");
 
 pub const ZigMiscPlan = extern struct {

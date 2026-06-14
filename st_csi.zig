@@ -1,3 +1,9 @@
+//! st_csi.zig 负责把 CSI 原始字节解析成 C 可消费的固定布局结构。
+//! [输入]: `csiescseq.buf` 和长度，由 C 在 ESC/CSI 收集阶段维护。
+//! [输出]: `ZigCsiParse`，包含 private marker、参数数组、参数数量和 mode 字节。
+//! [副作用边界]: 只解析字节，不执行任何 CSI 动作；未知序列、光标移动、清屏等仍由 C 侧调度。
+//! [定位]: 位于 `csiparse(...)` 边界，用来减少 C 侧字符串解析逻辑。
+
 const std = @import("std");
 
 const csi_arg_siz = 16;

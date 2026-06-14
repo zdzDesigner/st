@@ -32,7 +32,6 @@ typedef struct {
 } ZigColorParse;
 
 enum {
-	ST_ZIG_COLOR_OK = 0,
 	ST_ZIG_COLOR_BAD_COUNT = 1,
 	ST_ZIG_COLOR_BAD_RGB = 2,
 	ST_ZIG_COLOR_BAD_INDEX = 3,
@@ -111,15 +110,43 @@ typedef struct {
 } ZigStrHandlePlan;
 
 typedef struct {
-	int kind;
-	int value;
+	int action;
 	int ret;
-} ZigEscPlan;
+} ZigEscExec;
 
 typedef struct {
-	int kind;
-	int value;
-} ZigControlPlan;
+	int action;
+	int clear_str;
+} ZigControlExec;
+
+enum {
+	ST_ZIG_CTL_ACTION_TAB = 1,
+	ST_ZIG_CTL_ACTION_BACKSPACE = 2,
+	ST_ZIG_CTL_ACTION_CARRIAGE_RETURN = 3,
+	ST_ZIG_CTL_ACTION_LINEFEED = 4,
+	ST_ZIG_CTL_ACTION_BELL = 5,
+	ST_ZIG_CTL_ACTION_ESCAPE = 6,
+	ST_ZIG_CTL_ACTION_SUBSTITUTE = 7,
+	ST_ZIG_CTL_ACTION_CANCEL = 8,
+	ST_ZIG_CTL_ACTION_NEXT_LINE = 9,
+	ST_ZIG_CTL_ACTION_DECID = 10,
+	ST_ZIG_CTL_ACTION_START_STR = 11,
+};
+
+enum {
+	ST_ZIG_ESC_ACTION_START_STR = 1,
+	ST_ZIG_ESC_ACTION_IND = 2,
+	ST_ZIG_ESC_ACTION_NEL = 3,
+	ST_ZIG_ESC_ACTION_RI = 4,
+	ST_ZIG_ESC_ACTION_DECID = 5,
+	ST_ZIG_ESC_ACTION_RIS = 6,
+	ST_ZIG_ESC_ACTION_KEYPAD_APP = 7,
+	ST_ZIG_ESC_ACTION_KEYPAD_NORMAL = 8,
+	ST_ZIG_ESC_ACTION_CURSOR_SAVE = 9,
+	ST_ZIG_ESC_ACTION_CURSOR_LOAD = 10,
+	ST_ZIG_ESC_ACTION_ST = 11,
+	ST_ZIG_ESC_ACTION_UNKNOWN = 12,
+};
 
 typedef struct {
 	int control;
@@ -130,22 +157,20 @@ typedef struct {
 
 typedef struct {
 	int kind;
-	size_t new_size;
-} ZigStrCollectPlan;
-
-typedef struct {
-	int kind;
-	int finish;
-} ZigEscFlowPlan;
-
-typedef struct {
-	int kind;
-	int finish;
+	int handle_csi;
 	size_t new_csi_len;
 } ZigEscFlowExec;
 
+enum {
+	ST_ZIG_ESC_FLOW_CSI = 1,
+	ST_ZIG_ESC_FLOW_UTF8 = 2,
+	ST_ZIG_ESC_FLOW_ALTCHARSET = 3,
+	ST_ZIG_ESC_FLOW_TEST = 4,
+};
+
 typedef struct {
 	int clear_esc;
+	int new_esc;
 	int stop;
 } ZigEscFlowAfter;
 
@@ -155,6 +180,13 @@ typedef struct {
 	uint32_t fg;
 	uint32_t bg;
 } ZigGlyph;
+
+typedef struct {
+	int nb_x;
+	int nb_y;
+	int ne_x;
+	int ne_y;
+} ZigSelBounds;
 
 typedef struct {
 	int advance;
@@ -175,19 +207,23 @@ typedef struct {
 } ZigStrCollectExec;
 
 enum {
-	ST_ZIG_ATTR_ERROR_NONE = 0,
+	ST_ZIG_STR_COLLECT_APPEND = 0,
+	ST_ZIG_STR_COLLECT_FINISH = 1,
+	ST_ZIG_STR_COLLECT_GROW = 2,
+	ST_ZIG_STR_COLLECT_ABORT = 3,
+};
+
+enum {
 	ST_ZIG_ATTR_ERROR_UNKNOWN = 1,
 };
 
 enum {
 	ST_ZIG_ERASE_OK = 0,
-	ST_ZIG_ERASE_UNKNOWN = 1,
 };
 
 enum {
 	ST_ZIG_CURSOR_MOVE_TO = 0,
 	ST_ZIG_CURSOR_MOVE_TO_ABS = 1,
-	ST_ZIG_CURSOR_UNKNOWN = 2,
 };
 
 enum {
@@ -198,11 +234,9 @@ enum {
 	ST_ZIG_EDIT_DELETE_LINE = 4,
 	ST_ZIG_EDIT_CLEAR_REGION = 5,
 	ST_ZIG_EDIT_DELETE_CHAR = 6,
-	ST_ZIG_EDIT_UNKNOWN = 7,
 };
 
 enum {
-	ST_ZIG_LIGHT_NONE = 0,
 	ST_ZIG_LIGHT_CLEAR_TAB_CURRENT = 1,
 	ST_ZIG_LIGHT_CLEAR_TAB_ALL = 2,
 	ST_ZIG_LIGHT_PUT_TAB = 3,
@@ -219,7 +253,6 @@ enum {
 };
 
 enum {
-	ST_ZIG_MISC_NONE = 0,
 	ST_ZIG_MISC_MEDIA_DUMP = 1,
 	ST_ZIG_MISC_MEDIA_DUMP_LINE = 2,
 	ST_ZIG_MISC_MEDIA_DUMP_SEL = 3,
@@ -261,17 +294,10 @@ enum {
 	ST_ZIG_PUTC_ADVANCE_WRAPNEXT = 1,
 };
 
-enum {
-	ST_ZIG_SETCHAR_FIX_NONE = 0,
-	ST_ZIG_SETCHAR_FIX_CLEAR_RIGHT_DUMMY = 1,
-	ST_ZIG_SETCHAR_FIX_CLEAR_LEFT_WIDE = 2,
-};
-
 char *st_base64dec(const char *);
 ZigUtf8Decode st_utf8decode(const unsigned char *, size_t);
 size_t st_utf8encode(uint32_t, unsigned char *);
 ZigCsiParse st_csiparse(const unsigned char *, size_t);
-ZigColorParse st_tdefcolor(const int *, int, int);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigErasePlan st_planerase(char, int, int, int, int, int);
 ZigCursorPlan st_plancursor(char, int, int, const int *, int);
@@ -282,8 +308,8 @@ ZigMiscPlan st_planmisc(char, char, const int *, int);
 ZigModePlan st_planmode(int, int);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrHandlePlan st_planstrhandle(char, int, int);
-ZigEscPlan st_planesc(unsigned char);
-ZigControlPlan st_plancontrol(unsigned char);
+ZigEscExec st_tescexec(unsigned char, int *, int *, int *, int *, int);
+ZigControlExec st_tcontrolexec(unsigned char, int *, int *, int *, int);
 ZigPutcDecode st_putcdecode(uint32_t, int);
 void st_tsetchar(uint32_t, const ZigGlyph *, ZigGlyph *, int *, int, int, int);
 ZigPutcWriteResult st_tputcwrite(uint32_t, int, const ZigGlyph *, ZigGlyph *, int *, int, int, int, int);
@@ -292,5 +318,8 @@ ZigStrCollectExec st_tcollectstr(uint32_t, int, unsigned char *, size_t, const u
 ZigEscFlowExec st_tescflow(int, uint32_t, unsigned char *, size_t, size_t);
 int st_tcontrolafter(int);
 ZigEscFlowAfter st_tescflowafter(int, int);
+int st_tlinelen(const ZigGlyph *, int);
+int st_selected(int, int, int, int, int, int, int, int, int, int, int);
+ZigSelBounds st_planselnormalize(int, int, int, int, int);
 
 #endif

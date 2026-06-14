@@ -1,3 +1,9 @@
+//! st_edit.zig 负责 CSI 编辑类动作的纯规划。
+//! [输入]: CSI mode、参数数组和当前光标位置。
+//! [输出]: `ZigEditPlan`，描述插空白、删字符、滚动、插删行或清局部区域。
+//! [副作用边界]: 不执行 memmove、scroll、clear；`tapplyedit(...)` 在 C 侧调用对应副作用函数。
+//! [定位]: 收敛 `csihandle(...)` 中 `@/S/T/L/M/X/P` 等 edit 分支。
+
 const std = @import("std");
 
 pub const ZigClearRect = extern struct {

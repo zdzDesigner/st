@@ -1,3 +1,9 @@
+//! st_mode.zig 负责 DEC/private mode 与普通 mode 参数分类。
+//! [输入]: private marker 和单个 mode 参数。
+//! [输出]: `ZigModePlan`，告诉 C 侧这是哪一种 terminal/window mode 操作或 unknown。
+//! [副作用边界]: 不调用 `xsetmode(...)`、`xsetpointermotion(...)`、`tswapscreen(...)`；C 侧保留所有模式副作用。
+//! [定位]: 让 `tsetmode(...)` 的参数识别逻辑可测试，同时避免 Zig 复制 C/X11 mode flag。
+
 const std = @import("std");
 
 pub const ZigModePlan = extern struct {

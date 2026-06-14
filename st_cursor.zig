@@ -1,3 +1,9 @@
+//! st_cursor.zig 负责 CSI 光标移动序列的目标位置规划。
+//! [输入]: CSI mode、当前光标坐标和参数数组。
+//! [输出]: `ZigCursorPlan`，描述相对移动或绝对移动目标。
+//! [副作用边界]: 不调用 `tmoveto(...)` / `tmoveato(...)`，不修改 `term.c`；C 侧 executor 负责真实移动。
+//! [定位]: 收敛 `csihandle(...)` 的 CUU/CUD/CUP/HVP 等 cursor 分支。
+
 const std = @import("std");
 
 pub const ZigCursorPlan = extern struct {
@@ -49,7 +55,7 @@ test "plan C moves right by explicit count" {
 }
 
 test "plan H uses absolute row and col" {
-    const plan = st_plancursor('H', 7, 9, &[_]c_int{4, 6}, 2);
+    const plan = st_plancursor('H', 7, 9, &[_]c_int{ 4, 6 }, 2);
     try std.testing.expectEqual(@as(c_int, cursor_move_to_abs), plan.kind);
     try std.testing.expectEqual(@as(c_int, 5), plan.x);
     try std.testing.expectEqual(@as(c_int, 3), plan.y);

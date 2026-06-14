@@ -1,3 +1,9 @@
+//! st_utf8.zig 是 UTF-8 编解码辅助逻辑的 Zig 迁移模块。
+//! [输入]: C 侧传入原始字节切片、字符长度或 Unicode rune。
+//! [输出]: `st_utf8decode` 返回 rune/长度，`st_utf8encode` 写入目标缓冲区并返回字节数。
+//! [副作用边界]: 不访问 terminal 全局状态，不做 IO；调用方负责选择 MODE_UTF8、打印和错误处理策略。
+//! [定位]: 为 `utf8decode(...)`、`utf8encode(...)` 的 C 壳提供纯计算实现。
+
 const std = @import("std");
 
 const utf_invalid: u32 = 0xFFFD;

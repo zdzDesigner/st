@@ -1,3 +1,9 @@
+//! st_erase.zig 负责 CSI ED/EL 清屏清行的纯规划。
+//! [输入]: CSI mode、参数、当前光标位置和终端尺寸。
+//! [输出]: `ZigErasePlan`，描述需要清理的一个或两个矩形区域。
+//! [副作用边界]: 不调用 `tclearregion(...)`，不修改 dirty 行或 selection；这些真实副作用保留在 C executor。
+//! [定位]: 服务 `csihandle(...)` 中的 `J/K` 分支，让 Zig 决定清哪里，C 决定如何清。
+
 const std = @import("std");
 
 pub const ZigClearRect = extern struct {

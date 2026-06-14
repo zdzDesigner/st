@@ -1,3 +1,9 @@
+//! st_state.zig 负责 CSI 状态类序列的纯规划。
+//! [输入]: CSI mode、private marker、参数数组和终端行数。
+//! [输出]: `ZigStatePlan`，描述设置滚动区域、保存光标或恢复光标。
+//! [副作用边界]: 不调用 `tsetscroll(...)` / `tcursor(...)`，不修改光标或 scroll region；这些保留在 C executor。
+//! [定位]: 收敛 `csihandle(...)` 中 `r/s/u` 分支，并保持 unknown 路径由 C 处理。
+
 const std = @import("std");
 
 pub const ZigStatePlan = extern struct {

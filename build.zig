@@ -55,8 +55,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    const color_module = b.createModule(.{
-        .root_source_file = b.path("st_color.zig"),
+    const color_core_module = b.createModule(.{
+        .root_source_file = b.path("st_color_core.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -132,20 +132,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    const esc_module = b.createModule(.{
-        .root_source_file = b.path("st_esc.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-
-    const control_module = b.createModule(.{
-        .root_source_file = b.path("st_control.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-
     const putc_decode_module = b.createModule(.{
         .root_source_file = b.path("st_putc_decode.zig"),
         .target = target,
@@ -155,6 +141,13 @@ pub fn build(b: *std.Build) void {
 
     const setchar_module = b.createModule(.{
         .root_source_file = b.path("st_setchar.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    const line_module = b.createModule(.{
+        .root_source_file = b.path("st_line.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -173,11 +166,6 @@ pub fn build(b: *std.Build) void {
     const csi_obj = b.addObject(.{
         .name = "st_csi",
         .root_module = csi_module,
-    });
-
-    const color_obj = b.addObject(.{
-        .name = "st_color",
-        .root_module = color_module,
     });
 
     const attr_obj = b.addObject(.{
@@ -230,16 +218,6 @@ pub fn build(b: *std.Build) void {
         .root_module = strhandle_module,
     });
 
-    const esc_obj = b.addObject(.{
-        .name = "st_esc",
-        .root_module = esc_module,
-    });
-
-    const control_obj = b.addObject(.{
-        .name = "st_control",
-        .root_module = control_module,
-    });
-
     const putc_decode_obj = b.addObject(.{
         .name = "st_putc_decode",
         .root_module = putc_decode_module,
@@ -250,6 +228,11 @@ pub fn build(b: *std.Build) void {
         .root_module = setchar_module,
     });
 
+    const line_obj = b.addObject(.{
+        .name = "st_line",
+        .root_module = line_module,
+    });
+
     const exe = b.addExecutable(.{
         .name = "st",
         .root_module = root_module,
@@ -258,7 +241,6 @@ pub fn build(b: *std.Build) void {
     root_module.addObject(base64_obj);
     root_module.addObject(utf8_obj);
     root_module.addObject(csi_obj);
-    root_module.addObject(color_obj);
     root_module.addObject(attr_obj);
     root_module.addObject(erase_obj);
     root_module.addObject(cursor_obj);
@@ -269,10 +251,9 @@ pub fn build(b: *std.Build) void {
     root_module.addObject(mode_obj);
     root_module.addObject(strparse_obj);
     root_module.addObject(strhandle_obj);
-    root_module.addObject(esc_obj);
-    root_module.addObject(control_obj);
     root_module.addObject(putc_decode_obj);
     root_module.addObject(setchar_obj);
+    root_module.addObject(line_obj);
 
     root_module.addCSourceFiles(.{
         .files = &.{ "st.c", "x.c", "boxdraw.c", "hb.c" },
@@ -335,9 +316,9 @@ pub fn build(b: *std.Build) void {
         .name = "st_csi_test",
         .root_module = csi_module,
     });
-    const color_tests = b.addTest(.{
-        .name = "st_color_test",
-        .root_module = color_module,
+    const color_core_tests = b.addTest(.{
+        .name = "st_color_core_test",
+        .root_module = color_core_module,
     });
     const attr_tests = b.addTest(.{
         .name = "st_attr_test",
@@ -379,14 +360,6 @@ pub fn build(b: *std.Build) void {
         .name = "st_strhandle_test",
         .root_module = strhandle_module,
     });
-    const esc_tests = b.addTest(.{
-        .name = "st_esc_test",
-        .root_module = esc_module,
-    });
-    const control_tests = b.addTest(.{
-        .name = "st_control_test",
-        .root_module = control_module,
-    });
     const putc_decode_tests = b.addTest(.{
         .name = "st_putc_decode_test",
         .root_module = putc_decode_module,
@@ -395,10 +368,14 @@ pub fn build(b: *std.Build) void {
         .name = "st_setchar_test",
         .root_module = setchar_module,
     });
+    const line_tests = b.addTest(.{
+        .name = "st_line_test",
+        .root_module = line_module,
+    });
     const run_base64_tests = b.addRunArtifact(base64_tests);
     const run_utf8_tests = b.addRunArtifact(utf8_tests);
     const run_csi_tests = b.addRunArtifact(csi_tests);
-    const run_color_tests = b.addRunArtifact(color_tests);
+    const run_color_core_tests = b.addRunArtifact(color_core_tests);
     const run_attr_tests = b.addRunArtifact(attr_tests);
     const run_erase_tests = b.addRunArtifact(erase_tests);
     const run_cursor_tests = b.addRunArtifact(cursor_tests);
@@ -409,15 +386,14 @@ pub fn build(b: *std.Build) void {
     const run_mode_tests = b.addRunArtifact(mode_tests);
     const run_strparse_tests = b.addRunArtifact(strparse_tests);
     const run_strhandle_tests = b.addRunArtifact(strhandle_tests);
-    const run_esc_tests = b.addRunArtifact(esc_tests);
-    const run_control_tests = b.addRunArtifact(control_tests);
     const run_putc_decode_tests = b.addRunArtifact(putc_decode_tests);
     const run_setchar_tests = b.addRunArtifact(setchar_tests);
+    const run_line_tests = b.addRunArtifact(line_tests);
     const test_step = b.step("test", "Run Zig unit tests");
     test_step.dependOn(&run_base64_tests.step);
     test_step.dependOn(&run_utf8_tests.step);
     test_step.dependOn(&run_csi_tests.step);
-    test_step.dependOn(&run_color_tests.step);
+    test_step.dependOn(&run_color_core_tests.step);
     test_step.dependOn(&run_attr_tests.step);
     test_step.dependOn(&run_erase_tests.step);
     test_step.dependOn(&run_cursor_tests.step);
@@ -428,10 +404,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mode_tests.step);
     test_step.dependOn(&run_strparse_tests.step);
     test_step.dependOn(&run_strhandle_tests.step);
-    test_step.dependOn(&run_esc_tests.step);
-    test_step.dependOn(&run_control_tests.step);
     test_step.dependOn(&run_putc_decode_tests.step);
     test_step.dependOn(&run_setchar_tests.step);
+    test_step.dependOn(&run_line_tests.step);
 }
 
 fn requireProgram(b: *std.Build, name: []const u8, reason: []const u8) []const u8 {
