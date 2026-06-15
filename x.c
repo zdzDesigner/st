@@ -1818,8 +1818,8 @@ char *kmap(KeySym k, uint state)
 void kpress(XEvent *ev)
 {
     XKeyEvent *e = &ev->xkey;
-    KeySym ksym, baseksym;
-    char buf[64], *customkey;
+    KeySym ksym, baseksym, textksym;
+    char buf[64], ctrlbuf[1], *customkey;
     int len;
     Rune c;
     Status status;
@@ -1860,6 +1860,12 @@ void kpress(XEvent *ev)
             searchhome();
         } else if (baseksym == XK_End || ((e->state & ControlMask) && baseksym == XK_e)) {
             searchend();
+        } else if (e->state & ControlMask) {
+            textksym = XLookupKeysym(e, (e->state & ShiftMask) ? 1 : 0);
+            if (XK_space <= textksym && textksym <= XK_asciitilde) {
+                ctrlbuf[0] = (char)textksym;
+                searchinput(ctrlbuf, sizeof(ctrlbuf));
+            }
         } else if (len > 0) {
             searchinput(buf, len);
         }
