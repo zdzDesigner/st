@@ -1259,25 +1259,19 @@ ttyhangup()
 int
 tattrset(int attr)
 {
-	int i, j;
-
-	for (i = 0; i < term.row-1; i++) {
-		for (j = 0; j < term.col-1; j++) {
-			if (term.line[i][j].mode & attr)
-				return 1;
-		}
-	}
-
-	return 0;
+	return st_tattrset((const ZigGlyph * const *)term.line,
+		term.row, term.col, attr);
 }
 
 void
 tsetdirt(int top, int bot)
 {
 	int i;
+	ZigLineRange range;
 
-	LIMIT(top, 0, term.row-1);
-	LIMIT(bot, 0, term.row-1);
+	range = st_tsetdirtrange(top, bot, term.row);
+	top = range.top;
+	bot = range.bot;
 
 	for (i = top; i <= bot; i++)
 		term.dirty[i] = 1;
@@ -1286,15 +1280,12 @@ tsetdirt(int top, int bot)
 void
 tsetdirtattr(int attr)
 {
-	int i, j;
+	int i;
 
 	for (i = 0; i < term.row-1; i++) {
-		for (j = 0; j < term.col-1; j++) {
-			if (term.line[i][j].mode & attr) {
-				tsetdirt(i, i);
-				break;
-			}
-		}
+		if (st_tlineattrset((const ZigGlyph *)term.line[i],
+			term.col, attr))
+			tsetdirt(i, i);
 	}
 }
 
@@ -1308,13 +1299,14 @@ void
 tcursor(int mode)
 {
 	static TCursor c[2];
-	int alt = IS_SET(MODE_ALTSCREEN);
+	ZigCursorStorePlan plan;
 
-	if (mode == CURSOR_SAVE) {
-		c[alt] = term.c;
-	} else if (mode == CURSOR_LOAD) {
-		term.c = c[alt];
-		tmoveto(c[alt].x, c[alt].y);
+	plan = st_tcursorplan(mode, IS_SET(MODE_ALTSCREEN));
+	if (plan.action == ST_ZIG_CURSOR_STORE_SAVE) {
+		c[plan.slot] = term.c;
+	} else if (plan.action == ST_ZIG_CURSOR_STORE_LOAD) {
+		term.c = c[plan.slot];
+		tmoveto(c[plan.slot].x, c[plan.slot].y);
 	}
 }
 
@@ -1322,21 +1314,23 @@ void
 treset(void)
 {
 	uint i;
+	ZigResetPlan plan;
 
+	plan = st_tresetplan(defaultfg, defaultbg, term.row);
 	term.c = (TCursor){{
-		.mode = ATTR_NULL,
-		.fg = defaultfg,
-		.bg = defaultbg
-	}, .x = 0, .y = 0, .state = CURSOR_DEFAULT};
+		.mode = plan.cursor_attr_mode,
+		.fg = plan.cursor_fg,
+		.bg = plan.cursor_bg
+	}, .x = plan.cursor_x, .y = plan.cursor_y, .state = plan.cursor_state};
 
 	memset(term.tabs, 0, term.col * sizeof(*term.tabs));
 	for (i = tabspaces; i < term.col; i += tabspaces)
 		term.tabs[i] = 1;
-	term.top = 0;
-	term.bot = term.row - 1;
-	term.mode = MODE_WRAP|MODE_UTF8;
-	memset(term.trantbl, CS_USA, sizeof(term.trantbl));
-	term.charset = 0;
+	term.top = plan.top;
+	term.bot = plan.bot;
+	term.mode = plan.mode;
+	memset(term.trantbl, plan.trantbl, sizeof(term.trantbl));
+	term.charset = plan.charset;
 
 	for (i = 0; i < 2; i++) {
 		tmoveto(0, 0);
@@ -1361,24 +1355,19 @@ tswapscreen(void)
 
 	term.line = term.alt;
 	term.alt = tmp;
-	term.mode ^= MODE_ALTSCREEN;
+	term.mode = st_tswapscreenmode(term.mode);
 	tfulldirt();
 }
 
 void
 kscrolldown(const Arg* a)
 {
-	int n = a->i;
+	ZigKScrollPlan plan;
 
-	if (n < 0)
-		n = term.row + n;
-
-	if (n > term.scr)
-		n = term.scr;
-
-	if (term.scr > 0) {
-		term.scr -= n;
-		selscroll(0, -n);
+	plan = st_kscrolldownplan(a->i, term.row, term.scr);
+	if (plan.run) {
+		term.scr = plan.new_scr;
+		selscroll(0, plan.delta);
 		tfulldirt();
 	}
 }
@@ -1386,14 +1375,12 @@ kscrolldown(const Arg* a)
 void
 kscrollup(const Arg* a)
 {
-	int n = a->i;
+	ZigKScrollPlan plan;
 
-	if (n < 0)
-		n = term.row + n;
-
-	if (term.scr <= HISTSIZE-n) {
-		term.scr += n;
-		selscroll(0, n);
+	plan = st_kscrollupplan(a->i, term.row, term.scr, HISTSIZE);
+	if (plan.run) {
+		term.scr = plan.new_scr;
+		selscroll(0, plan.delta);
 		tfulldirt();
 	}
 }
@@ -1403,8 +1390,10 @@ tscrolldown(int orig, int n, int copyhist)
 {
 	int i;
 	Line temp;
+	ZigScrollPlan plan;
 
-	LIMIT(n, 0, term.bot-orig+1);
+	plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 0);
+	n = plan.count;
 
 	if (copyhist) {
 		term.histi = (term.histi - 1 + HISTSIZE) % HISTSIZE;
@@ -1431,8 +1420,10 @@ tscrollup(int orig, int n, int copyhist)
 {
 	int i;
 	Line temp;
+	ZigScrollPlan plan;
 
-	LIMIT(n, 0, term.bot-orig+1);
+	plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 1);
+	n = plan.count;
 
 	if (copyhist) {
 		term.histi = (term.histi + 1) % HISTSIZE;
@@ -1441,8 +1432,7 @@ tscrollup(int orig, int n, int copyhist)
 		term.line[orig] = temp;
 	}
 
-	if (term.scr > 0 && term.scr < HISTSIZE)
-		term.scr = MIN(term.scr + n, HISTSIZE-1);
+	term.scr = plan.new_scr;
 
 	tclearregion(0, orig, term.col-1, orig+n-1);
 	tsetdirt(orig+n, term.bot);
@@ -1480,14 +1470,12 @@ selscroll(int orig, int n)
 void
 tnewline(int first_col)
 {
-	int y = term.c.y;
+	ZigNewlinePlan plan;
 
-	if (y == term.bot) {
-		tscrollup(term.top, 1, 1);
-	} else {
-		y++;
-	}
-	tmoveto(first_col ? 0 : term.c.x, y);
+	plan = st_tnewline(first_col, term.c.x, term.c.y, term.top, term.bot);
+	if (plan.scroll)
+		tscrollup(plan.scroll_top, 1, 1);
+	tmoveto(plan.x, plan.y);
 }
 
 void
@@ -1507,24 +1495,19 @@ csiparse(void)
 void
 tmoveato(int x, int y)
 {
-	tmoveto(x, y + ((term.c.state & CURSOR_ORIGIN) ? term.top: 0));
+	tmoveto(x, st_tmoveato_y(y, term.c.state, term.top));
 }
 
 void
 tmoveto(int x, int y)
 {
-	int miny, maxy;
+	ZigCursorMove move;
 
-	if (term.c.state & CURSOR_ORIGIN) {
-		miny = term.top;
-		maxy = term.bot;
-	} else {
-		miny = 0;
-		maxy = term.row - 1;
-	}
-	term.c.state &= ~CURSOR_WRAPNEXT;
-	term.c.x = LIMIT(x, 0, term.col-1);
-	term.c.y = LIMIT(y, miny, maxy);
+	move = st_tmoveto(x, y, term.c.state, term.col, term.row,
+		term.top, term.bot);
+	term.c.state = move.state;
+	term.c.x = move.x;
+	term.c.y = move.y;
 }
 
 void
@@ -1539,18 +1522,15 @@ tsetchar(Rune u, Glyph *attr, int x, int y)
 void
 tclearregion(int x1, int y1, int x2, int y2)
 {
-	int x, y, temp;
+	int x, y;
+	ZigClearRect rect;
 	Glyph *gp;
 
-	if (x1 > x2)
-		temp = x1, x1 = x2, x2 = temp;
-	if (y1 > y2)
-		temp = y1, y1 = y2, y2 = temp;
-
-	LIMIT(x1, 0, term.maxcol-1);
-	LIMIT(x2, 0, term.maxcol-1);
-	LIMIT(y1, 0, term.row-1);
-	LIMIT(y2, 0, term.row-1);
+	rect = st_tclearregionrect(x1, y1, x2, y2, term.maxcol, term.row);
+	x1 = rect.x1;
+	y1 = rect.y1;
+	x2 = rect.x2;
+	y2 = rect.y2;
 
 	for (y = y1; y <= y2; y++) {
 		term.dirty[y] = 1;
@@ -1569,48 +1549,40 @@ tclearregion(int x1, int y1, int x2, int y2)
 void
 tdeletechar(int n)
 {
-	int dst, src, size;
+	ZigEditMove move;
 	Glyph *line;
 
-	LIMIT(n, 0, term.col - term.c.x);
-
-	dst = term.c.x;
-	src = term.c.x + n;
-	size = term.col - src;
+	move = st_tdeletechar(n, term.c.x, term.col);
 	line = term.line[term.c.y];
 
-	memmove(&line[dst], &line[src], size * sizeof(Glyph));
-	tclearregion(term.col-n, term.c.y, term.col-1, term.c.y);
+	memmove(&line[move.dst], &line[move.src], move.size * sizeof(Glyph));
+	tclearregion(move.clear_x1, term.c.y, move.clear_x2, term.c.y);
 }
 
 void
 tinsertblank(int n)
 {
-	int dst, src, size;
+	ZigEditMove move;
 	Glyph *line;
 
-	LIMIT(n, 0, term.col - term.c.x);
-
-	dst = term.c.x + n;
-	src = term.c.x;
-	size = term.col - dst;
+	move = st_tinsertblank(n, term.c.x, term.col);
 	line = term.line[term.c.y];
 
-	memmove(&line[dst], &line[src], size * sizeof(Glyph));
-	tclearregion(src, term.c.y, dst - 1, term.c.y);
+	memmove(&line[move.dst], &line[move.src], move.size * sizeof(Glyph));
+	tclearregion(move.clear_x1, term.c.y, move.clear_x2, term.c.y);
 }
 
 void
 tinsertblankline(int n)
 {
-	if (BETWEEN(term.c.y, term.top, term.bot))
+	if (st_tlineinregion(term.c.y, term.top, term.bot))
 		tscrolldown(term.c.y, n, 0);
 }
 
 void
 tdeleteline(int n)
 {
-	if (BETWEEN(term.c.y, term.top, term.bot))
+	if (st_tlineinregion(term.c.y, term.top, term.bot))
 		tscrollup(term.c.y, n, 0);
 }
 
@@ -1667,17 +1639,11 @@ tsetattr(int *attr, int l)
 void
 tsetscroll(int t, int b)
 {
-	int temp;
+	ZigScrollRegion region;
 
-	LIMIT(t, 0, term.row-1);
-	LIMIT(b, 0, term.row-1);
-	if (t > b) {
-		temp = t;
-		t = b;
-		b = temp;
-	}
-	term.top = t;
-	term.bot = b;
+	region = st_tsetscroll(t, b, term.row);
+	term.top = region.top;
+	term.bot = region.bottom;
 }
 
 void
@@ -2283,10 +2249,12 @@ tdumpline(int n)
 {
 	char buf[UTF_SIZ];
 	Glyph *bp, *end;
+	ZigDumpLinePlan plan;
 
 	bp = &term.line[n][0];
-	end = &bp[MIN(tlinelen(n), term.col) - 1];
-	if (bp != end || bp->u != ' ') {
+	plan = st_tdumplineplan(tlinelen(n), term.col);
+	if (plan.write) {
+		end = &bp[plan.last];
 		for ( ; bp <= end; ++bp)
 			tprinter(buf, utf8encode(bp->u, buf));
 	}
@@ -2305,40 +2273,25 @@ tdump(void)
 void
 tputtab(int n)
 {
-	uint x = term.c.x;
-
-	if (n > 0) {
-		while (x < term.col && n--)
-			for (++x; x < term.col && !term.tabs[x]; ++x)
-				/* nothing */ ;
-	} else if (n < 0) {
-		while (x > 0 && n++)
-			for (--x; x > 0 && !term.tabs[x]; --x)
-				/* nothing */ ;
-	}
-	term.c.x = LIMIT(x, 0, term.col-1);
+	term.c.x = st_tputtab(term.c.x, term.col, n, term.tabs);
 }
 
 void
 tdefutf8(char ascii)
 {
-	if (ascii == 'G')
-		term.mode |= MODE_UTF8;
-	else if (ascii == '@')
-		term.mode &= ~MODE_UTF8;
+	term.mode = st_tdefutf8(term.mode, ascii);
 }
 
 void
 tdeftran(char ascii)
 {
-	static char cs[] = "0B";
-	static int vcs[] = {CS_GRAPHIC0, CS_USA};
-	char *p;
+	int charset;
 
-	if ((p = strchr(cs, ascii)) == NULL) {
+	charset = st_tdeftran(ascii);
+	if (charset < 0) {
 		fprintf(stderr, "esc unhandled charset: ESC ( %c\n", ascii);
 	} else {
-		term.trantbl[term.icharset] = vcs[p - cs];
+		term.trantbl[term.icharset] = charset;
 	}
 }
 
@@ -2347,7 +2300,7 @@ tdectest(char c)
 {
 	int x, y;
 
-	if (c == '8') { /* DEC screen alignment test. */
+	if (st_tdectest(c)) { /* DEC screen alignment test. */
 		for (x = 0; x < term.col; ++x) {
 			for (y = 0; y < term.row; ++y)
 				tsetchar('E', &term.c.attr, x, y);
@@ -2358,23 +2311,12 @@ tdectest(char c)
 void
 tstrsequence(uchar c)
 {
-	switch (c) {
-	case 0x90:   /* DCS -- Device Control String */
-		c = 'P';
-		break;
-	case 0x9f:   /* APC -- Application Program Command */
-		c = '_';
-		break;
-	case 0x9e:   /* PM -- Privacy Message */
-		c = '^';
-		break;
-	case 0x9d:   /* OSC -- Operating System Command */
-		c = ']';
-		break;
-	}
+	ZigStrSequence seq;
+
+	seq = st_tstrsequence(c, term.esc);
 	strreset();
-	strescseq.type = c;
-	term.esc |= ESC_STR;
+	strescseq.type = seq.seq_type;
+	term.esc = seq.esc;
 }
 
 void
@@ -2674,19 +2616,18 @@ void
 tresize(int col, int row)
 {
 	int i, j;
-	int tmp;
 	int minrow, mincol;
 	int *bp;
 	TCursor c;
+	ZigResizePlan plan;
 
-	tmp = col;
-	if (!term.maxcol)
-		term.maxcol = term.col;
-	col = MAX(col, term.maxcol);
-	minrow = MIN(row, term.row);
-	mincol = MIN(col, term.maxcol);
+	plan = st_tresizeplan(col, row, term.col, term.row, term.maxcol, term.c.y);
+	term.maxcol = plan.base_maxcol;
+	col = plan.alloc_col;
+	minrow = plan.minrow;
+	mincol = plan.mincol;
 
-	if (col < 1 || row < 1) {
+	if (plan.invalid) {
 		fprintf(stderr,
 		        "tresize: error resizing to %dx%d\n", col, row);
 		return;
@@ -2697,7 +2638,7 @@ tresize(int col, int row)
 	 * tscrollup would work here, but we can optimize to
 	 * memmove because we're freeing the earlier lines
 	 */
-	for (i = 0; i <= term.c.y - row; i++) {
+	for (i = 0; i < plan.slide_count; i++) {
 		free(term.line[i]);
 		free(term.alt[i]);
 	}
@@ -2706,7 +2647,7 @@ tresize(int col, int row)
 		memmove(term.line, term.line + i, row * sizeof(Line));
 		memmove(term.alt, term.alt + i, row * sizeof(Line));
 	}
-	for (i += row; i < term.row; i++) {
+	for (i = plan.tail_start; i < term.row; i++) {
 		free(term.line[i]);
 		free(term.alt[i]);
 	}
@@ -2740,13 +2681,12 @@ tresize(int col, int row)
 		bp = term.tabs + term.maxcol;
 
 		memset(bp, 0, sizeof(*term.tabs) * (col - term.maxcol));
-		while (--bp > term.tabs && !*bp)
-			/* nothing */ ;
-		for (bp += tabspaces; bp < term.tabs + col; bp += tabspaces)
-			*bp = 1;
+		for (i = st_tresizetabstart(term.tabs, term.maxcol, tabspaces);
+				i < col; i += tabspaces)
+			term.tabs[i] = 1;
 	}
 	/* update terminal size */
-	term.col = tmp;
+	term.col = plan.requested_col;
 	term.maxcol = col;
 	term.row = row;
 	/* reset scrolling region */
@@ -2780,7 +2720,7 @@ drawregion(int x1, int y1, int x2, int y2)
 	int y;
 
 	for (y = y1; y < y2; y++) {
-		if (!term.dirty[y])
+		if (!st_drawregionline(term.dirty[y]))
 			continue;
 
 		term.dirty[y] = 0;
@@ -2792,6 +2732,7 @@ void
 draw(void)
 {
 	int cx = term.c.x, ocx = term.ocx, ocy = term.ocy;
+	ZigDrawCursorPlan cursor;
 
 	if (!xstartdraw())
 		return;
@@ -2799,12 +2740,11 @@ draw(void)
 		searchscan();
 
 	/* adjust cursor position */
-	LIMIT(term.ocx, 0, term.col-1);
-	LIMIT(term.ocy, 0, term.row-1);
-	if (term.line[term.ocy][term.ocx].mode & ATTR_WDUMMY)
-		term.ocx--;
-	if (term.line[term.c.y][cx].mode & ATTR_WDUMMY)
-		cx--;
+	cursor = st_drawcursorplan(cx, term.c.y, term.ocx, term.ocy,
+		term.col, term.row, (const ZigGlyph * const *)term.line);
+	cx = cursor.cx;
+	term.ocx = cursor.ocx;
+	term.ocy = cursor.ocy;
 
 	drawregion(0, 0, term.col, term.row);
 	if (term.scr == 0)

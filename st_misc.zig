@@ -1,6 +1,6 @@
 //! st_misc.zig 负责 CSI 杂项序列的纯规划。
-//! [输入]: CSI 主 mode、第二 mode 字节和参数数组。
-//! [输出]: `ZigMiscPlan`，描述 media copy、repeat last char 或 cursor style 设置。
+//! [输入]: CSI 主 mode、第二 mode 字节、参数数组和 DEC 测试 selector。
+//! [输出]: `ZigMiscPlan` 或是否执行 DEC alignment test。
 //! [副作用边界]: 不调用 `tdump(...)`、`tputc(...)`、`xsetcursor(...)`；C 侧根据 plan 执行真实动作。
 //! [定位]: 收敛 `csihandle(...)` 中 `i/b/space` 分支。
 
@@ -44,6 +44,10 @@ export fn st_planmisc(mode0: c_char, mode1: c_char, arg: [*]const c_int, len: c_
     };
 }
 
+export fn st_tdectest(c: c_char) c_int {
+    return if (c == '8') 1 else 0;
+}
+
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
     if (index >= args.len) return fallback;
     return args[index];
@@ -84,4 +88,9 @@ test "plan space with unsupported suffix is unknown" {
 test "plan media copy unsupported arg is none" {
     const plan = st_planmisc('i', 0, &[_]c_int{9}, 1);
     try std.testing.expectEqual(@as(c_int, misc_none), plan.kind);
+}
+
+test "dectest only accepts alignment selector" {
+    try std.testing.expectEqual(@as(c_int, 1), st_tdectest('8'));
+    try std.testing.expectEqual(@as(c_int, 0), st_tdectest('7'));
 }

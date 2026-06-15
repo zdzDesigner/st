@@ -72,10 +72,59 @@ typedef struct {
 } ZigCursorPlan;
 
 typedef struct {
+	int x;
+	int y;
+	int state;
+} ZigCursorMove;
+
+typedef struct {
+	int scroll;
+	int scroll_top;
+	int x;
+	int y;
+} ZigNewlinePlan;
+
+typedef struct {
+	int cx;
+	int ocx;
+	int ocy;
+} ZigDrawCursorPlan;
+
+typedef struct {
+	int action;
+	int slot;
+} ZigCursorStorePlan;
+
+enum {
+	ST_ZIG_CURSOR_STORE_NONE = 0,
+	ST_ZIG_CURSOR_STORE_SAVE = 1,
+	ST_ZIG_CURSOR_STORE_LOAD = 2,
+};
+
+typedef struct {
 	int kind;
 	int count;
 	ZigClearRect rect;
 } ZigEditPlan;
+
+typedef struct {
+	int dst;
+	int src;
+	int size;
+	int clear_x1;
+	int clear_x2;
+} ZigEditMove;
+
+typedef struct {
+	int count;
+	int new_scr;
+} ZigScrollPlan;
+
+typedef struct {
+	int run;
+	int new_scr;
+	int delta;
+} ZigKScrollPlan;
 
 typedef struct {
 	int kind;
@@ -89,6 +138,36 @@ typedef struct {
 	int top;
 	int bottom;
 } ZigStatePlan;
+
+typedef struct {
+	int top;
+	int bottom;
+} ZigScrollRegion;
+
+typedef struct {
+	int invalid;
+	int requested_col;
+	int alloc_col;
+	int base_maxcol;
+	int minrow;
+	int mincol;
+	int slide_count;
+	int tail_start;
+} ZigResizePlan;
+
+typedef struct {
+	unsigned short cursor_attr_mode;
+	uint32_t cursor_fg;
+	uint32_t cursor_bg;
+	int cursor_x;
+	int cursor_y;
+	int cursor_state;
+	int top;
+	int bot;
+	int mode;
+	int charset;
+	int trantbl;
+} ZigResetPlan;
 
 typedef struct {
 	int kind;
@@ -108,6 +187,11 @@ typedef struct {
 typedef struct {
 	int kind;
 } ZigStrHandlePlan;
+
+typedef struct {
+	unsigned char seq_type;
+	int esc;
+} ZigStrSequence;
 
 typedef struct {
 	int action;
@@ -187,6 +271,16 @@ typedef struct {
 	int ne_x;
 	int ne_y;
 } ZigSelBounds;
+
+typedef struct {
+	int write;
+	int last;
+} ZigDumpLinePlan;
+
+typedef struct {
+	int top;
+	int bot;
+} ZigLineRange;
 
 typedef struct {
 	int advance;
@@ -300,13 +394,35 @@ size_t st_utf8encode(uint32_t, unsigned char *);
 ZigCsiParse st_csiparse(const unsigned char *, size_t);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigErasePlan st_planerase(char, int, int, int, int, int);
+ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigCursorPlan st_plancursor(char, int, int, const int *, int);
+ZigCursorMove st_tmoveto(int, int, int, int, int, int, int);
+ZigNewlinePlan st_tnewline(int, int, int, int, int);
+int st_tmoveato_y(int, int, int);
+ZigDrawCursorPlan st_drawcursorplan(int, int, int, int, int, int, const ZigGlyph * const *);
+int st_drawregionline(int);
+ZigCursorStorePlan st_tcursorplan(int, int);
 ZigEditPlan st_planedit(char, const int *, int, int, int);
+ZigEditMove st_tdeletechar(int, int, int);
+ZigEditMove st_tinsertblank(int, int, int);
+int st_tlineinregion(int, int, int);
+ZigScrollPlan st_tscrollplan(int, int, int, int, int, int);
+ZigKScrollPlan st_kscrolldownplan(int, int, int);
+ZigKScrollPlan st_kscrollupplan(int, int, int, int);
 ZigLightPlan st_planlight(char, const int *, int, int, int);
 ZigStatePlan st_planstate(char, int, const int *, int, int);
+ZigScrollRegion st_tsetscroll(int, int, int);
+ZigResizePlan st_tresizeplan(int, int, int, int, int, int);
+int st_tresizetabstart(const int *, int, int);
+ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
 ZigMiscPlan st_planmisc(char, char, const int *, int);
+int st_tdectest(char);
 ZigModePlan st_planmode(int, int);
+int st_tdefutf8(int, char);
+int st_tdeftran(char);
+int st_tswapscreenmode(int);
 ZigStrParse st_strparse(const unsigned char *, size_t);
+ZigStrSequence st_tstrsequence(unsigned char, int);
 ZigStrHandlePlan st_planstrhandle(char, int, int);
 ZigEscExec st_tescexec(unsigned char, int *, int *, int *, int *, int);
 ZigControlExec st_tcontrolexec(unsigned char, int *, int *, int *, int);
@@ -319,6 +435,11 @@ ZigEscFlowExec st_tescflow(int, uint32_t, unsigned char *, size_t, size_t);
 int st_tcontrolafter(int);
 ZigEscFlowAfter st_tescflowafter(int, int);
 int st_tlinelen(const ZigGlyph *, int);
+int st_tputtab(int, int, int, const int *);
+int st_tattrset(const ZigGlyph * const *, int, int, int);
+int st_tlineattrset(const ZigGlyph *, int, int);
+ZigDumpLinePlan st_tdumplineplan(int, int);
+ZigLineRange st_tsetdirtrange(int, int, int);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 ZigSelBounds st_planselnormalize(int, int, int, int, int);
 
