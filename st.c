@@ -162,6 +162,28 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
+typedef struct {
+	int x;
+	int y;
+	int scr;
+	int len;
+} SearchMatch;
+
+typedef struct {
+	Rune *query;
+	int qlen;
+	char *input;
+	size_t inputlen;
+	size_t inputcursor;
+	size_t inputcap;
+	SearchMatch *matches;
+	int nmatches;
+	int cap;
+	int current;
+	int active;
+	int inputmode;
+} SearchState;
+
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
@@ -211,6 +233,15 @@ static void tstrsequence(uchar);
 
 static void drawregion(int, int, int, int);
 
+static void searchscan(void);
+static void searchset(const char *);
+static void searchscanline(Line, int, int);
+static Line searchhistline(int);
+static void searchjump(void);
+static size_t searchprevchar(size_t);
+static size_t searchnextchar(size_t);
+static void searchdelete(size_t, size_t);
+
 static void selnormalize(void);
 static void selscroll(int, int);
 static void selsnap(int *, int *, int);
@@ -226,6 +257,7 @@ static Term term;
 static Selection sel;
 static CSIEscape csiescseq;
 static STREscape strescseq;
+static SearchState search;
 static int iofd = 1;
 static int cmdfd;
 static pid_t pid;
@@ -396,6 +428,387 @@ selected(int x, int y)
 	return st_selected(x, y, sel.mode, sel.ob.x, sel.alt,
 		IS_SET(MODE_ALTSCREEN), sel.type, sel.nb.x, sel.nb.y,
 		sel.ne.x, sel.ne.y);
+}
+
+int
+searchmatch(int x, int y)
+{
+	int i;
+
+	if (!search.active)
+		return 0;
+
+	for (i = 0; i < search.nmatches; ++i) {
+		if (search.matches[i].scr == term.scr && search.matches[i].y == y && BETWEEN(x, search.matches[i].x,
+				search.matches[i].x + search.matches[i].len - 1))
+			return 1;
+	}
+
+	return 0;
+}
+
+int
+searchcurrent(int x, int y)
+{
+	SearchMatch *match;
+
+	if (!search.active || search.current < 0 || search.current >= search.nmatches)
+		return 0;
+
+	match = &search.matches[search.current];
+	return match->scr == term.scr && match->y == y && BETWEEN(x, match->x, match->x + match->len - 1);
+}
+
+void
+searchclear(const Arg *arg)
+{
+	(void)arg;
+	free(search.query);
+	free(search.input);
+	free(search.matches);
+	memset(&search, 0, sizeof(search));
+	search.current = -1;
+	redraw();
+}
+
+int
+searchinputactive(void)
+{
+	return search.inputmode;
+}
+
+const char *
+searchinputtext(void)
+{
+	return search.input ? search.input : "";
+}
+
+size_t
+searchinputcursor(void)
+{
+	return search.inputcursor;
+}
+
+void
+searchnext(const Arg *arg)
+{
+	(void)arg;
+	searchscan();
+	if (!search.active || search.nmatches == 0)
+		return;
+	search.current = (search.current + 1) % search.nmatches;
+	searchjump();
+	redraw();
+}
+
+void
+searchprev(const Arg *arg)
+{
+	(void)arg;
+	searchscan();
+	if (!search.active || search.nmatches == 0)
+		return;
+	search.current = (search.current + search.nmatches - 1) % search.nmatches;
+	searchjump();
+	redraw();
+}
+
+void
+searchprompt(const Arg *arg)
+{
+	(void)arg;
+	search.inputmode = 1;
+	search.inputlen = 0;
+	search.inputcursor = 0;
+	if (!search.input) {
+		search.inputcap = 64;
+		search.input = xmalloc(search.inputcap);
+	}
+	search.input[0] = '\0';
+	redraw();
+}
+
+void
+searchinput(const char *text, size_t len)
+{
+	if (!search.inputmode || len == 0)
+		return;
+
+	if (search.inputlen + len + 1 > search.inputcap) {
+		while (search.inputlen + len + 1 > search.inputcap)
+			search.inputcap = search.inputcap ? search.inputcap * 2 : 64;
+		search.input = xrealloc(search.input, search.inputcap);
+	}
+	memmove(search.input + search.inputcursor + len,
+		search.input + search.inputcursor,
+		search.inputlen - search.inputcursor + 1);
+	memcpy(search.input + search.inputcursor, text, len);
+	search.inputlen += len;
+	search.inputcursor += len;
+	search.input[search.inputlen] = '\0';
+	redraw();
+}
+
+void
+searchbackspace(void)
+{
+	size_t prev;
+
+	if (!search.inputmode || search.inputlen == 0)
+		return;
+	if (search.inputcursor == 0)
+		return;
+
+	prev = searchprevchar(search.inputcursor);
+	searchdelete(prev, search.inputcursor);
+	search.inputcursor = prev;
+	redraw();
+}
+
+void
+searchdeleteforward(void)
+{
+	size_t next;
+
+	if (!search.inputmode || search.inputcursor >= search.inputlen)
+		return;
+	next = searchnextchar(search.inputcursor);
+	searchdelete(search.inputcursor, next);
+	redraw();
+}
+
+void
+searchdeleteword(void)
+{
+	size_t start;
+
+	if (!search.inputmode || search.inputcursor == 0)
+		return;
+	start = search.inputcursor;
+	while (start > 0 && search.input[searchprevchar(start)] == ' ')
+		start = searchprevchar(start);
+	while (start > 0 && search.input[searchprevchar(start)] != ' ')
+		start = searchprevchar(start);
+	searchdelete(start, search.inputcursor);
+	search.inputcursor = start;
+	redraw();
+}
+
+void
+searchclearinput(void)
+{
+	if (!search.inputmode)
+		return;
+	search.inputlen = 0;
+	search.inputcursor = 0;
+	if (search.input)
+		search.input[0] = '\0';
+	redraw();
+}
+
+void
+searchmoveleft(void)
+{
+	if (!search.inputmode || search.inputcursor == 0)
+		return;
+	search.inputcursor = searchprevchar(search.inputcursor);
+	redraw();
+}
+
+void
+searchmoveright(void)
+{
+	if (!search.inputmode || search.inputcursor >= search.inputlen)
+		return;
+	search.inputcursor = searchnextchar(search.inputcursor);
+	redraw();
+}
+
+void
+searchhome(void)
+{
+	if (!search.inputmode)
+		return;
+	search.inputcursor = 0;
+	redraw();
+}
+
+void
+searchend(void)
+{
+	if (!search.inputmode)
+		return;
+	search.inputcursor = search.inputlen;
+	redraw();
+}
+
+size_t
+searchprevchar(size_t cursor)
+{
+	if (cursor == 0)
+		return 0;
+	cursor--;
+	while (cursor > 0 && ((unsigned char)search.input[cursor] & 0xc0) == 0x80)
+		cursor--;
+	return cursor;
+}
+
+size_t
+searchnextchar(size_t cursor)
+{
+	if (cursor >= search.inputlen)
+		return search.inputlen;
+	cursor++;
+	while (cursor < search.inputlen && ((unsigned char)search.input[cursor] & 0xc0) == 0x80)
+		cursor++;
+	return cursor;
+}
+
+void
+searchdelete(size_t start, size_t end)
+{
+	if (start >= end || end > search.inputlen)
+		return;
+	memmove(search.input + start, search.input + end, search.inputlen - end + 1);
+	search.inputlen -= end - start;
+}
+
+void
+searchcommit(void)
+{
+	if (!search.inputmode)
+		return;
+
+	search.inputmode = 0;
+	if (search.inputlen == 0) {
+		searchclear(NULL);
+		return;
+	}
+	searchset(search.input);
+}
+
+void
+searchcancel(void)
+{
+	if (!search.inputmode)
+		return;
+
+	search.inputmode = 0;
+	redraw();
+}
+
+void
+searchset(const char *query)
+{
+	Rune rune;
+	size_t len, off, step;
+	int qlen = 0;
+	Rune *runes;
+
+	len = strlen(query);
+	runes = xmalloc((len ? len : 1) * sizeof(*runes));
+	for (off = 0; off < len; off += step) {
+		step = utf8decode(query + off, &rune, len - off);
+		if (step == 0)
+			break;
+		runes[qlen++] = rune;
+	}
+
+	free(search.query);
+	search.query = runes;
+	search.qlen = qlen;
+	search.active = qlen > 0;
+	search.current = -1;
+	searchscan();
+	searchjump();
+	redraw();
+}
+
+void
+searchscan(void)
+{
+	int y, scr, oldcurrent;
+
+	oldcurrent = search.current;
+	search.nmatches = 0;
+	if (!search.active || search.qlen <= 0)
+		return;
+
+	for (y = 0; y < term.row; ++y) {
+		searchscanline(term.line[y], 0, y);
+	}
+	for (scr = 1; scr < HISTSIZE; ++scr) {
+		searchscanline(searchhistline(scr), scr, 0);
+	}
+
+	if (search.nmatches == 0) {
+		search.current = -1;
+	} else if (BETWEEN(oldcurrent, 0, search.nmatches - 1)) {
+		search.current = oldcurrent;
+	} else {
+		search.current = 0;
+	}
+}
+
+void
+searchscanline(Line line, int scr, int y)
+{
+	int x, i, pos, linelen, found;
+	SearchMatch *match;
+
+	linelen = st_tlinelen((const ZigGlyph *)line, term.col);
+	for (x = 0; x <= linelen - search.qlen; ++x) {
+		if (line[x].mode & ATTR_WDUMMY)
+			continue;
+
+		found = 1;
+		pos = x;
+		for (i = 0; i < search.qlen; ++i) {
+			while (pos < linelen && (line[pos].mode & ATTR_WDUMMY))
+				pos++;
+			if (pos >= linelen || line[pos].u != search.query[i]) {
+				found = 0;
+				break;
+			}
+			pos++;
+		}
+		if (!found)
+			continue;
+		while (pos < term.col && (line[pos].mode & ATTR_WDUMMY))
+			pos++;
+
+		if (search.nmatches == search.cap) {
+			search.cap = search.cap ? search.cap * 2 : 16;
+			search.matches = xrealloc(search.matches,
+				search.cap * sizeof(*search.matches));
+		}
+		match = &search.matches[search.nmatches++];
+		match->x = x;
+		match->y = y;
+		match->scr = scr;
+		match->len = pos - x;
+	}
+}
+
+Line
+searchhistline(int scr)
+{
+	return term.hist[(term.histi - scr + HISTSIZE + 1) % HISTSIZE];
+}
+
+void
+searchjump(void)
+{
+	SearchMatch *match;
+
+	if (search.current < 0 || search.current >= search.nmatches)
+		return;
+
+	match = &search.matches[search.current];
+	if (term.scr != match->scr) {
+		term.scr = match->scr;
+		tfulldirt();
+	}
 }
 
 void
@@ -2376,6 +2789,8 @@ draw(void)
 
 	if (!xstartdraw())
 		return;
+	if (search.active)
+		searchscan();
 
 	/* adjust cursor position */
 	LIMIT(term.ocx, 0, term.col-1);

@@ -309,6 +309,11 @@ static Shortcut shortcuts[] = {
     {MODKEY, XK_j, kscrolldown, {.i = 5}},
     {MODKEY, XK_h, kscrollup, {.i = -1}},
     {MODKEY, XK_l, kscrolldown, {.i = -1}},
+    {MODKEY, XK_slash, searchprompt, {.i = 0}},
+    {MODKEY, XK_n, searchnext, {.i = 0}},
+    {TERMMOD, XK_n, searchprev, {.i = 0}},
+    {TERMMOD, XK_N, searchprev, {.i = 0}},
+    {MODKEY, XK_Escape, searchclear, {.i = 0}},
     // { MODKEY,               XK_Up,          kscrollup,      {.i =  1} },
     // { MODKEY,               XK_Down,        kscrolldown,    {.i =  1} },
     {MODKEY, XK_s, changealpha, {.f = -0.05}},
@@ -359,9 +364,10 @@ static KeySym mappedkeys[] = {-1};
 
 /*
  * State bits to ignore when matching key or button events.  By default,
- * numlock (Mod2Mask) and keyboard layout (XK_SWITCH_MOD) are ignored.
+ * caps lock (LockMask), numlock (Mod2Mask) and keyboard layout
+ * (XK_SWITCH_MOD) are ignored.
  */
-static uint ignoremod = Mod2Mask | XK_SWITCH_MOD;
+static uint ignoremod = LockMask | Mod2Mask | XK_SWITCH_MOD;
 
 /*
  * This is the huge key array which defines all compatibility to the Linux

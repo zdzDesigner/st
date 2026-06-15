@@ -15,10 +15,12 @@
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
+#include <wchar.h>
 
 char *argv0;
 #include "arg.h"
 #include "st.h"
+#include "st_zig.h"
 #include "hb.h"
 #include "win.h"
 
@@ -157,6 +159,9 @@ static inline ushort sixd_to_16bit(int);
 static int xmakeglyphfontspecs(XftGlyphFontSpec *, const Glyph *, int, int, int);
 static void xdrawglyphfontspecs(const XftGlyphFontSpec *, Glyph, int, int, int);
 static void xdrawglyph(Glyph, int, int);
+static int xdrawsearchtext(const char *, int, int, int);
+static int xtextcols(const char *, size_t);
+static void xdrawsearchbar(void);
 static void xclear(int, int, int, int);
 static int xgeommasktogravity(int);
 static int ximopen(Display *);
@@ -201,6 +206,8 @@ static void mousesel(XEvent *, int);
 static void mousereport(XEvent *);
 static char *kmap(KeySym, uint);
 static int match(uint, uint);
+static int shortcutkeymatch(KeySym, KeySym);
+static int shortcutmatch(const Shortcut *, XKeyEvent *);
 
 static void run(void);
 static void usage(void);
@@ -1475,12 +1482,73 @@ void xdrawglyph(Glyph g, int x, int y)
     xdrawglyphfontspecs(&spec, g, numspecs, x, y);
 }
 
+int xdrawsearchtext(const char *text, int col, int row, int maxcol)
+{
+    Glyph glyph;
+    ZigUtf8Decode decoded;
+    size_t len, off, step;
+    int width;
+
+    len = strlen(text);
+    for (off = 0; off < len && col < maxcol; off += step) {
+        decoded = st_utf8decode((const unsigned char *)text + off, len - off);
+        step = decoded.len;
+        if (step == 0) break;
+        width = wcwidth((wchar_t)decoded.rune);
+        if (width < 1) width = 1;
+        glyph = (Glyph){.u = decoded.rune, .mode = width == 2 ? ATTR_WIDE : 0, .fg = defaultbg, .bg = defaultfg};
+        xdrawglyph(glyph, col, row);
+        col += width;
+    }
+
+    return col;
+}
+
+int xtextcols(const char *text, size_t bytes)
+{
+    ZigUtf8Decode decoded;
+    size_t off, step;
+    int width, cols = 0;
+
+    for (off = 0; off < bytes; off += step) {
+        decoded = st_utf8decode((const unsigned char *)text + off, bytes - off);
+        step = decoded.len;
+        if (step == 0) break;
+        width = wcwidth((wchar_t)decoded.rune);
+        cols += width < 1 ? 1 : width;
+    }
+
+    return cols;
+}
+
+void xdrawsearchbar(void)
+{
+    static const char prefix[] = "/search: ";
+    const char *input;
+    int x, y, row, maxcol, cursorcol;
+
+    if (!searchinputactive()) return;
+
+    input = searchinputtext();
+    x = borderpx;
+    y = borderpx + win.th - win.ch;
+    row = win.th / win.ch - 1;
+    maxcol = win.tw / win.cw;
+    XftDrawRect(xw.draw, &dc.col[defaultfg], x, y, win.tw, win.ch);
+    xdrawsearchtext(input, xdrawsearchtext(prefix, 0, row, maxcol), row, maxcol);
+    cursorcol = xtextcols(prefix, strlen(prefix)) + xtextcols(input, searchinputcursor());
+    if (cursorcol < maxcol) {
+        XftDrawRect(xw.draw, &dc.col[defaultbg], borderpx + cursorcol * win.cw,
+            y + 2, MAX(1, win.cw / 8), win.ch - 4);
+    }
+}
+
 void xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og, Line line, int len)
 {
     Color drawcol;
 
     /* remove the old cursor */
-    if (selected(ox, oy)) og.mode ^= ATTR_REVERSE;
+    if (selected(ox, oy) || searchmatch(ox, oy)) og.mode ^= ATTR_REVERSE;
 
     /* Redraw the line where cursor was previously.
      * It will restore the ligatures broken by the cursor. */
@@ -1496,7 +1564,7 @@ void xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og, Line line, i
     if (IS_SET(MODE_REVERSE)) {
         g.mode |= ATTR_REVERSE;
         g.bg = defaultfg;
-        if (selected(cx, cy)) {
+        if (selected(cx, cy) || searchmatch(cx, cy)) {
             drawcol = dc.col[defaultcs];
             g.fg = defaultrcs;
         } else {
@@ -1504,7 +1572,7 @@ void xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og, Line line, i
             g.fg = defaultcs;
         }
     } else {
-        if (selected(cx, cy)) {
+        if (selected(cx, cy) || searchmatch(cx, cy)) {
             g.fg = defaultfg;
             g.bg = defaultrcs;
         } else {
@@ -1586,6 +1654,13 @@ void xdrawline(Line line, int x1, int y1, int x2)
         new = line[x];
         if (new.mode == ATTR_WDUMMY) continue;
         if (selected(x, y1)) new.mode ^= ATTR_REVERSE;
+        if (searchcurrent(x, y1)) {
+            new.fg = defaultbg;
+            new.bg = defaultcs;
+        } else if (searchmatch(x, y1)) {
+            new.fg = defaultbg;
+            new.bg = defaultattr;
+        }
         if (i > 0 && ATTRCMP(base, new)) {
             xdrawglyphfontspecs(specs, base, i, ox, y1);
             specs += i;
@@ -1603,6 +1678,7 @@ void xdrawline(Line line, int x1, int y1, int x2)
 
 void xfinishdraw(void)
 {
+    xdrawsearchbar();
     XCopyArea(xw.dpy, xw.buf, xw.win, dc.gc, 0, 0, win.w, win.h, 0, 0);
     XSetForeground(xw.dpy, dc.gc, dc.col[IS_SET(MODE_REVERSE) ? defaultfg : defaultbg].pixel);
 }
@@ -1694,6 +1770,23 @@ void focus(XEvent *ev)
 
 int match(uint mask, uint state) { return mask == XK_ANY_MOD || mask == (state & ~ignoremod); }
 
+int shortcutkeymatch(KeySym want, KeySym got)
+{
+    if (want == got) return 1;
+
+    if (XK_A <= want && want <= XK_Z) want += XK_a - XK_A;
+    if (XK_A <= got && got <= XK_Z) got += XK_a - XK_A;
+    return want == got;
+}
+
+int shortcutmatch(const Shortcut *shortcut, XKeyEvent *event)
+{
+    KeySym base = XLookupKeysym(event, 0);
+    KeySym shifted = XLookupKeysym(event, 1);
+
+    return shortcutkeymatch(shortcut->keysym, base) || shortcutkeymatch(shortcut->keysym, shifted);
+}
+
 char *kmap(KeySym k, uint state)
 {
     Key *kp;
@@ -1726,7 +1819,7 @@ char *kmap(KeySym k, uint state)
 void kpress(XEvent *ev)
 {
     XKeyEvent *e = &ev->xkey;
-    KeySym ksym;
+    KeySym ksym, baseksym;
     char buf[64], *customkey;
     int len;
     Rune c;
@@ -1739,9 +1832,38 @@ void kpress(XEvent *ev)
         len = XmbLookupString(xw.ime.xic, e, buf, sizeof buf, &ksym, &status);
     else
         len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
+
+    if (searchinputactive()) {
+        baseksym = XLookupKeysym(e, 0);
+        if (baseksym == XK_Escape || ((e->state & ControlMask) && (baseksym == XK_c || baseksym == XK_g))) {
+            searchcancel();
+        } else if (baseksym == XK_Return || baseksym == XK_KP_Enter || ((e->state & ControlMask) && baseksym == XK_m)) {
+            searchcommit();
+        } else if (baseksym == XK_BackSpace || ((e->state & ControlMask) && baseksym == XK_h)) {
+            searchbackspace();
+        } else if (baseksym == XK_Delete || ((e->state & ControlMask) && baseksym == XK_d)) {
+            searchdeleteforward();
+        } else if ((e->state & ControlMask) && baseksym == XK_w) {
+            searchdeleteword();
+        } else if ((e->state & ControlMask) && baseksym == XK_u) {
+            searchclearinput();
+        } else if (baseksym == XK_Left || ((e->state & ControlMask) && baseksym == XK_b)) {
+            searchmoveleft();
+        } else if (baseksym == XK_Right || ((e->state & ControlMask) && baseksym == XK_f)) {
+            searchmoveright();
+        } else if (baseksym == XK_Home || ((e->state & ControlMask) && baseksym == XK_a)) {
+            searchhome();
+        } else if (baseksym == XK_End || ((e->state & ControlMask) && baseksym == XK_e)) {
+            searchend();
+        } else if (len > 0) {
+            searchinput(buf, len);
+        }
+        return;
+    }
+
     /* 1. shortcuts */
     for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
-        if (ksym == bp->keysym && match(bp->mod, e->state)) {
+        if (shortcutmatch(bp, e) && match(bp->mod, e->state)) {
             bp->func(&(bp->arg));
             return;
         }
