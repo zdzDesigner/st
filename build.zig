@@ -270,6 +270,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     install_step.dependOn(&b.addInstallBinFile(b.path("st-copyout"), "st-copyout").step);
+    install_step.dependOn(&b.addInstallBinFile(b.path("st-copylastout"), "st-copylastout").step);
     install_step.dependOn(&b.addInstallBinFile(b.path("st-urlhandler"), "st-urlhandler").step);
 
     const render_manpage = b.addSystemCommand(&.{ sed, b.fmt("s/VERSION/{s}/g", .{version}) });
@@ -448,6 +449,7 @@ fn makeCleanInstall(step: *std.Build.Step, options: std.Build.Step.MakeOptions) 
 
     deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st"));
     deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st-copyout"));
+    deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st-copylastout"));
     deleteInstallFile(step, cwd, b.getInstallPath(.bin, "st-urlhandler"));
     deleteInstallFile(step, cwd, b.getInstallPath(.prefix, "share/man/man1/st.1"));
 

@@ -304,6 +304,8 @@ static char *copyurlcmd[] = {"/bin/sh", "-c", "st-urlhandler -c",
                              "externalpipe", NULL};
 static char *copyoutput[] = {"/bin/sh", "-c", "st-copyout", "externalpipe",
                              NULL};
+static char *copylastoutput[] = {"/bin/sh", "-c", "st-copylastout",
+                                 "externalpipe", NULL};
 
 static Shortcut shortcuts[] = {
     /* mask                 keysym          function        argument */
@@ -353,6 +355,7 @@ static Shortcut shortcuts[] = {
     {Mod1Mask | ControlMask, XK_l, externalpipe, {.v = openurlcmd}},
     {Mod1Mask, XK_y, externalpipe, {.v = copyurlcmd}},
     {Mod4Mask, XK_c, externalpipe, {.v = copyoutput}},
+    {MODKEY, XK_x, externalpipe, {.v = copylastoutput}},
     // {Mod1Mask, XK_c, externalpipe, {.v = copyoutput}},
 };
 

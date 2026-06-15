@@ -1,0 +1,38 @@
+#!/bin/sh
+# Copy the output of the last shell command from st scrollback.
+# Requires xclip and is intended to be used through externalpipe.
+
+tmpfile=$(mktemp /tmp/st-last-output.XXXXXX)
+trap 'rm "$tmpfile"' 0 1 15
+
+sed -n "w $tmpfile"
+sed -i 's/\x0//g' "$tmpfile"
+
+ps1=$(grep "\S" "$tmpfile" | tail -n 1 | sed 's/^\s*//' | cut -d' ' -f1)
+
+awk -v ps1="$ps1" '
+{
+    lines[NR] = $0
+    if (ps1 != "" && index($0, ps1) == 1) {
+        last_prompt = NR
+    }
+}
+END {
+    if (last_prompt <= 1) {
+        exit
+    }
+
+    prev_prompt = 0
+    for (i = 1; i < last_prompt; i++) {
+        if (ps1 != "" && index(lines[i], ps1) == 1) {
+            prev_prompt = i
+        }
+    }
+
+    start = prev_prompt ? prev_prompt + 1 : 1
+    stop = last_prompt - 1
+    for (i = start; i <= stop; i++) {
+        print lines[i]
+    }
+}
+' "$tmpfile" | xclip -selection clipboard
