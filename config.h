@@ -6,12 +6,15 @@
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
 // static char *font = "mono:pixelsize=24:antialias=true:autohint=true";
-static char *font = "DejaVu Sans Mono:style=Book:pixelsize=17:antialias=true:autohint=true";
-// static char *font = "JoyPixels:pixelsize=24:antialias=true:autohint=true"; // 部分系统不支持
-// JoyPixels: poly request too large or internal Xlib length error
-// static char *font = "unifont:pixelsize=24:antialias=true:autohint=true";
-// static char *font = "DejaVu Sans Mono:pixelsize=24:antialias=true:autohint=true";
-static char *font2[] = { "Hack Nerd Font Mono:pixelsize=16:antialias=true:autohint=true" };
+static char *font =
+    "DejaVu Sans Mono:style=Book:pixelsize=17:antialias=true:autohint=true";
+// static char *font = "JoyPixels:pixelsize=24:antialias=true:autohint=true"; //
+// 部分系统不支持 JoyPixels: poly request too large or internal Xlib length
+// error static char *font =
+// "unifont:pixelsize=24:antialias=true:autohint=true"; static char *font =
+// "DejaVu Sans Mono:pixelsize=24:antialias=true:autohint=true";
+static char *font2[] = {
+    "Hack Nerd Font Mono:pixelsize=16:antialias=true:autohint=true"};
 // static char *font2[] = {
 //   "monospace:size=22",
 //   "Noto Sans CJK SC:size=18",
@@ -190,6 +193,15 @@ unsigned int defaultcs = 256;
 unsigned int defaultrcs = 257;
 unsigned int background = 258;
 
+/* Search UI colors and prompt. */
+static char *searchpromptstr = "/search: ";
+static unsigned int searchfg = 258;
+static unsigned int searchmatchbg = 11;
+// static unsigned int searchcurrentbg = TRUECOLOR(0x87, 0x0c, 0x65);
+static unsigned int searchcurrentbg = TRUECOLOR(0xd9, 0x35, 0xac);
+static unsigned int searchbarfg = 258;
+static unsigned int searchbarbg = 259;
+
 /*
  * Default shape of cursor
  * 2: Block ("█")
@@ -272,8 +284,12 @@ ResourcePref resources[] = {
  */
 static MouseShortcut mshortcuts[] = {
     /* mask                 button   function        argument       release */
-    {XK_NO_MOD, Button4, kscrollup, {.i = 1}},         {XK_NO_MOD, Button5, kscrolldown, {.i = 1}},   {XK_ANY_MOD, Button2, selpaste, {.i = 0}, 1},
-    {ShiftMask, Button4, ttysend, {.s = "\033[5;2~"}}, {XK_ANY_MOD, Button4, ttysend, {.s = "\031"}}, {ShiftMask, Button5, ttysend, {.s = "\033[6;2~"}},
+    {XK_NO_MOD, Button4, kscrollup, {.i = 1}},
+    {XK_NO_MOD, Button5, kscrolldown, {.i = 1}},
+    {XK_ANY_MOD, Button2, selpaste, {.i = 0}, 1},
+    {ShiftMask, Button4, ttysend, {.s = "\033[5;2~"}},
+    {XK_ANY_MOD, Button4, ttysend, {.s = "\031"}},
+    {ShiftMask, Button5, ttysend, {.s = "\033[6;2~"}},
     {XK_ANY_MOD, Button5, ttysend, {.s = "\005"}},
 };
 
@@ -281,9 +297,12 @@ static MouseShortcut mshortcuts[] = {
 #define MODKEY Mod1Mask
 #define TERMMOD (Mod1Mask | ShiftMask)
 
-static char *openurlcmd[] = {"/bin/sh", "-c", "st-urlhandler -o", "externalpipe", NULL};
-static char *copyurlcmd[] = {"/bin/sh", "-c", "st-urlhandler -c", "externalpipe", NULL};
-static char *copyoutput[] = {"/bin/sh", "-c", "st-copyout", "externalpipe", NULL};
+static char *openurlcmd[] = {"/bin/sh", "-c", "st-urlhandler -o",
+                             "externalpipe", NULL};
+static char *copyurlcmd[] = {"/bin/sh", "-c", "st-urlhandler -c",
+                             "externalpipe", NULL};
+static char *copyoutput[] = {"/bin/sh", "-c", "st-copyout", "externalpipe",
+                             NULL};
 
 static Shortcut shortcuts[] = {
     /* mask                 keysym          function        argument */
@@ -326,9 +345,10 @@ static Shortcut shortcuts[] = {
     {TERMMOD, XK_J, zoom, {.f = -1}},
     {TERMMOD, XK_U, zoom, {.f = +2}},
     {TERMMOD, XK_D, zoom, {.f = -2}},
-    // { MODKEY,               XK_l,           externalpipe,   {.v = openurlcmd } },
-    // { MODKEY,               XK_y,           externalpipe,   {.v = copyurlcmd } },
-    // { MODKEY,               XK_o,           externalpipe,   {.v = copyoutput } },
+    // { MODKEY,               XK_l,           externalpipe,   {.v = openurlcmd
+    // } }, { MODKEY,               XK_y,           externalpipe,   {.v =
+    // copyurlcmd } }, { MODKEY,               XK_o,           externalpipe, {.v
+    // = copyoutput } },
     {Mod1Mask | ControlMask, XK_l, externalpipe, {.v = openurlcmd}},
     {Mod1Mask, XK_y, externalpipe, {.v = copyurlcmd}},
     {Mod4Mask, XK_c, externalpipe, {.v = copyoutput}},

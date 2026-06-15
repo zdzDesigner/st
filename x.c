@@ -1523,7 +1523,6 @@ int xtextcols(const char *text, size_t bytes)
 
 void xdrawsearchbar(void)
 {
-    static const char prefix[] = "/search: ";
     const char *input;
     int x, y, row, maxcol, cursorcol;
 
@@ -1534,11 +1533,11 @@ void xdrawsearchbar(void)
     y = borderpx + win.th - win.ch;
     row = win.th / win.ch - 1;
     maxcol = win.tw / win.cw;
-    XftDrawRect(xw.draw, &dc.col[defaultfg], x, y, win.tw, win.ch);
-    xdrawsearchtext(input, xdrawsearchtext(prefix, 0, row, maxcol), row, maxcol);
-    cursorcol = xtextcols(prefix, strlen(prefix)) + xtextcols(input, searchinputcursor());
+    XftDrawRect(xw.draw, &dc.col[searchbarbg], x, y, win.tw, win.ch);
+    xdrawsearchtext(input, xdrawsearchtext(searchpromptstr, 0, row, maxcol), row, maxcol);
+    cursorcol = xtextcols(searchpromptstr, strlen(searchpromptstr)) + xtextcols(input, searchinputcursor());
     if (cursorcol < maxcol) {
-        XftDrawRect(xw.draw, &dc.col[defaultbg], borderpx + cursorcol * win.cw,
+        XftDrawRect(xw.draw, &dc.col[searchbarfg], borderpx + cursorcol * win.cw,
             y + 2, MAX(1, win.cw / 8), win.ch - 4);
     }
 }
@@ -1655,11 +1654,11 @@ void xdrawline(Line line, int x1, int y1, int x2)
         if (new.mode == ATTR_WDUMMY) continue;
         if (selected(x, y1)) new.mode ^= ATTR_REVERSE;
         if (searchcurrent(x, y1)) {
-            new.fg = defaultbg;
-            new.bg = defaultcs;
+            new.fg = searchfg;
+            new.bg = searchcurrentbg;
         } else if (searchmatch(x, y1)) {
-            new.fg = defaultbg;
-            new.bg = defaultattr;
+            new.fg = searchfg;
+            new.bg = searchmatchbg;
         }
         if (i > 0 && ATTRCMP(base, new)) {
             xdrawglyphfontspecs(specs, base, i, ox, y1);
