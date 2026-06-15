@@ -198,7 +198,8 @@ static char *searchpromptstr = "/search: ";
 static unsigned int searchfg = 258;
 static unsigned int searchmatchbg = 11;
 // static unsigned int searchcurrentbg = TRUECOLOR(0x87, 0x0c, 0x65);
-static unsigned int searchcurrentbg = TRUECOLOR(0xd9, 0x35, 0xac);
+// static unsigned int searchcurrentbg = TRUECOLOR(0xd9, 0x35, 0xac);
+static unsigned int searchcurrentbg = TRUECOLOR(0xff, 0x00, 0xb9);
 static unsigned int searchbarfg = 258;
 static unsigned int searchbarbg = 259;
 

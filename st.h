@@ -117,6 +117,7 @@ void searchnext(const Arg *);
 void searchprev(const Arg *);
 void searchclear(const Arg *);
 int searchinputactive(void);
+int searchbaractive(void);
 const char *searchinputtext(void);
 size_t searchinputcursor(void);
 void searchinput(const char *, size_t);

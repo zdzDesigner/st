@@ -1526,7 +1526,7 @@ void xdrawsearchbar(void)
     const char *input;
     int x, y, row, maxcol, cursorcol;
 
-    if (!searchinputactive()) return;
+    if (!searchbaractive()) return;
 
     input = searchinputtext();
     x = borderpx;
@@ -1536,7 +1536,7 @@ void xdrawsearchbar(void)
     XftDrawRect(xw.draw, &dc.col[searchbarbg], x, y, win.tw, win.ch);
     xdrawsearchtext(input, xdrawsearchtext(searchpromptstr, 0, row, maxcol), row, maxcol);
     cursorcol = xtextcols(searchpromptstr, strlen(searchpromptstr)) + xtextcols(input, searchinputcursor());
-    if (cursorcol < maxcol) {
+    if (searchinputactive() && cursorcol < maxcol) {
         XftDrawRect(xw.draw, &dc.col[searchbarfg], borderpx + cursorcol * win.cw,
             y + 2, MAX(1, win.cw / 8), win.ch - 4);
     }

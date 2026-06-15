@@ -477,6 +477,12 @@ searchinputactive(void)
 	return search.inputmode;
 }
 
+int
+searchbaractive(void)
+{
+	return search.inputmode || search.active;
+}
+
 const char *
 searchinputtext(void)
 {
