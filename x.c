@@ -1834,7 +1834,13 @@ void kpress(XEvent *ev)
 
     if (searchinputactive()) {
         baseksym = XLookupKeysym(e, 0);
-        if (baseksym == XK_Escape || ((e->state & ControlMask) && (baseksym == XK_c || baseksym == XK_g))) {
+        if (baseksym == XK_Escape) {
+            searchclear(NULL);
+        } else if ((e->state & ControlMask) && baseksym == XK_n) {
+            searchnext(NULL);
+        } else if ((e->state & ControlMask) && baseksym == XK_p) {
+            searchprev(NULL);
+        } else if ((e->state & ControlMask) && (baseksym == XK_c || baseksym == XK_g)) {
             searchcancel();
         } else if (baseksym == XK_Return || baseksym == XK_KP_Enter || ((e->state & ControlMask) && baseksym == XK_m)) {
             searchcommit();
@@ -1858,6 +1864,22 @@ void kpress(XEvent *ev)
             searchinput(buf, len);
         }
         return;
+    }
+
+    if (searchbaractive()) {
+        baseksym = XLookupKeysym(e, 0);
+        if (baseksym == XK_Escape) {
+            searchclear(NULL);
+            return;
+        }
+        if ((e->state & ControlMask) && baseksym == XK_n) {
+            searchnext(NULL);
+            return;
+        }
+        if ((e->state & ControlMask) && baseksym == XK_p) {
+            searchprev(NULL);
+            return;
+        }
     }
 
     /* 1. shortcuts */

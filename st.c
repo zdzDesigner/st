@@ -552,7 +552,7 @@ searchinput(const char *text, size_t len)
 	search.inputlen += len;
 	search.inputcursor += len;
 	search.input[search.inputlen] = '\0';
-	redraw();
+	searchset(search.input);
 }
 
 void
@@ -568,7 +568,7 @@ searchbackspace(void)
 	prev = searchprevchar(search.inputcursor);
 	searchdelete(prev, search.inputcursor);
 	search.inputcursor = prev;
-	redraw();
+	searchset(search.input);
 }
 
 void
@@ -580,7 +580,7 @@ searchdeleteforward(void)
 		return;
 	next = searchnextchar(search.inputcursor);
 	searchdelete(search.inputcursor, next);
-	redraw();
+	searchset(search.input);
 }
 
 void
@@ -597,7 +597,7 @@ searchdeleteword(void)
 		start = searchprevchar(start);
 	searchdelete(start, search.inputcursor);
 	search.inputcursor = start;
-	redraw();
+	searchset(search.input);
 }
 
 void
@@ -609,7 +609,7 @@ searchclearinput(void)
 	search.inputcursor = 0;
 	if (search.input)
 		search.input[0] = '\0';
-	redraw();
+	searchset(search.input);
 }
 
 void
