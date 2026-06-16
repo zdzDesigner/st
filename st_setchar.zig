@@ -174,6 +174,13 @@ export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty
     line[@intCast(x)].u = next_rune;
 }
 
+export fn st_tclearglyph(line: [*]ZigGlyph, x: c_int, attr: *const ZigGlyph) void {
+    line[@intCast(x)].fg = attr.fg;
+    line[@intCast(x)].bg = attr.bg;
+    line[@intCast(x)].mode = 0;
+    line[@intCast(x)].u = ' ';
+}
+
 export fn st_tputcwrite(rune: u32, width: c_int, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int, insert_mode: c_int) ZigPutcWriteResult {
     if (insert_mode != 0 and x + width < col) {
         shiftRight(line, x, width, col);
@@ -258,6 +265,11 @@ export fn st_tescflow(esc: c_int, rune: u32, csi_buf: [*]u8, csi_len: usize, csi
 
 export fn st_tcontrolafter(esc: c_int) c_int {
     return if (esc == 0) 1 else 0;
+}
+
+export fn st_tcontrolfinish(esc: c_int, clear_str: c_int) c_int {
+    if (clear_str == 0) return esc;
+    return esc & ~(esc_str_end | esc_str);
 }
 
 export fn st_tescflowafter(kind: c_int, action_done: c_int) ZigEscFlowAfter {
@@ -621,6 +633,23 @@ test "tescflow routes utf8 state" {
 test "tcontrolafter clears lastc only when esc is empty" {
     try std.testing.expectEqual(@as(c_int, 1), st_tcontrolafter(0));
     try std.testing.expectEqual(@as(c_int, 0), st_tcontrolafter(esc_start));
+}
+
+test "tcontrolfinish clears string state only when requested" {
+    try std.testing.expectEqual(@as(c_int, esc_start), st_tcontrolfinish(esc_start | esc_str | esc_str_end, 1));
+    try std.testing.expectEqual(@as(c_int, esc_start | esc_str), st_tcontrolfinish(esc_start | esc_str, 0));
+}
+
+test "clear glyph resets cell using current colors" {
+    var line = [_]ZigGlyph{.{ .u = '中', .mode = attr_wide, .fg = 1, .bg = 2 }};
+    const attr = ZigGlyph{ .u = 'x', .mode = 9, .fg = 7, .bg = 8 };
+
+    st_tclearglyph(&line, 0, &attr);
+
+    try std.testing.expectEqual(@as(u32, ' '), line[0].u);
+    try std.testing.expectEqual(@as(c_ushort, 0), line[0].mode);
+    try std.testing.expectEqual(@as(u32, 7), line[0].fg);
+    try std.testing.expectEqual(@as(u32, 8), line[0].bg);
 }
 
 test "tescflowafter preserves esc when eschandle wants more" {

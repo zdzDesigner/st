@@ -353,17 +353,19 @@ tlinehistlen(int y)
 void
 selstart(int col, int row, int snap)
 {
+	ZigSelStartPlan plan;
+
 	selclear();
-	sel.mode = SEL_EMPTY;
-	sel.type = SEL_REGULAR;
-	sel.alt = IS_SET(MODE_ALTSCREEN);
-	sel.snap = snap;
-	sel.oe.x = sel.ob.x = col;
-	sel.oe.y = sel.ob.y = row;
+	plan = st_selstartplan(col, row, snap, IS_SET(MODE_ALTSCREEN));
+	sel.mode = plan.mode;
+	sel.type = plan.sel_type;
+	sel.alt = plan.alt;
+	sel.snap = plan.snap;
+	sel.oe.x = sel.ob.x = plan.x;
+	sel.oe.y = sel.ob.y = plan.y;
 	selnormalize();
 
-	if (sel.snap != 0)
-		sel.mode = SEL_READY;
+	sel.mode = plan.final_mode;
 	tsetdirt(sel.nb.y, sel.ne.y);
 }
 
@@ -371,6 +373,7 @@ void
 selextend(int col, int row, int type, int done)
 {
 	int oldey, oldex, oldsby, oldsey, oldtype;
+	ZigSelExtendPlan plan;
 
 	if (sel.mode == SEL_IDLE)
 		return;
@@ -390,17 +393,19 @@ selextend(int col, int row, int type, int done)
 	selnormalize();
 	sel.type = type;
 
-	if (oldey != sel.oe.y || oldex != sel.oe.x || oldtype != sel.type || sel.mode == SEL_EMPTY)
-		tsetdirt(MIN(sel.nb.y, oldsby), MAX(sel.ne.y, oldsey));
+	plan = st_selextendplan(oldex, oldey, oldtype, oldsby, oldsey,
+		sel.oe.x, sel.oe.y, sel.type, sel.nb.y, sel.ne.y,
+		sel.mode, done);
+	if (plan.dirty)
+		tsetdirt(plan.top, plan.bot);
 
-	sel.mode = done ? SEL_IDLE : SEL_READY;
+	sel.mode = plan.mode;
 }
 
 void
 selnormalize(void)
 {
 	ZigSelBounds bounds;
-	int i;
 
 	bounds = st_planselnormalize(sel.type, sel.ob.x, sel.ob.y,
 		sel.oe.x, sel.oe.y);
@@ -415,11 +420,10 @@ selnormalize(void)
 	/* expand selection over line breaks */
 	if (sel.type == SEL_RECTANGULAR)
 		return;
-	i = tlinelen(sel.nb.y);
-	if (i < sel.nb.x)
-		sel.nb.x = i;
-	if (tlinelen(sel.ne.y) <= sel.ne.x)
-		sel.ne.x = term.col - 1;
+	bounds = st_planselnormalizecols(sel.type, sel.nb.x, sel.ne.x,
+		tlinelen(sel.nb.y), tlinelen(sel.ne.y), term.col);
+	sel.nb.x = bounds.nb_x;
+	sel.ne.x = bounds.ne_x;
 }
 
 int
@@ -435,12 +439,10 @@ searchmatch(int x, int y)
 {
 	int i;
 
-	if (!search.active)
-		return 0;
-
 	for (i = 0; i < search.nmatches; ++i) {
-		if (search.matches[i].scr == term.scr && search.matches[i].y == y && BETWEEN(x, search.matches[i].x,
-				search.matches[i].x + search.matches[i].len - 1))
+		if (st_searchhit(search.active, search.matches[i].scr, term.scr,
+				search.matches[i].y, y, x, search.matches[i].x,
+				search.matches[i].len))
 			return 1;
 	}
 
@@ -452,11 +454,12 @@ searchcurrent(int x, int y)
 {
 	SearchMatch *match;
 
-	if (!search.active || search.current < 0 || search.current >= search.nmatches)
+	if (!st_searchcurrentvalid(search.active, search.current, search.nmatches))
 		return 0;
 
 	match = &search.matches[search.current];
-	return match->scr == term.scr && match->y == y && BETWEEN(x, match->x, match->x + match->len - 1);
+	return st_searchhit(search.active, match->scr, term.scr, match->y, y,
+		x, match->x, match->len);
 }
 
 void
@@ -480,7 +483,7 @@ searchinputactive(void)
 int
 searchbaractive(void)
 {
-	return search.inputmode || search.active;
+	return st_searchbaractive(search.inputmode, search.active);
 }
 
 const char *
@@ -498,11 +501,14 @@ searchinputcursor(void)
 void
 searchnext(const Arg *arg)
 {
+	ZigSearchStepPlan plan;
+
 	(void)arg;
 	searchscan();
-	if (!search.active || search.nmatches == 0)
+	plan = st_searchstep(search.active, search.nmatches, search.current, 1);
+	if (!plan.run)
 		return;
-	search.current = (search.current + 1) % search.nmatches;
+	search.current = plan.current;
 	searchjump();
 	redraw();
 }
@@ -510,11 +516,14 @@ searchnext(const Arg *arg)
 void
 searchprev(const Arg *arg)
 {
+	ZigSearchStepPlan plan;
+
 	(void)arg;
 	searchscan();
-	if (!search.active || search.nmatches == 0)
+	plan = st_searchstep(search.active, search.nmatches, search.current, -1);
+	if (!plan.run)
 		return;
-	search.current = (search.current + search.nmatches - 1) % search.nmatches;
+	search.current = plan.current;
 	searchjump();
 	redraw();
 }
@@ -522,12 +531,15 @@ searchprev(const Arg *arg)
 void
 searchprompt(const Arg *arg)
 {
+	ZigSearchPromptPlan plan;
+
 	(void)arg;
-	search.inputmode = 1;
-	search.inputlen = 0;
-	search.inputcursor = 0;
-	if (!search.input) {
-		search.inputcap = 64;
+	plan = st_searchpromptplan(search.input != NULL, search.inputcap);
+	search.inputmode = plan.inputmode;
+	search.inputlen = plan.inputlen;
+	search.inputcursor = plan.inputcursor;
+	if (plan.alloc) {
+		search.inputcap = plan.inputcap;
 		search.input = xmalloc(search.inputcap);
 	}
 	search.input[0] = '\0';
@@ -537,12 +549,12 @@ searchprompt(const Arg *arg)
 void
 searchinput(const char *text, size_t len)
 {
-	if (!search.inputmode || len == 0)
+	if (!st_searchinputplan(search.inputmode, len))
 		return;
 
-	if (search.inputlen + len + 1 > search.inputcap) {
-		while (search.inputlen + len + 1 > search.inputcap)
-			search.inputcap = search.inputcap ? search.inputcap * 2 : 64;
+	if (st_searchinputgrow(search.inputlen, len, search.inputcap)) {
+		search.inputcap = st_searchinputcap(search.inputlen, len,
+			search.inputcap);
 		search.input = xrealloc(search.input, search.inputcap);
 	}
 	memmove(search.input + search.inputcursor + len,
@@ -560,9 +572,8 @@ searchbackspace(void)
 {
 	size_t prev;
 
-	if (!search.inputmode || search.inputlen == 0)
-		return;
-	if (search.inputcursor == 0)
+	if (!st_searchbackspaceplan(search.inputmode, search.inputlen,
+		search.inputcursor))
 		return;
 
 	prev = searchprevchar(search.inputcursor);
@@ -576,7 +587,8 @@ searchdeleteforward(void)
 {
 	size_t next;
 
-	if (!search.inputmode || search.inputcursor >= search.inputlen)
+	if (!st_searchdeleteforwardplan(search.inputmode,
+		search.inputcursor, search.inputlen))
 		return;
 	next = searchnextchar(search.inputcursor);
 	searchdelete(search.inputcursor, next);
@@ -588,13 +600,10 @@ searchdeleteword(void)
 {
 	size_t start;
 
-	if (!search.inputmode || search.inputcursor == 0)
+	if (!st_searchdeletewordplan(search.inputmode, search.inputcursor))
 		return;
-	start = search.inputcursor;
-	while (start > 0 && search.input[searchprevchar(start)] == ' ')
-		start = searchprevchar(start);
-	while (start > 0 && search.input[searchprevchar(start)] != ' ')
-		start = searchprevchar(start);
+	start = st_searchdeletewordstart((const unsigned char *)search.input,
+		search.inputcursor);
 	searchdelete(start, search.inputcursor);
 	search.inputcursor = start;
 	searchset(search.input);
@@ -603,7 +612,7 @@ searchdeleteword(void)
 void
 searchclearinput(void)
 {
-	if (!search.inputmode)
+	if (!st_searchclearinputplan(search.inputmode))
 		return;
 	search.inputlen = 0;
 	search.inputcursor = 0;
@@ -615,7 +624,8 @@ searchclearinput(void)
 void
 searchmoveleft(void)
 {
-	if (!search.inputmode || search.inputcursor == 0)
+	if (!st_searchbackspaceplan(search.inputmode, search.inputlen,
+		search.inputcursor))
 		return;
 	search.inputcursor = searchprevchar(search.inputcursor);
 	redraw();
@@ -624,7 +634,8 @@ searchmoveleft(void)
 void
 searchmoveright(void)
 {
-	if (!search.inputmode || search.inputcursor >= search.inputlen)
+	if (!st_searchdeleteforwardplan(search.inputmode,
+		search.inputcursor, search.inputlen))
 		return;
 	search.inputcursor = searchnextchar(search.inputcursor);
 	redraw();
@@ -633,7 +644,7 @@ searchmoveright(void)
 void
 searchhome(void)
 {
-	if (!search.inputmode)
+	if (!st_searchcursorplan(search.inputmode))
 		return;
 	search.inputcursor = 0;
 	redraw();
@@ -642,7 +653,7 @@ searchhome(void)
 void
 searchend(void)
 {
-	if (!search.inputmode)
+	if (!st_searchcursorplan(search.inputmode))
 		return;
 	search.inputcursor = search.inputlen;
 	redraw();
@@ -651,42 +662,39 @@ searchend(void)
 size_t
 searchprevchar(size_t cursor)
 {
-	if (cursor == 0)
-		return 0;
-	cursor--;
-	while (cursor > 0 && ((unsigned char)search.input[cursor] & 0xc0) == 0x80)
-		cursor--;
-	return cursor;
+	return st_searchprevchar((const unsigned char *)search.input, cursor);
 }
 
 size_t
 searchnextchar(size_t cursor)
 {
-	if (cursor >= search.inputlen)
-		return search.inputlen;
-	cursor++;
-	while (cursor < search.inputlen && ((unsigned char)search.input[cursor] & 0xc0) == 0x80)
-		cursor++;
-	return cursor;
+	return st_searchnextchar((const unsigned char *)search.input, cursor,
+		search.inputlen);
 }
 
 void
 searchdelete(size_t start, size_t end)
 {
-	if (start >= end || end > search.inputlen)
+	ZigSearchDeletePlan plan;
+
+	plan = st_searchdeleteplan(start, end, search.inputlen);
+	if (!plan.run)
 		return;
 	memmove(search.input + start, search.input + end, search.inputlen - end + 1);
-	search.inputlen -= end - start;
+	search.inputlen = plan.new_len;
 }
 
 void
 searchcommit(void)
 {
-	if (!search.inputmode)
+	int action;
+
+	action = st_searchcommitplan(search.inputmode, search.inputlen);
+	if (action == ST_ZIG_SEARCH_ACTION_NONE)
 		return;
 
 	search.inputmode = 0;
-	if (search.inputlen == 0) {
+	if (action == ST_ZIG_SEARCH_ACTION_CLEAR) {
 		searchclear(NULL);
 		return;
 	}
@@ -696,7 +704,7 @@ searchcommit(void)
 void
 searchcancel(void)
 {
-	if (!search.inputmode)
+	if (st_searchcancelplan(search.inputmode) == ST_ZIG_SEARCH_ACTION_NONE)
 		return;
 
 	search.inputmode = 0;
@@ -710,9 +718,11 @@ searchset(const char *query)
 	size_t len, off, step;
 	int qlen = 0;
 	Rune *runes;
+	ZigSearchSetPlan plan;
 
 	len = strlen(query);
-	runes = xmalloc((len ? len : 1) * sizeof(*runes));
+	plan = st_searchsetplan(len, 0);
+	runes = xmalloc(plan.alloc_len * sizeof(*runes));
 	for (off = 0; off < len; off += step) {
 		step = utf8decode(query + off, &rune, len - off);
 		if (step == 0)
@@ -721,10 +731,11 @@ searchset(const char *query)
 	}
 
 	free(search.query);
+	plan = st_searchsetplan(len, qlen);
 	search.query = runes;
 	search.qlen = qlen;
-	search.active = qlen > 0;
-	search.current = -1;
+	search.active = plan.active;
+	search.current = plan.current;
 	searchscan();
 	searchjump();
 	redraw();
@@ -737,7 +748,7 @@ searchscan(void)
 
 	oldcurrent = search.current;
 	search.nmatches = 0;
-	if (!search.active || search.qlen <= 0)
+	if (!st_searchscanplan(search.active, search.qlen))
 		return;
 
 	for (y = 0; y < term.row; ++y) {
@@ -747,44 +758,24 @@ searchscan(void)
 		searchscanline(searchhistline(scr), scr, 0);
 	}
 
-	if (search.nmatches == 0) {
-		search.current = -1;
-	} else if (BETWEEN(oldcurrent, 0, search.nmatches - 1)) {
-		search.current = oldcurrent;
-	} else {
-		search.current = 0;
-	}
+	search.current = st_searchnextcurrent(oldcurrent, search.nmatches);
 }
 
 void
 searchscanline(Line line, int scr, int y)
 {
-	int x, i, pos, linelen, found;
+	int x, linelen, matchlen;
 	SearchMatch *match;
 
 	linelen = st_tlinelen((const ZigGlyph *)line, term.col);
 	for (x = 0; x <= linelen - search.qlen; ++x) {
-		if (line[x].mode & ATTR_WDUMMY)
+		matchlen = st_searchlinematch((const ZigGlyph *)line, x,
+			linelen, search.query, search.qlen, term.col);
+		if (!matchlen)
 			continue;
-
-		found = 1;
-		pos = x;
-		for (i = 0; i < search.qlen; ++i) {
-			while (pos < linelen && (line[pos].mode & ATTR_WDUMMY))
-				pos++;
-			if (pos >= linelen || line[pos].u != search.query[i]) {
-				found = 0;
-				break;
-			}
-			pos++;
-		}
-		if (!found)
-			continue;
-		while (pos < term.col && (line[pos].mode & ATTR_WDUMMY))
-			pos++;
 
 		if (search.nmatches == search.cap) {
-			search.cap = search.cap ? search.cap * 2 : 16;
+			search.cap = st_searchmatchcap(search.nmatches, search.cap);
 			search.matches = xrealloc(search.matches,
 				search.cap * sizeof(*search.matches));
 		}
@@ -792,7 +783,7 @@ searchscanline(Line line, int scr, int y)
 		match->x = x;
 		match->y = y;
 		match->scr = scr;
-		match->len = pos - x;
+		match->len = matchlen;
 	}
 }
 
@@ -806,13 +797,15 @@ void
 searchjump(void)
 {
 	SearchMatch *match;
+	int nextscr;
 
-	if (search.current < 0 || search.current >= search.nmatches)
+	if (!st_searchcurrentvalid(search.active, search.current, search.nmatches))
 		return;
 
 	match = &search.matches[search.current];
-	if (term.scr != match->scr) {
-		term.scr = match->scr;
+	nextscr = st_searchjumpscr(1, term.scr, match->scr);
+	if (term.scr != nextscr) {
+		term.scr = nextscr;
 		tfulldirt();
 	}
 }
@@ -870,7 +863,7 @@ selsnap(int *x, int *y, int direction)
 		 * has set ATTR_WRAP at its end. Then the whole next or
 		 * previous line will be selected.
 		 */
-		*x = (direction < 0) ? 0 : term.col - 1;
+		*x = st_selsnaplinex(direction, term.col);
 		if (direction < 0) {
 			for (; *y > 0; *y += direction) {
 				if (!(TLINE(*y-1)[term.col-1].mode
@@ -896,11 +889,12 @@ getsel(void)
 	char *str, *ptr;
 	int y, bufsize, lastx, linelen;
 	Glyph *gp, *last;
+	ZigGetSelLinePlan line_plan;
 
 	if (sel.ob.x == -1)
 		return NULL;
 
-	bufsize = (term.col+1) * (sel.ne.y-sel.nb.y+1) * UTF_SIZ;
+	bufsize = st_getselbufsize(term.col, sel.nb.y, sel.ne.y, UTF_SIZ);
 	ptr = str = xmalloc(bufsize);
 
 	/* append every set & selected glyph to the selection */
@@ -910,14 +904,11 @@ getsel(void)
 			continue;
 		}
 
-		if (sel.type == SEL_RECTANGULAR) {
-			gp = &TLINE(y)[sel.nb.x];
-			lastx = sel.ne.x;
-		} else {
-			gp = &TLINE(y)[sel.nb.y == y ? sel.nb.x : 0];
-			lastx = (sel.ne.y == y) ? sel.ne.x : term.col-1;
-		}
-		last = &TLINE(y)[MIN(lastx, linelen-1)];
+		line_plan = st_getsellineplan(sel.type, sel.nb.x, sel.nb.y,
+			sel.ne.x, sel.ne.y, y, term.col);
+		gp = &TLINE(y)[line_plan.start_x];
+		lastx = line_plan.last_x;
+		last = &TLINE(y)[st_getsellastx(lastx, linelen)];
 		while (last >= gp && last->u == ' ')
 			--last;
 
@@ -937,8 +928,8 @@ getsel(void)
 		 * st.
 		 * FIXME: Fix the computer world.
 		 */
-		if ((y < sel.ne.y || lastx >= linelen) &&
-		    (!(last->mode & ATTR_WRAP) || sel.type == SEL_RECTANGULAR))
+		if (st_getselnewline(y, sel.ne.y, lastx, linelen,
+			last->mode, sel.type))
 			*ptr++ = '\n';
 	}
 	*ptr = 0;
@@ -948,7 +939,7 @@ getsel(void)
 void
 selclear(void)
 {
-	if (sel.ob.x == -1)
+	if (!st_selclearplan(sel.ob.x))
 		return;
 	sel.mode = SEL_IDLE;
 	sel.ob.x = -1;
@@ -1170,8 +1161,7 @@ ttywrite(const char *s, size_t n, int may_echo)
 			next = s + 1;
 			ttywriteraw("\r\n", 2);
 		} else {
-			next = memchr(s, '\r', n);
-			DEFAULT(next, s + n);
+			next = s + st_ttywritechunk((const unsigned char *)s, n);
 			ttywriteraw(s, next - s);
 		}
 		n -= next - s;
@@ -1210,7 +1200,7 @@ ttywriteraw(const char *s, size_t n)
 			 * default of 256. This seems to be a reasonable value
 			 * for a serial line. Bigger values might clog the I/O.
 			 */
-			if ((r = write(cmdfd, s, (n < lim)? n : lim)) < 0)
+			if ((r = write(cmdfd, s, st_ttywritecount(n, lim))) < 0)
 				goto write_error;
 			if (r < n) {
 				/*
@@ -1323,9 +1313,7 @@ treset(void)
 		.bg = plan.cursor_bg
 	}, .x = plan.cursor_x, .y = plan.cursor_y, .state = plan.cursor_state};
 
-	memset(term.tabs, 0, term.col * sizeof(*term.tabs));
-	for (i = tabspaces; i < term.col; i += tabspaces)
-		term.tabs[i] = 1;
+	st_tresettabs(term.tabs, term.col, tabspaces);
 	term.top = plan.top;
 	term.bot = plan.bot;
 	term.mode = plan.mode;
@@ -1450,20 +1438,16 @@ tscrollup(int orig, int n, int copyhist)
 void
 selscroll(int orig, int n)
 {
-	if (sel.ob.x == -1)
-		return;
+	ZigSelScrollPlan plan;
 
-	if (BETWEEN(sel.nb.y, orig, term.bot) != BETWEEN(sel.ne.y, orig, term.bot)) {
+	plan = st_selscrollplan(sel.ob.x, sel.ob.y, sel.oe.y,
+		sel.nb.y, sel.ne.y, orig, term.top, term.bot, n);
+	if (plan.action == ST_ZIG_SEL_SCROLL_CLEAR) {
 		selclear();
-	} else if (BETWEEN(sel.nb.y, orig, term.bot)) {
-		sel.ob.y += n;
-		sel.oe.y += n;
-		if (sel.ob.y < term.top || sel.ob.y > term.bot ||
-		    sel.oe.y < term.top || sel.oe.y > term.bot) {
-			selclear();
-		} else {
-			selnormalize();
-		}
+	} else if (plan.action == ST_ZIG_SEL_SCROLL_NORMALIZE) {
+		sel.ob.y = plan.ob_y;
+		sel.oe.y = plan.oe_y;
+		selnormalize();
 	}
 }
 
@@ -1484,7 +1468,7 @@ csiparse(void)
 	ZigCsiParse parsed;
 
 	parsed = st_csiparse((const unsigned char *)csiescseq.buf, csiescseq.len);
-	csiescseq.priv = parsed.priv ? 1 : 0;
+	csiescseq.priv = st_csiprivbool(parsed.priv);
 	csiescseq.narg = parsed.narg;
 	memcpy(csiescseq.arg, parsed.arg, sizeof(parsed.arg));
 	csiescseq.mode[0] = parsed.mode[0];
@@ -1535,13 +1519,10 @@ tclearregion(int x1, int y1, int x2, int y2)
 	for (y = y1; y <= y2; y++) {
 		term.dirty[y] = 1;
 		for (x = x1; x <= x2; x++) {
-			gp = &term.line[y][x];
 			if (selected(x, y))
 				selclear();
-			gp->fg = term.c.attr.fg;
-			gp->bg = term.c.attr.bg;
-			gp->mode = 0;
-			gp->u = ' ';
+			gp = &term.line[y][x];
+			st_tclearglyph((ZigGlyph *)gp, 0, (const ZigGlyph *)&term.c.attr);
 		}
 	}
 }
@@ -2115,6 +2096,7 @@ externalpipe(const Arg *arg)
 	void (*oldsigpipe)(int);
 	Glyph *bp, *end;
 	int lastpos, n, newline;
+	ZigExternalPipeLinePlan line_plan;
 
 	if (pipe(to) == -1)
 		return;
@@ -2140,16 +2122,17 @@ externalpipe(const Arg *arg)
 	newline = 0;
 	for (n = 0; n <= HISTSIZE + 2; n++) {
 		bp = TLINE_HIST(n);
-		lastpos = MIN(tlinehistlen(n) + 1, term.col) - 1;
-		if (lastpos < 0)
+		line_plan = st_externalpipelinelen(tlinehistlen(n), term.col);
+		if (line_plan.kind == ST_ZIG_EXTERNALPIPE_BREAK)
 			break;
-        if (lastpos == 0)
-            continue;
+		if (line_plan.kind == ST_ZIG_EXTERNALPIPE_SKIP)
+			continue;
+		lastpos = line_plan.lastpos;
 		end = &bp[lastpos + 1];
 		for (; bp < end; ++bp)
 			if (xwrite(to[1], buf, utf8encode(bp->u, buf)) < 0)
 				break;
-		if ((newline = TLINE_HIST(n)[lastpos].mode & ATTR_WRAP))
+		if ((newline = st_externalpipewrap(TLINE_HIST(n)[lastpos].mode)))
 			continue;
 		if (xwrite(to[1], "\n", 1) < 0)
 			break;
@@ -2365,8 +2348,7 @@ tcontrolcode(uchar ascii)
 		return;
 	}
 	/* only CAN, SUB, \a and C1 chars interrupt a sequence */
-	if (exec.clear_str)
-		term.esc &= ~(ESC_STR_END|ESC_STR);
+	term.esc = st_tcontrolfinish(term.esc, exec.clear_str);
 }
 
 /*
@@ -2378,27 +2360,23 @@ eschandle(uchar ascii)
 {
 	ZigEscExec exec = st_tescexec(ascii, &term.esc, &term.charset,
 		&term.icharset, term.tabs, term.c.x);
+	ZigNewlinePlan plan;
 
 	switch (exec.action) {
 	case ST_ZIG_ESC_ACTION_START_STR:
 		tstrsequence(ascii);
 		break;
 	case ST_ZIG_ESC_ACTION_IND:
-		if (term.c.y == term.bot) {
-			tscrollup(term.top, 1, 1);
-		} else {
-			tmoveto(term.c.x, term.c.y+1);
-		}
+		tnewline(0);
 		break;
 	case ST_ZIG_ESC_ACTION_NEL:
 		tnewline(1);
 		break;
 	case ST_ZIG_ESC_ACTION_RI:
-		if (term.c.y == term.top) {
-			tscrolldown(term.top, 1, 1);
-		} else {
-			tmoveto(term.c.x, term.c.y-1);
-		}
+		plan = st_treverseindex(term.c.x, term.c.y, term.top);
+		if (plan.scroll)
+			tscrolldown(plan.scroll_top, 1, 1);
+		tmoveto(plan.x, plan.y);
 		break;
 	case ST_ZIG_ESC_ACTION_DECID:
 		ttywrite(vtiden, strlen(vtiden), 0);
@@ -2586,6 +2564,7 @@ twrite(const char *buf, int buflen, int show_ctrl)
 	int charsize;
 	Rune u;
 	int n;
+	ZigWriteControlPlan control_plan;
 
 	for (n = 0; n < buflen; n += charsize) {
 		if (IS_SET(MODE_UTF8)) {
@@ -2597,16 +2576,12 @@ twrite(const char *buf, int buflen, int show_ctrl)
 			u = buf[n] & 0xFF;
 			charsize = 1;
 		}
-		if (show_ctrl && ISCONTROL(u)) {
-			if (u & 0x80) {
-				u &= 0x7f;
-				tputc('^');
-				tputc('[');
-			} else if (u != '\n' && u != '\r' && u != '\t') {
-				u ^= 0x40;
-				tputc('^');
-			}
-		}
+		control_plan = st_twritecontrol(u, show_ctrl);
+		u = control_plan.rune;
+		if (control_plan.caret)
+			tputc('^');
+		if (control_plan.bracket)
+			tputc('[');
 		tputc(u);
 	}
 	return n;
@@ -2620,6 +2595,7 @@ tresize(int col, int row)
 	int *bp;
 	TCursor c;
 	ZigResizePlan plan;
+	ZigResizeClearPlan clear_plan;
 
 	plan = st_tresizeplan(col, row, term.col, term.row, term.maxcol, term.c.y);
 	term.maxcol = plan.base_maxcol;
@@ -2667,13 +2643,13 @@ tresize(int col, int row)
 	}
 
 	/* resize each row to new width, zero-pad if needed */
-	for (i = 0; i < minrow; i++) {
+	for (i = 0; i < plan.resize_rows; i++) {
 		term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
 		term.alt[i]  = xrealloc(term.alt[i],  col * sizeof(Glyph));
 	}
 
 	/* allocate any new rows */
-	for (/* i = minrow */; i < row; i++) {
+	for (i = plan.new_row_start; i < row; i++) {
 		term.line[i] = xmalloc(col * sizeof(Glyph));
 		term.alt[i] = xmalloc(col * sizeof(Glyph));
 	}
@@ -2696,12 +2672,10 @@ tresize(int col, int row)
 	/* Clearing both screens (it makes dirty all lines) */
 	c = term.c;
 	for (i = 0; i < 2; i++) {
-		if (mincol < col && 0 < minrow) {
-			tclearregion(mincol, 0, col - 1, minrow - 1);
-		}
-		if (0 < col && minrow < row) {
-			tclearregion(0, minrow, col - 1, row - 1);
-		}
+		clear_plan = st_tresizeclearplan(mincol, col, minrow, row);
+		for (j = 0; j < clear_plan.count; j++)
+			tclearregion(clear_plan.rects[j].x1, clear_plan.rects[j].y1,
+				clear_plan.rects[j].x2, clear_plan.rects[j].y2);
 		tswapscreen();
 		tcursor(CURSOR_LOAD);
 	}

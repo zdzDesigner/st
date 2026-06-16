@@ -48,6 +48,18 @@ export fn st_tdectest(c: c_char) c_int {
     return if (c == '8') 1 else 0;
 }
 
+export fn st_ttywritecount(n: usize, limit: usize) usize {
+    return if (n < limit) n else limit;
+}
+
+export fn st_ttywritechunk(input: [*]const u8, len: usize) usize {
+    var index: usize = 0;
+    while (index < len and input[index] != '\r') {
+        index += 1;
+    }
+    return index;
+}
+
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
     if (index >= args.len) return fallback;
     return args[index];
@@ -93,4 +105,14 @@ test "plan media copy unsupported arg is none" {
 test "dectest only accepts alignment selector" {
     try std.testing.expectEqual(@as(c_int, 1), st_tdectest('8'));
     try std.testing.expectEqual(@as(c_int, 0), st_tdectest('7'));
+}
+
+test "tty write count clamps to limit" {
+    try std.testing.expectEqual(@as(usize, 12), st_ttywritecount(12, 256));
+    try std.testing.expectEqual(@as(usize, 256), st_ttywritecount(300, 256));
+}
+
+test "tty write chunk stops at carriage return" {
+    try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc\rdef", 7));
+    try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc", 3));
 }

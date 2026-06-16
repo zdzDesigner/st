@@ -45,6 +45,10 @@ export fn st_csiparse(buf: [*]const u8, len: usize) ZigCsiParse {
     return result;
 }
 
+export fn st_csiprivbool(priv: c_char) c_int {
+    return if (priv != 0) 1 else 0;
+}
+
 const ParsedArg = struct {
     value: c_int,
     next: usize,
@@ -81,9 +85,14 @@ test "csi parse regular args" {
 test "csi parse private mode" {
     const parsed = st_csiparse("?25h", 4);
     try std.testing.expectEqual(@as(c_char, '?'), parsed.priv);
+    try std.testing.expectEqual(@as(c_int, 1), st_csiprivbool(parsed.priv));
     try std.testing.expectEqual(@as(c_int, 1), parsed.narg);
     try std.testing.expectEqual(@as(c_int, 25), parsed.arg[0]);
     try std.testing.expectEqual(@as(c_char, 'h'), parsed.mode[0]);
+}
+
+test "csi private bool rejects regular sequences" {
+    try std.testing.expectEqual(@as(c_int, 0), st_csiprivbool(0));
 }
 
 test "csi parse empty arg before mode" {

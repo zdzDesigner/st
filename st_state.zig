@@ -26,6 +26,8 @@ pub const ZigResizePlan = extern struct {
     mincol: c_int,
     slide_count: c_int,
     tail_start: c_int,
+    resize_rows: c_int,
+    new_row_start: c_int,
 };
 
 pub const ZigResetPlan = extern struct {
@@ -40,6 +42,18 @@ pub const ZigResetPlan = extern struct {
     mode: c_int,
     charset: c_int,
     trantbl: c_int,
+};
+
+const ZigClearRect = extern struct {
+    x1: c_int,
+    y1: c_int,
+    x2: c_int,
+    y2: c_int,
+};
+
+pub const ZigResizeClearPlan = extern struct {
+    count: c_int,
+    rects: [2]ZigClearRect,
 };
 
 pub const state_unknown = 0;
@@ -98,6 +112,8 @@ export fn st_tresizeplan(requested_col: c_int, requested_row: c_int, current_col
         .mincol = minInt(alloc_col, base_maxcol),
         .slide_count = slide_count,
         .tail_start = slide_count + requested_row,
+        .resize_rows = minInt(requested_row, current_row),
+        .new_row_start = minInt(requested_row, current_row),
     };
 }
 
@@ -127,6 +143,25 @@ export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPl
     };
 }
 
+export fn st_tresettabs(tabs: [*]c_int, col: c_int, tabspaces: c_uint) void {
+    var x: c_int = 0;
+    while (x < col) : (x += 1) {
+        tabs[@intCast(x)] = 0;
+    }
+
+    var tab = tabspaces;
+    while (tab < @as(c_uint, @intCast(col))) : (tab += tabspaces) {
+        tabs[@intCast(tab)] = 1;
+    }
+}
+
+export fn st_tresizeclearplan(mincol: c_int, col: c_int, minrow: c_int, row: c_int) ZigResizeClearPlan {
+    var plan = ZigResizeClearPlan{ .count = 0, .rects = std.mem.zeroes([2]ZigClearRect) };
+    if (mincol < col and 0 < minrow) addResizeRect(&plan, mincol, 0, col - 1, minrow - 1);
+    if (0 < col and minrow < row) addResizeRect(&plan, 0, minrow, col - 1, row - 1);
+    return plan;
+}
+
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
     if (index >= args.len) return fallback;
     return if (args[index] == 0) fallback else args[index];
@@ -144,6 +179,12 @@ fn minInt(a: c_int, b: c_int) c_int {
 
 fn maxInt(a: c_int, b: c_int) c_int {
     return if (a > b) a else b;
+}
+
+fn addResizeRect(plan: *ZigResizeClearPlan, x1: c_int, y1: c_int, x2: c_int, y2: c_int) void {
+    if (plan.count >= plan.rects.len) return;
+    plan.rects[@intCast(plan.count)] = .{ .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2 };
+    plan.count += 1;
 }
 
 test "plan r defaults to full screen scroll region" {
@@ -198,6 +239,8 @@ test "tresize plan preserves requested and alloc columns" {
     try std.testing.expectEqual(@as(c_int, 100), plan.base_maxcol);
     try std.testing.expectEqual(@as(c_int, 24), plan.minrow);
     try std.testing.expectEqual(@as(c_int, 100), plan.mincol);
+    try std.testing.expectEqual(@as(c_int, 24), plan.resize_rows);
+    try std.testing.expectEqual(@as(c_int, 24), plan.new_row_start);
 }
 
 test "tresize plan computes slide and tail free bounds" {
@@ -229,4 +272,20 @@ test "treset plan sets default terminal state" {
     try std.testing.expectEqual(@as(c_int, 23), plan.bot);
     try std.testing.expectEqual(@as(c_int, mode_wrap | mode_utf8), plan.mode);
     try std.testing.expectEqual(@as(c_int, charset_usa), plan.trantbl);
+}
+
+test "treset tabs marks configured stops" {
+    var tabs = [_]c_int{ 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+
+    st_tresettabs(&tabs, tabs.len, 4);
+
+    try std.testing.expectEqualSlices(c_int, &[_]c_int{ 0, 0, 0, 0, 1, 0, 0, 0, 1 }, &tabs);
+}
+
+test "tresize clear plan emits width and height regions" {
+    const plan = st_tresizeclearplan(5, 10, 3, 6);
+
+    try std.testing.expectEqual(@as(c_int, 2), plan.count);
+    try std.testing.expectEqual(ZigClearRect{ .x1 = 5, .y1 = 0, .x2 = 9, .y2 = 2 }, plan.rects[0]);
+    try std.testing.expectEqual(ZigClearRect{ .x1 = 0, .y1 = 3, .x2 = 9, .y2 = 5 }, plan.rects[1]);
 }

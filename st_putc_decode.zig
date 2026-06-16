@@ -13,6 +13,12 @@ pub const ZigPutcDecode = extern struct {
     bytes: [4]u8,
 };
 
+pub const ZigWriteControlPlan = extern struct {
+    rune: u32,
+    caret: c_int,
+    bracket: c_int,
+};
+
 export fn st_putcdecode(rune: u32, utf8_mode: c_int) ZigPutcDecode {
     var result: ZigPutcDecode = .{
         .control = if (isControl(rune)) 1 else 0,
@@ -31,6 +37,22 @@ export fn st_putcdecode(rune: u32, utf8_mode: c_int) ZigPutcDecode {
         result.width = runeWidth(rune);
     }
     return result;
+}
+
+export fn st_twritecontrol(rune: u32, show_ctrl: c_int) ZigWriteControlPlan {
+    if (show_ctrl == 0 or !isControl(rune)) {
+        return .{ .rune = rune, .caret = 0, .bracket = 0 };
+    }
+
+    if ((rune & 0x80) != 0) {
+        return .{ .rune = rune & 0x7f, .caret = 1, .bracket = 1 };
+    }
+
+    if (rune != '\n' and rune != '\r' and rune != '\t') {
+        return .{ .rune = rune ^ 0x40, .caret = 1, .bracket = 0 };
+    }
+
+    return .{ .rune = rune, .caret = 0, .bracket = 0 };
 }
 
 fn isControl(rune: u32) bool {
@@ -95,4 +117,20 @@ test "putc decode wide rune reports width two" {
 test "putc decode surrogate encodes replacement" {
     const decoded = st_putcdecode(0xD800, 1);
     try std.testing.expectEqual(@as(c_int, 3), decoded.len);
+}
+
+test "write control maps C0 control to caret notation" {
+    const plan = st_twritecontrol(0x01, 1);
+
+    try std.testing.expectEqual(@as(c_int, 1), plan.caret);
+    try std.testing.expectEqual(@as(c_int, 0), plan.bracket);
+    try std.testing.expectEqual(@as(u32, 'A'), plan.rune);
+}
+
+test "write control maps C1 control through escape prefix" {
+    const plan = st_twritecontrol(0x9b, 1);
+
+    try std.testing.expectEqual(@as(c_int, 1), plan.caret);
+    try std.testing.expectEqual(@as(c_int, 1), plan.bracket);
+    try std.testing.expectEqual(@as(u32, 0x1b), plan.rune);
 }

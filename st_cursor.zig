@@ -95,6 +95,15 @@ export fn st_tnewline(first_col: c_int, x: c_int, y: c_int, top: c_int, bot: c_i
     };
 }
 
+export fn st_treverseindex(x: c_int, y: c_int, top: c_int) ZigNewlinePlan {
+    return .{
+        .scroll = if (y == top) 1 else 0,
+        .scroll_top = top,
+        .x = x,
+        .y = if (y == top) y else y - 1,
+    };
+}
+
 export fn st_tmoveato_y(y: c_int, state: c_int, top: c_int) c_int {
     return y + if ((state & cursor_origin) != 0) top else 0;
 }
@@ -205,6 +214,16 @@ test "tnewline scrolls at bottom and honors first column" {
     try std.testing.expectEqual(@as(c_int, 1), plan.scroll_top);
     try std.testing.expectEqual(@as(c_int, 0), plan.x);
     try std.testing.expectEqual(@as(c_int, 6), plan.y);
+}
+
+test "treverseindex scrolls at top otherwise moves up" {
+    const scroll = st_treverseindex(5, 2, 2);
+    const move = st_treverseindex(5, 4, 2);
+
+    try std.testing.expectEqual(@as(c_int, 1), scroll.scroll);
+    try std.testing.expectEqual(@as(c_int, 2), scroll.y);
+    try std.testing.expectEqual(@as(c_int, 0), move.scroll);
+    try std.testing.expectEqual(@as(c_int, 3), move.y);
 }
 
 test "tmoveato y applies origin offset only in origin mode" {
