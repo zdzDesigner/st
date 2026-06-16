@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const selection = @import("st_selection.zig");
+const search = @import("st_search.zig");
 
 const ZigGlyph = extern struct {
     u: u32,
@@ -274,7 +275,7 @@ export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_i
 }
 
 export fn st_searchcurrentvalid(active: c_int, current: c_int, nmatches: c_int) c_int {
-    return if (active != 0 and current >= 0 and current < nmatches) 1 else 0;
+    return if (search.currentValid(active != 0, current, nmatches)) 1 else 0;
 }
 
 export fn st_searchhit(active: c_int, match_scr: c_int, term_scr: c_int, match_y: c_int, y: c_int, x: c_int, match_x: c_int, match_len: c_int) c_int {
@@ -300,110 +301,84 @@ export fn st_searchlinematch(line: [*]const ZigGlyph, x: c_int, linelen: c_int, 
 }
 
 export fn st_searchnextcurrent(oldcurrent: c_int, nmatches: c_int) c_int {
-    if (nmatches == 0) return -1;
-    if (between(oldcurrent, 0, nmatches - 1)) return oldcurrent;
-    return 0;
+    return search.nextCurrent(oldcurrent, nmatches);
 }
 
 export fn st_searchjumpscr(current_valid: c_int, term_scr: c_int, match_scr: c_int) c_int {
-    if (current_valid == 0) return term_scr;
-    return if (term_scr != match_scr) match_scr else term_scr;
+    return search.jumpScroll(current_valid != 0, term_scr, match_scr);
 }
 
 export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
-    if (active == 0 or nmatches == 0) return .{ .run = 0, .current = current };
+    const plan = search.step(active != 0, nmatches, current, direction);
     return .{
-        .run = 1,
-        .current = @mod(current + nmatches + direction, nmatches),
+        .run = if (plan.run) 1 else 0,
+        .current = plan.current,
     };
 }
 
 export fn st_searchprevchar(input: [*]const u8, cursor: usize) usize {
-    if (cursor == 0) return 0;
-    var next = cursor - 1;
-    while (next > 0 and (input[next] & 0xc0) == 0x80) {
-        next -= 1;
-    }
-    return next;
+    return search.prevChar(input[0..cursor], cursor);
 }
 
 export fn st_searchnextchar(input: [*]const u8, cursor: usize, inputlen: usize) usize {
-    if (cursor >= inputlen) return inputlen;
-    var next = cursor + 1;
-    while (next < inputlen and (input[next] & 0xc0) == 0x80) {
-        next += 1;
-    }
-    return next;
+    return search.nextChar(input[0..inputlen], cursor);
 }
 
 export fn st_searchdeletewordstart(input: [*]const u8, cursor: usize) usize {
-    var start = cursor;
-    while (start > 0 and input[st_searchprevchar(input, start)] == ' ') {
-        start = st_searchprevchar(input, start);
-    }
-    while (start > 0 and input[st_searchprevchar(input, start)] != ' ') {
-        start = st_searchprevchar(input, start);
-    }
-    return start;
+    return search.deleteWordStart(input[0..cursor], cursor);
 }
 
 export fn st_searchinputcap(inputlen: usize, add_len: usize, inputcap: usize) usize {
-    const required = inputlen + add_len + 1;
-    var next_cap = inputcap;
-    while (required > next_cap) {
-        next_cap = if (next_cap != 0) next_cap * 2 else 64;
-    }
-    return next_cap;
+    return search.inputCap(inputlen, add_len, inputcap);
 }
 
 export fn st_searchinputgrow(inputlen: usize, add_len: usize, inputcap: usize) c_int {
-    return if (inputlen + add_len + 1 > inputcap) 1 else 0;
+    return if (search.inputGrow(inputlen, add_len, inputcap)) 1 else 0;
 }
 
 export fn st_searchinputplan(inputmode: c_int, len: usize) c_int {
-    return if (inputmode != 0 and len != 0) 1 else 0;
+    return if (search.inputPlan(inputmode != 0, len)) 1 else 0;
 }
 
 export fn st_searchbackspaceplan(inputmode: c_int, inputlen: usize, cursor: usize) c_int {
-    return if (inputmode != 0 and inputlen != 0 and cursor != 0) 1 else 0;
+    return if (search.backspacePlan(inputmode != 0, inputlen, cursor)) 1 else 0;
 }
 
 export fn st_searchdeleteforwardplan(inputmode: c_int, cursor: usize, inputlen: usize) c_int {
-    return if (inputmode != 0 and cursor < inputlen) 1 else 0;
+    return if (search.deleteForwardPlan(inputmode != 0, cursor, inputlen)) 1 else 0;
 }
 
 export fn st_searchdeletewordplan(inputmode: c_int, cursor: usize) c_int {
-    return if (inputmode != 0 and cursor != 0) 1 else 0;
+    return if (search.deleteWordPlan(inputmode != 0, cursor)) 1 else 0;
 }
 
 export fn st_searchcursorplan(inputmode: c_int) c_int {
-    return if (inputmode != 0) 1 else 0;
+    return if (search.cursorPlan(inputmode != 0)) 1 else 0;
 }
 
 export fn st_searchscanplan(active: c_int, qlen: c_int) c_int {
-    return if (active != 0 and qlen > 0) 1 else 0;
+    return if (search.scanPlan(active != 0, qlen)) 1 else 0;
 }
 
 export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
-    if (start >= end or end > inputlen) return .{ .run = 0, .new_len = inputlen };
-    return .{ .run = 1, .new_len = inputlen - (end - start) };
+    const plan = search.deletePlan(start, end, inputlen);
+    return .{ .run = if (plan.run) 1 else 0, .new_len = plan.new_len };
 }
 
 export fn st_searchcommitplan(inputmode: c_int, inputlen: usize) c_int {
-    if (inputmode == 0) return search_action_none;
-    return if (inputlen == 0) search_action_clear else search_action_set;
+    return @intFromEnum(search.commitPlan(inputmode != 0, inputlen));
 }
 
 export fn st_searchcancelplan(inputmode: c_int) c_int {
-    return if (inputmode != 0) search_action_redraw else search_action_none;
+    return @intFromEnum(search.cancelPlan(inputmode != 0));
 }
 
 export fn st_searchclearinputplan(inputmode: c_int) c_int {
-    return if (inputmode != 0) 1 else 0;
+    return if (search.clearInputPlan(inputmode != 0)) 1 else 0;
 }
 
 export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
-    return if (inputmode != 0 or active != 0) 1 else 0;
+    return if (search.barActive(inputmode != 0, active != 0)) 1 else 0;
 }
 
 export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
@@ -418,26 +393,27 @@ export fn st_externalpipewrap(mode: c_ushort) c_int {
 }
 
 export fn st_searchpromptplan(has_input: c_int, inputcap: usize) ZigSearchPromptPlan {
+    const plan = search.promptPlan(has_input != 0, inputcap);
     return .{
-        .inputmode = 1,
-        .inputlen = 0,
-        .inputcursor = 0,
-        .alloc = if (has_input == 0) 1 else 0,
-        .inputcap = if (has_input == 0) 64 else inputcap,
+        .inputmode = if (plan.inputmode) 1 else 0,
+        .inputlen = plan.inputlen,
+        .inputcursor = plan.inputcursor,
+        .alloc = if (plan.alloc) 1 else 0,
+        .inputcap = plan.inputcap,
     };
 }
 
 export fn st_searchsetplan(query_len: usize, qlen: c_int) ZigSearchSetPlan {
+    const plan = search.setPlan(query_len, qlen);
     return .{
-        .alloc_len = if (query_len != 0) query_len else 1,
-        .active = if (qlen > 0) 1 else 0,
-        .current = -1,
+        .alloc_len = plan.alloc_len,
+        .active = if (plan.active) 1 else 0,
+        .current = plan.current,
     };
 }
 
 export fn st_searchmatchcap(nmatches: c_int, cap: c_int) c_int {
-    if (nmatches != cap) return cap;
-    return if (cap != 0) cap * 2 else 16;
+    return search.matchCap(nmatches, cap);
 }
 
 export fn st_getsellineplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int) ZigGetSelLinePlan {
