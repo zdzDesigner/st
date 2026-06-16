@@ -94,6 +94,10 @@ export fn st_tswapscreenmode(mode: c_int) c_int {
     return mode ^ term_mode_altscreen;
 }
 
+export fn st_tsetmodeswap(set: c_int, alt: c_int) c_int {
+    return if ((set != 0) != (alt != 0)) 1 else 0;
+}
+
 test "private 1049 maps to alt1049" {
     const plan = st_planmode(1, 1049);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
@@ -145,4 +149,10 @@ test "tdeftran reports unknown selector" {
 test "tswapscreen toggles alternate screen bit" {
     try std.testing.expectEqual(@as(c_int, term_mode_altscreen), st_tswapscreenmode(0));
     try std.testing.expectEqual(@as(c_int, 0), st_tswapscreenmode(term_mode_altscreen));
+}
+
+test "tsetmode swap follows xor of requested and current alt" {
+    try std.testing.expectEqual(@as(c_int, 1), st_tsetmodeswap(1, 0));
+    try std.testing.expectEqual(@as(c_int, 1), st_tsetmodeswap(0, 1));
+    try std.testing.expectEqual(@as(c_int, 0), st_tsetmodeswap(1, 1));
 }

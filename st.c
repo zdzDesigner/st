@@ -1814,7 +1814,7 @@ tsetmode(int priv, int set, int *args, int narg)
 		case ST_ZIG_MODE_ALT1049:
 			if (!allowaltscreen)
 				break;
-			tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
+			tcursor(st_tsetmodecursor(set));
 			/* FALLTHROUGH */
 		case ST_ZIG_MODE_ALT47:
 			if (!allowaltscreen)
@@ -1823,13 +1823,13 @@ tsetmode(int priv, int set, int *args, int narg)
 			if (alt) {
 				tclearregion(0, 0, term.col-1, term.row-1);
 			}
-			if (set ^ alt)
+			if (st_tsetmodeswap(set, alt))
 				tswapscreen();
 			if (*args != 1049)
 				break;
 			/* FALLTHROUGH */
 		case ST_ZIG_MODE_CURSOR1048:
-			tcursor((set) ? CURSOR_SAVE : CURSOR_LOAD);
+			tcursor(st_tsetmodecursor(set));
 			break;
 		case ST_ZIG_MODE_BRACKETED_PASTE:
 			xsetmode(set, MODE_BRCKTPASTE);
