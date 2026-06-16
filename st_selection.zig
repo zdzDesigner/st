@@ -14,6 +14,41 @@ pub const SnapPrev = struct {
 pub const Bounds = struct {
     start: model.Point,
     end: model.Point,
+
+    pub fn columns(self: Bounds, selection_type: SelectionType, start_len: i32, end_len: i32, cols: i32) Bounds {
+        if (selection_type == .rectangular) return self;
+        return .{
+            .start = .{ .x = if (start_len < self.start.x) start_len else self.start.x, .y = self.start.y },
+            .end = .{ .x = if (end_len <= self.end.x) cols - 1 else self.end.x, .y = self.end.y },
+        };
+    }
+
+    pub fn contains(self: Bounds, point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType) bool {
+        if (!active or !alt_matches) return false;
+
+        return switch (selection_type) {
+            .rectangular => between(point.y, self.start.y, self.end.y) and between(point.x, self.start.x, self.end.x),
+            .regular => between(point.y, self.start.y, self.end.y) and (point.y != self.start.y or point.x >= self.start.x) and (point.y != self.end.y or point.x <= self.end.x),
+        };
+    }
+
+    pub fn linePlan(self: Bounds, selection_type: SelectionType, y: i32, cols: i32) GetLinePlan {
+        if (selection_type == .rectangular) return .{ .start_x = self.start.x, .last_x = self.end.x };
+        return .{
+            .start_x = if (self.start.y == y) self.start.x else 0,
+            .last_x = if (self.end.y == y) self.end.x else cols - 1,
+        };
+    }
+
+    pub fn bufferSize(self: Bounds, cols: i32, utf_size: i32) i32 {
+        return (cols + 1) * (self.end.y - self.start.y + 1) * utf_size;
+    }
+
+    pub fn needsNewline(self: Bounds, y: i32, last_x: i32, linelen: i32, last_mode: u16, selection_type: SelectionType) bool {
+        const crosses_line = y < self.end.y or last_x >= linelen;
+        const can_break = !model.hasWrap(last_mode) or selection_type == .rectangular;
+        return crosses_line and can_break;
+    }
 };
 
 pub const SelectionType = enum(i32) {
@@ -139,23 +174,15 @@ pub fn normalize(selection_type: SelectionType, origin: model.Point, extent: mod
 }
 
 pub fn normalizeColumns(selection_type: SelectionType, bounds: Bounds, start_len: i32, end_len: i32, cols: i32) Bounds {
-    if (selection_type == .rectangular) return bounds;
-    return .{
-        .start = .{ .x = if (start_len < bounds.start.x) start_len else bounds.start.x, .y = bounds.start.y },
-        .end = .{ .x = if (end_len <= bounds.end.x) cols - 1 else bounds.end.x, .y = bounds.end.y },
-    };
+    return bounds.columns(selection_type, start_len, end_len, cols);
 }
 
 pub fn getLinePlan(selection_type: SelectionType, bounds: Bounds, y: i32, cols: i32) GetLinePlan {
-    if (selection_type == .rectangular) return .{ .start_x = bounds.start.x, .last_x = bounds.end.x };
-    return .{
-        .start_x = if (bounds.start.y == y) bounds.start.x else 0,
-        .last_x = if (bounds.end.y == y) bounds.end.x else cols - 1,
-    };
+    return bounds.linePlan(selection_type, y, cols);
 }
 
 pub fn getBufferSize(cols: i32, bounds: Bounds, utf_size: i32) i32 {
-    return (cols + 1) * (bounds.end.y - bounds.start.y + 1) * utf_size;
+    return bounds.bufferSize(cols, utf_size);
 }
 
 pub fn getLastX(last_x: i32, linelen: i32) i32 {
@@ -163,18 +190,11 @@ pub fn getLastX(last_x: i32, linelen: i32) i32 {
 }
 
 pub fn needsNewline(y: i32, bounds: Bounds, last_x: i32, linelen: i32, last_mode: u16, selection_type: SelectionType) bool {
-    const crosses_line = y < bounds.end.y or last_x >= linelen;
-    const can_break = !model.hasWrap(last_mode) or selection_type == .rectangular;
-    return crosses_line and can_break;
+    return bounds.needsNewline(y, last_x, linelen, last_mode, selection_type);
 }
 
 pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
-    if (!active or !alt_matches) return false;
-
-    return switch (selection_type) {
-        .rectangular => between(point.y, bounds.start.y, bounds.end.y) and between(point.x, bounds.start.x, bounds.end.x),
-        .regular => between(point.y, bounds.start.y, bounds.end.y) and (point.y != bounds.start.y or point.x >= bounds.start.x) and (point.y != bounds.end.y or point.x <= bounds.end.x),
-    };
+    return bounds.contains(point, active, alt_matches, selection_type);
 }
 
 pub fn snapWordPlan(point: model.Point, direction: i32, size: model.Size) SnapWordPlan {

@@ -37,111 +37,246 @@ pub const SetPlan = struct {
     current: i32,
 };
 
-pub fn hit(active: bool, match_scr: i32, term_scr: i32, match_y: i32, y: i32, x: i32, match_x: i32, match_len: i32) bool {
-    return active and match_scr == term_scr and match_y == y and between(x, match_x, match_x + match_len - 1);
-}
+pub const Hit = struct {
+    active: bool,
+    match_scr: i32,
+    term_scr: i32,
+    match_y: i32,
+    y: i32,
+    x: i32,
+    match_x: i32,
+    match_len: i32,
 
-pub fn lineMatch(comptime Glyph: type, line: []const Glyph, x: i32, linelen: i32, query: []const u32, cols: i32) i32 {
-    if (model.hasWideDummy(line[@intCast(x)].mode)) return 0;
+    pub fn contains(self: Hit) bool {
+        return self.active and self.match_scr == self.term_scr and self.match_y == self.y and between(self.x, self.match_x, self.match_x + self.match_len - 1);
+    }
+};
 
-    var pos = x;
-    var query_pos: usize = 0;
-    while (query_pos < query.len) : (query_pos += 1) {
-        while (pos < linelen and model.hasWideDummy(line[@intCast(pos)].mode)) {
-            pos += 1;
+pub const Matches = struct {
+    active: bool,
+    current: i32,
+    count: i32,
+
+    pub fn currentValid(self: Matches) bool {
+        return self.active and self.current >= 0 and self.current < self.count;
+    }
+
+    pub fn nextCurrent(self: Matches) i32 {
+        if (self.count == 0) return -1;
+        if (between(self.current, 0, self.count - 1)) return self.current;
+        return 0;
+    }
+
+    pub fn step(self: Matches, direction: i32) StepPlan {
+        if (!self.active or self.count == 0) return .{ .run = false, .current = self.current };
+        return .{
+            .run = true,
+            .current = @mod(self.current + self.count + direction, self.count),
+        };
+    }
+
+    pub fn nextCap(self: Matches, cap: i32) i32 {
+        if (self.count != cap) return cap;
+        return if (cap != 0) cap * 2 else 16;
+    }
+};
+
+pub const Jump = struct {
+    current_valid: bool,
+    term_scr: i32,
+    match_scr: i32,
+
+    pub fn scroll(self: Jump) i32 {
+        if (!self.current_valid) return self.term_scr;
+        return if (self.term_scr != self.match_scr) self.match_scr else self.term_scr;
+    }
+};
+
+pub const Input = struct {
+    active: bool,
+    len: usize,
+    cursor: usize,
+    cap: usize,
+
+    pub fn nextCap(self: Input, add_len: usize) usize {
+        const required = self.len + add_len + 1;
+        var next_cap = self.cap;
+        while (required > next_cap) {
+            next_cap = if (next_cap != 0) next_cap * 2 else 64;
         }
-        if (pos >= linelen or line[@intCast(pos)].u != query[query_pos]) return 0;
-        pos += 1;
+        return next_cap;
     }
-    while (pos < cols and model.hasWideDummy(line[@intCast(pos)].mode)) {
-        pos += 1;
+
+    pub fn needsGrow(self: Input, add_len: usize) bool {
+        return self.len + add_len + 1 > self.cap;
     }
-    return pos - x;
-}
 
-pub fn currentValid(active: bool, current: i32, nmatches: i32) bool {
-    return active and current >= 0 and current < nmatches;
-}
+    pub fn insertable(self: Input) bool {
+        return self.active and self.len != 0;
+    }
 
-pub fn nextCurrent(old_current: i32, nmatches: i32) i32 {
-    if (nmatches == 0) return -1;
-    if (between(old_current, 0, nmatches - 1)) return old_current;
-    return 0;
-}
+    pub fn canBackspace(self: Input) bool {
+        return self.active and self.len != 0 and self.cursor != 0;
+    }
 
-pub fn jumpScroll(current_valid: bool, term_scr: i32, match_scr: i32) i32 {
-    if (!current_valid) return term_scr;
-    return if (term_scr != match_scr) match_scr else term_scr;
-}
+    pub fn canDeleteForward(self: Input) bool {
+        return self.active and self.cursor < self.len;
+    }
 
-pub fn step(active: bool, nmatches: i32, current: i32, direction: i32) StepPlan {
-    if (!active or nmatches == 0) return .{ .run = false, .current = current };
-    return .{
-        .run = true,
-        .current = @mod(current + nmatches + direction, nmatches),
+    pub fn canDeleteWord(self: Input) bool {
+        return self.active and self.cursor != 0;
+    }
+
+    pub fn showsCursor(self: Input) bool {
+        return self.active;
+    }
+
+    pub fn deleteRange(self: Input, start: usize, end: usize) DeletePlan {
+        if (start >= end or end > self.len) return .{ .run = false, .new_len = self.len };
+        return .{ .run = true, .new_len = self.len - (end - start) };
+    }
+
+    pub fn commit(self: Input) Action {
+        if (!self.active) return .none;
+        return if (self.len == 0) .clear else .set;
+    }
+
+    pub fn cancel(self: Input) Action {
+        return if (self.active) .redraw else .none;
+    }
+
+    pub fn clearable(self: Input) bool {
+        return self.active;
+    }
+
+    pub fn barActive(self: Input, search_active: bool) bool {
+        return self.active or search_active;
+    }
+};
+
+pub const InputBytes = struct {
+    bytes: []const u8,
+
+    pub fn prevChar(self: InputBytes, cursor: usize) usize {
+        if (cursor == 0) return 0;
+        var next = cursor - 1;
+        while (next > 0 and (self.bytes[next] & 0xc0) == 0x80) {
+            next -= 1;
+        }
+        return next;
+    }
+
+    pub fn nextChar(self: InputBytes, cursor: usize) usize {
+        if (cursor >= self.bytes.len) return self.bytes.len;
+        var next = cursor + 1;
+        while (next < self.bytes.len and (self.bytes[next] & 0xc0) == 0x80) {
+            next += 1;
+        }
+        return next;
+    }
+
+    pub fn deleteWordStart(self: InputBytes, cursor: usize) usize {
+        var start = cursor;
+        while (start > 0 and self.bytes[self.prevChar(start)] == ' ') {
+            start = self.prevChar(start);
+        }
+        while (start > 0 and self.bytes[self.prevChar(start)] != ' ') {
+            start = self.prevChar(start);
+        }
+        return start;
+    }
+};
+
+pub fn LineMatcher(comptime Glyph: type) type {
+    return struct {
+        line: []const Glyph,
+        linelen: i32,
+        cols: i32,
+
+        const Self = @This();
+
+        pub fn match(self: Self, x: i32, query: []const u32) i32 {
+            if (model.hasWideDummy(self.line[@intCast(x)].mode)) return 0;
+
+            var pos = x;
+            var query_pos: usize = 0;
+            while (query_pos < query.len) : (query_pos += 1) {
+                while (pos < self.linelen and model.hasWideDummy(self.line[@intCast(pos)].mode)) {
+                    pos += 1;
+                }
+                if (pos >= self.linelen or self.line[@intCast(pos)].u != query[query_pos]) return 0;
+                pos += 1;
+            }
+            while (pos < self.cols and model.hasWideDummy(self.line[@intCast(pos)].mode)) {
+                pos += 1;
+            }
+            return pos - x;
+        }
     };
 }
 
+pub fn hit(active: bool, match_scr: i32, term_scr: i32, match_y: i32, y: i32, x: i32, match_x: i32, match_len: i32) bool {
+    return (Hit{ .active = active, .match_scr = match_scr, .term_scr = term_scr, .match_y = match_y, .y = y, .x = x, .match_x = match_x, .match_len = match_len }).contains();
+}
+
+pub fn lineMatch(comptime Glyph: type, line: []const Glyph, x: i32, linelen: i32, query: []const u32, cols: i32) i32 {
+    return (LineMatcher(Glyph){ .line = line, .linelen = linelen, .cols = cols }).match(x, query);
+}
+
+pub fn currentValid(active: bool, current: i32, nmatches: i32) bool {
+    return (Matches{ .active = active, .current = current, .count = nmatches }).currentValid();
+}
+
+pub fn nextCurrent(old_current: i32, nmatches: i32) i32 {
+    return (Matches{ .active = true, .current = old_current, .count = nmatches }).nextCurrent();
+}
+
+pub fn jumpScroll(current_valid: bool, term_scr: i32, match_scr: i32) i32 {
+    return (Jump{ .current_valid = current_valid, .term_scr = term_scr, .match_scr = match_scr }).scroll();
+}
+
+pub fn step(active: bool, nmatches: i32, current: i32, direction: i32) StepPlan {
+    return (Matches{ .active = active, .current = current, .count = nmatches }).step(direction);
+}
+
 pub fn prevChar(input: []const u8, cursor: usize) usize {
-    if (cursor == 0) return 0;
-    var next = cursor - 1;
-    while (next > 0 and (input[next] & 0xc0) == 0x80) {
-        next -= 1;
-    }
-    return next;
+    return (InputBytes{ .bytes = input }).prevChar(cursor);
 }
 
 pub fn nextChar(input: []const u8, cursor: usize) usize {
-    if (cursor >= input.len) return input.len;
-    var next = cursor + 1;
-    while (next < input.len and (input[next] & 0xc0) == 0x80) {
-        next += 1;
-    }
-    return next;
+    return (InputBytes{ .bytes = input }).nextChar(cursor);
 }
 
 pub fn deleteWordStart(input: []const u8, cursor: usize) usize {
-    var start = cursor;
-    while (start > 0 and input[prevChar(input, start)] == ' ') {
-        start = prevChar(input, start);
-    }
-    while (start > 0 and input[prevChar(input, start)] != ' ') {
-        start = prevChar(input, start);
-    }
-    return start;
+    return (InputBytes{ .bytes = input }).deleteWordStart(cursor);
 }
 
 pub fn inputCap(inputlen: usize, add_len: usize, inputcap: usize) usize {
-    const required = inputlen + add_len + 1;
-    var next_cap = inputcap;
-    while (required > next_cap) {
-        next_cap = if (next_cap != 0) next_cap * 2 else 64;
-    }
-    return next_cap;
+    return (Input{ .active = true, .len = inputlen, .cursor = 0, .cap = inputcap }).nextCap(add_len);
 }
 
 pub fn inputGrow(inputlen: usize, add_len: usize, inputcap: usize) bool {
-    return inputlen + add_len + 1 > inputcap;
+    return (Input{ .active = true, .len = inputlen, .cursor = 0, .cap = inputcap }).needsGrow(add_len);
 }
 
 pub fn inputPlan(inputmode: bool, len: usize) bool {
-    return inputmode and len != 0;
+    return (Input{ .active = inputmode, .len = len, .cursor = 0, .cap = 0 }).insertable();
 }
 
 pub fn backspacePlan(inputmode: bool, inputlen: usize, cursor: usize) bool {
-    return inputmode and inputlen != 0 and cursor != 0;
+    return (Input{ .active = inputmode, .len = inputlen, .cursor = cursor, .cap = 0 }).canBackspace();
 }
 
 pub fn deleteForwardPlan(inputmode: bool, cursor: usize, inputlen: usize) bool {
-    return inputmode and cursor < inputlen;
+    return (Input{ .active = inputmode, .len = inputlen, .cursor = cursor, .cap = 0 }).canDeleteForward();
 }
 
 pub fn deleteWordPlan(inputmode: bool, cursor: usize) bool {
-    return inputmode and cursor != 0;
+    return (Input{ .active = inputmode, .len = 0, .cursor = cursor, .cap = 0 }).canDeleteWord();
 }
 
 pub fn cursorPlan(inputmode: bool) bool {
-    return inputmode;
+    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).showsCursor();
 }
 
 pub fn scanPlan(active: bool, qlen: i32) bool {
@@ -149,25 +284,23 @@ pub fn scanPlan(active: bool, qlen: i32) bool {
 }
 
 pub fn deletePlan(start: usize, end: usize, inputlen: usize) DeletePlan {
-    if (start >= end or end > inputlen) return .{ .run = false, .new_len = inputlen };
-    return .{ .run = true, .new_len = inputlen - (end - start) };
+    return (Input{ .active = true, .len = inputlen, .cursor = 0, .cap = 0 }).deleteRange(start, end);
 }
 
 pub fn commitPlan(inputmode: bool, inputlen: usize) Action {
-    if (!inputmode) return .none;
-    return if (inputlen == 0) .clear else .set;
+    return (Input{ .active = inputmode, .len = inputlen, .cursor = 0, .cap = 0 }).commit();
 }
 
 pub fn cancelPlan(inputmode: bool) Action {
-    return if (inputmode) .redraw else .none;
+    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).cancel();
 }
 
 pub fn clearInputPlan(inputmode: bool) bool {
-    return inputmode;
+    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).clearable();
 }
 
 pub fn barActive(inputmode: bool, active: bool) bool {
-    return inputmode or active;
+    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).barActive(active);
 }
 
 pub fn promptPlan(has_input: bool, inputcap: usize) PromptPlan {
@@ -189,8 +322,7 @@ pub fn setPlan(query_len: usize, qlen: i32) SetPlan {
 }
 
 pub fn matchCap(nmatches: i32, cap: i32) i32 {
-    if (nmatches != cap) return cap;
-    return if (cap != 0) cap * 2 else 16;
+    return (Matches{ .active = true, .current = 0, .count = nmatches }).nextCap(cap);
 }
 
 fn between(value: i32, lower: i32, upper: i32) bool {
