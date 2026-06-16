@@ -15,7 +15,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 ## 当前模块
 
 - `term_model.zig` 提供 `Point`、`Size`、`Rune` 和 glyph mode 判断。
-- `st_line_core.zig` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
+- `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
 - `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit 和 line match 纯逻辑。
 - `st_line.zig` 作为 line、selection、search 相关 C ABI adapter。

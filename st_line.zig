@@ -126,23 +126,23 @@ const externalpipe_skip = 1;
 const externalpipe_write = 2;
 
 export fn st_tlinelen(line: [*]const ZigGlyph, col: c_int) c_int {
-    return line_core.lineLen(ZigGlyph, line[0..@intCast(col)], col);
+    return (line_core.Line(ZigGlyph){ .glyphs = line[0..@intCast(col)], .cols = col }).length();
 }
 
 export fn st_tputtab(x: c_int, col: c_int, n: c_int, tabs: [*]const c_int) c_int {
-    return line_core.tabTarget(x, col, n, tabs[0..@intCast(col)]);
+    return (line_core.TabStops{ .stops = tabs[0..@intCast(col)], .cols = col }).target(x, n);
 }
 
 export fn st_tattrset(lines: [*]const [*]const ZigGlyph, row: c_int, col: c_int, attr: c_int) c_int {
-    return if (line_core.attrSet(ZigGlyph, lines[0..@intCast(row)], row, col, attrMask(attr))) 1 else 0;
+    return if ((line_core.Lines(ZigGlyph){ .rows = lines[0..@intCast(row)], .row_count = row, .cols = col }).hasAttr(attrMask(attr))) 1 else 0;
 }
 
 export fn st_tlineattrset(line: [*]const ZigGlyph, col: c_int, attr: c_int) c_int {
-    return if (line_core.lineAttrSet(ZigGlyph, line, col, attrMask(attr))) 1 else 0;
+    return if ((line_core.Line(ZigGlyph){ .glyphs = line[0..@intCast(col)], .cols = col }).hasAttr(attrMask(attr))) 1 else 0;
 }
 
 export fn st_tdumplineplan(linelen: c_int, col: c_int) ZigDumpLinePlan {
-    const plan = line_core.dumpLinePlan(linelen, col);
+    const plan = (line_core.VisualLine{ .len = linelen, .cols = col }).dump();
     return .{
         .write = if (plan.write) 1 else 0,
         .last = plan.last,
@@ -150,7 +150,7 @@ export fn st_tdumplineplan(linelen: c_int, col: c_int) ZigDumpLinePlan {
 }
 
 export fn st_tsetdirtrange(top: c_int, bot: c_int, row: c_int) ZigLineRange {
-    const range = line_core.dirtyRange(top, bot, row);
+    const range = (line_core.Viewport{ .rows = row }).dirtyRange(top, bot);
     return .{
         .top = range.top,
         .bot = range.bot,
@@ -335,7 +335,7 @@ export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
 }
 
 export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
-    const plan = line_core.externalPipeLine(linelen, col);
+    const plan = (line_core.VisualLine{ .len = linelen, .cols = col }).externalPipe();
     return .{ .kind = @intFromEnum(plan.kind), .lastpos = plan.lastpos };
 }
 

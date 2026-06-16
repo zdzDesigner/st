@@ -27,78 +27,140 @@ pub const ExternalPipeLinePlan = struct {
     lastpos: i32,
 };
 
-pub fn lineLen(comptime Glyph: type, line: []const Glyph, cols: i32) i32 {
-    var end = cols;
+pub fn Line(comptime Glyph: type) type {
+    return struct {
+        glyphs: []const Glyph,
+        cols: i32,
 
-    if (model.hasWrap(line[@intCast(end - 1)].mode)) return end;
+        const Self = @This();
 
-    while (end > 0 and line[@intCast(end - 1)].u == ' ') {
-        end -= 1;
+        pub fn length(self: Self) i32 {
+            var end = self.cols;
+
+            if (model.hasWrap(self.glyphs[@intCast(end - 1)].mode)) return end;
+
+            while (end > 0 and self.glyphs[@intCast(end - 1)].u == ' ') {
+                end -= 1;
+            }
+
+            return end;
+        }
+
+        pub fn hasAttr(self: Self, mask: u16) bool {
+            var x: i32 = 0;
+            while (x < self.cols - 1) : (x += 1) {
+                if ((self.glyphs[@intCast(x)].mode & mask) != 0) return true;
+            }
+            return false;
+        }
+    };
+}
+
+pub const TabStops = struct {
+    stops: []const i32,
+    cols: i32,
+
+    pub fn target(self: TabStops, x: i32, count: i32) i32 {
+        var next_x = x;
+
+        if (count > 0) {
+            var remaining = count;
+            while (next_x < self.cols and remaining > 0) : (remaining -= 1) {
+                next_x += 1;
+                while (next_x < self.cols and self.stops[@intCast(next_x)] == 0) {
+                    next_x += 1;
+                }
+            }
+        } else if (count < 0) {
+            var remaining = count;
+            while (next_x > 0 and remaining < 0) : (remaining += 1) {
+                next_x -= 1;
+                while (next_x > 0 and self.stops[@intCast(next_x)] == 0) {
+                    next_x -= 1;
+                }
+            }
+        }
+
+        return limitInt(next_x, 0, self.cols - 1);
+    }
+};
+
+pub fn Lines(comptime Glyph: type) type {
+    return struct {
+        rows: []const [*]const Glyph,
+        row_count: i32,
+        cols: i32,
+
+        const Self = @This();
+
+        pub fn hasAttr(self: Self, mask: u16) bool {
+            var y: i32 = 0;
+            while (y < self.row_count - 1) : (y += 1) {
+                const line = Line(Glyph){ .glyphs = self.rows[@intCast(y)][0..@intCast(self.cols)], .cols = self.cols };
+                if (line.hasAttr(mask)) return true;
+            }
+            return false;
+        }
+    };
+}
+
+pub const VisualLine = struct {
+    len: i32,
+    cols: i32,
+
+    pub fn dump(self: VisualLine) DumpLinePlan {
+        const end = minInt(self.len, self.cols);
+        return .{
+            .write = end > 0,
+            .last = end - 1,
+        };
     }
 
-    return end;
+    pub fn externalPipe(self: VisualLine) ExternalPipeLinePlan {
+        const lastpos = minInt(self.len + 1, self.cols) - 1;
+        if (lastpos < 0) return .{ .kind = .break_line, .lastpos = lastpos };
+        if (lastpos == 0) return .{ .kind = .skip, .lastpos = lastpos };
+        return .{ .kind = .write, .lastpos = lastpos };
+    }
+};
+
+pub const Viewport = struct {
+    rows: i32,
+
+    pub fn dirtyRange(self: Viewport, top: i32, bot: i32) LineRange {
+        return .{
+            .top = limitInt(top, 0, self.rows - 1),
+            .bot = limitInt(bot, 0, self.rows - 1),
+        };
+    }
+};
+
+pub fn lineLen(comptime Glyph: type, line: []const Glyph, cols: i32) i32 {
+    return (Line(Glyph){ .glyphs = line, .cols = cols }).length();
 }
 
 pub fn tabTarget(x: i32, cols: i32, count: i32, tabs: []const i32) i32 {
-    var next_x = x;
-
-    if (count > 0) {
-        var remaining = count;
-        while (next_x < cols and remaining > 0) : (remaining -= 1) {
-            next_x += 1;
-            while (next_x < cols and tabs[@intCast(next_x)] == 0) {
-                next_x += 1;
-            }
-        }
-    } else if (count < 0) {
-        var remaining = count;
-        while (next_x > 0 and remaining < 0) : (remaining += 1) {
-            next_x -= 1;
-            while (next_x > 0 and tabs[@intCast(next_x)] == 0) {
-                next_x -= 1;
-            }
-        }
-    }
-
-    return limitInt(next_x, 0, cols - 1);
+    return (TabStops{ .stops = tabs, .cols = cols }).target(x, count);
 }
 
 pub fn attrSet(comptime Glyph: type, lines: []const [*]const Glyph, rows: i32, cols: i32, mask: u16) bool {
-    var y: i32 = 0;
-    while (y < rows - 1) : (y += 1) {
-        if (lineAttrSet(Glyph, lines[@intCast(y)], cols, mask)) return true;
-    }
-    return false;
+    return (Lines(Glyph){ .rows = lines, .row_count = rows, .cols = cols }).hasAttr(mask);
 }
 
 pub fn lineAttrSet(comptime Glyph: type, line: [*]const Glyph, cols: i32, mask: u16) bool {
-    var x: i32 = 0;
-    while (x < cols - 1) : (x += 1) {
-        if ((line[@intCast(x)].mode & mask) != 0) return true;
-    }
-    return false;
+    return (Line(Glyph){ .glyphs = line[0..@intCast(cols)], .cols = cols }).hasAttr(mask);
 }
 
 pub fn dumpLinePlan(linelen: i32, cols: i32) DumpLinePlan {
-    const end = minInt(linelen, cols);
-    return .{
-        .write = end > 0,
-        .last = end - 1,
-    };
+    return (VisualLine{ .len = linelen, .cols = cols }).dump();
 }
 
 pub fn dirtyRange(top: i32, bot: i32, rows: i32) LineRange {
-    return .{
-        .top = limitInt(top, 0, rows - 1),
-        .bot = limitInt(bot, 0, rows - 1),
-    };
+    return (Viewport{ .rows = rows }).dirtyRange(top, bot);
 }
 
 pub fn externalPipeLine(linelen: i32, cols: i32) ExternalPipeLinePlan {
-    const lastpos = minInt(linelen + 1, cols) - 1;
-    if (lastpos < 0) return .{ .kind = .break_line, .lastpos = lastpos };
-    if (lastpos == 0) return .{ .kind = .skip, .lastpos = lastpos };
-    return .{ .kind = .write, .lastpos = lastpos };
+    return (VisualLine{ .len = linelen, .cols = cols }).externalPipe();
 }
 
 pub fn externalPipeWrap(mode: u16) bool {
