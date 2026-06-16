@@ -13,26 +13,33 @@ pub const ZigStrParse = extern struct {
     ends: [str_arg_siz]usize,
 };
 
-export fn st_strparse(buf: [*]const u8, len: usize) ZigStrParse {
-    var result: ZigStrParse = .{
-        .narg = 0,
-        .ends = std.mem.zeroes([str_arg_siz]usize),
-    };
+const StringParser = struct {
+    input: []const u8,
 
-    const input = buf[0..len];
-    if (input.len == 0 or input[0] == 0) return result;
+    fn parse(self: StringParser) ZigStrParse {
+        var result: ZigStrParse = .{
+            .narg = 0,
+            .ends = std.mem.zeroes([str_arg_siz]usize),
+        };
 
-    var start: usize = 0;
-    while (result.narg < str_arg_siz) {
-        var i = start;
-        while (i < input.len and input[i] != ';' and input[i] != 0) : (i += 1) {}
-        result.ends[@intCast(result.narg)] = i;
-        result.narg += 1;
-        if (i >= input.len or input[i] == 0) return result;
-        start = i + 1;
+        if (self.input.len == 0 or self.input[0] == 0) return result;
+
+        var start: usize = 0;
+        while (result.narg < str_arg_siz) {
+            var i = start;
+            while (i < self.input.len and self.input[i] != ';' and self.input[i] != 0) : (i += 1) {}
+            result.ends[@intCast(result.narg)] = i;
+            result.narg += 1;
+            if (i >= self.input.len or self.input[i] == 0) return result;
+            start = i + 1;
+        }
+
+        return result;
     }
+};
 
-    return result;
+export fn st_strparse(buf: [*]const u8, len: usize) ZigStrParse {
+    return (StringParser{ .input = buf[0..len] }).parse();
 }
 
 test "strparse splits semicolon separated args" {
