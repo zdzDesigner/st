@@ -248,6 +248,13 @@ export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, r
     };
 }
 
+export fn st_selsnapwordbreak(mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) c_int {
+    const dummy = (mode & attr_wdummy) != 0;
+    const delimiter_changed = delim != prevdelim;
+    const delimiter_rune_changed = delim != 0 and rune != prevrune;
+    return if (!dummy and (delimiter_changed or delimiter_rune_changed)) 1 else 0;
+}
+
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
     if (mode == sel_empty or ob_x == -1 or sel_alt != alt_screen) return 0;
 
@@ -673,6 +680,13 @@ test "selection word snap plans wrapped coordinates" {
 test "selection word snap reports row overflow" {
     const plan = st_selsnapwordplan(0, 0, -1, 10, 5);
     try std.testing.expectEqual(@as(c_int, 0), plan.in_bounds);
+}
+
+test "selection word snap break follows delimiter state" {
+    try std.testing.expectEqual(@as(c_int, 1), st_selsnapwordbreak(0, 1, 0, ',', 'a'));
+    try std.testing.expectEqual(@as(c_int, 1), st_selsnapwordbreak(0, 1, 1, '.', ','));
+    try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordbreak(attr_wdummy, 1, 0, ',', 'a'));
+    try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordbreak(0, 0, 0, 'b', 'a'));
 }
 
 test "search hit requires active matching row and x range" {

@@ -558,6 +558,7 @@ int st_selclearplan(int);
 ZigSelStartPlan st_selstartplan(int, int, int, int);
 int st_selsnaplinex(int, int);
 ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
+int st_selsnapwordbreak(unsigned short, int, int, uint32_t, uint32_t);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchcurrentvalid(int, int, int);
 int st_searchhit(int, int, int, int, int, int, int, int);

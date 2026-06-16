@@ -842,8 +842,8 @@ selsnap(int *x, int *y, int direction)
 
 			gp = &TLINE(newy)[newx];
 			delim = ISDELIM(gp->u);
-			if (!(gp->mode & ATTR_WDUMMY) && (delim != prevdelim
-					|| (delim && gp->u != prevgp->u)))
+			if (st_selsnapwordbreak(gp->mode, delim, prevdelim,
+				gp->u, prevgp->u))
 				break;
 
 			*x = newx;
