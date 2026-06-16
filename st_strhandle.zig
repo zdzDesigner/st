@@ -27,54 +27,85 @@ pub const str_plan_osc_104 = 8;
 
 const esc_str = 4;
 
+const StringSequence = struct {
+    control: u8,
+    esc: c_int,
+
+    fn start(self: StringSequence) ZigStrSequence {
+        return .{
+            .seq_type = switch (self.control) {
+                0x90 => 'P',
+                0x9f => '_',
+                0x9e => '^',
+                0x9d => ']',
+                else => self.control,
+            },
+            .esc = self.esc | esc_str,
+        };
+    }
+};
+
+const StringAction = struct {
+    seq_type: c_char,
+    narg: c_int,
+    par: c_int,
+
+    fn plan(self: StringAction) ZigStrHandlePlan {
+        return switch (self.seq_type) {
+            ']' => switch (self.par) {
+                0 => if (self.narg > 1)
+                    .{ .kind = str_plan_osc_both_titles }
+                else
+                    .{ .kind = str_plan_ignore },
+                1 => if (self.narg > 1)
+                    .{ .kind = str_plan_osc_icon_title }
+                else
+                    .{ .kind = str_plan_ignore },
+                2 => if (self.narg > 1)
+                    .{ .kind = str_plan_osc_window_title }
+                else
+                    .{ .kind = str_plan_ignore },
+                52 => .{ .kind = str_plan_osc_52 },
+                4 => if (self.narg >= 3)
+                    .{ .kind = str_plan_osc_4 }
+                else
+                    .{ .kind = str_plan_unknown },
+                104 => .{ .kind = str_plan_osc_104 },
+                else => .{ .kind = str_plan_unknown },
+            },
+            'k' => .{ .kind = str_plan_old_title },
+            'P', '_', '^' => .{ .kind = str_plan_ignore },
+            else => .{ .kind = str_plan_unknown },
+        };
+    }
+};
+
+const StringArgs = struct {
+    count: c_int,
+
+    fn clipboardRun(self: StringArgs, allow_window_ops: bool) bool {
+        return self.count > 2 and allow_window_ops;
+    }
+
+    fn has(self: StringArgs, index: c_int) bool {
+        return self.count > index;
+    }
+};
+
 export fn st_tstrsequence(c: u8, esc: c_int) ZigStrSequence {
-    return .{
-        .seq_type = switch (c) {
-            0x90 => 'P',
-            0x9f => '_',
-            0x9e => '^',
-            0x9d => ']',
-            else => c,
-        },
-        .esc = esc | esc_str,
-    };
+    return (StringSequence{ .control = c, .esc = esc }).start();
 }
 
 export fn st_planstrhandle(seq_type: c_char, narg: c_int, par: c_int) ZigStrHandlePlan {
-    return switch (seq_type) {
-        ']' => switch (par) {
-            0 => if (narg > 1)
-                .{ .kind = str_plan_osc_both_titles }
-            else
-                .{ .kind = str_plan_ignore },
-            1 => if (narg > 1)
-                .{ .kind = str_plan_osc_icon_title }
-            else
-                .{ .kind = str_plan_ignore },
-            2 => if (narg > 1)
-                .{ .kind = str_plan_osc_window_title }
-            else
-                .{ .kind = str_plan_ignore },
-            52 => .{ .kind = str_plan_osc_52 },
-            4 => if (narg >= 3)
-                .{ .kind = str_plan_osc_4 }
-            else
-                .{ .kind = str_plan_unknown },
-            104 => .{ .kind = str_plan_osc_104 },
-            else => .{ .kind = str_plan_unknown },
-        },
-        'k' => .{ .kind = str_plan_old_title },
-        'P', '_', '^' => .{ .kind = str_plan_ignore },
-        else => .{ .kind = str_plan_unknown },
-    };
+    return (StringAction{ .seq_type = seq_type, .narg = narg, .par = par }).plan();
 }
 
 export fn st_strclipboardrun(narg: c_int, allow_window_ops: c_int) c_int {
-    return if (narg > 2 and allow_window_ops != 0) 1 else 0;
+    return if ((StringArgs{ .count = narg }).clipboardRun(allow_window_ops != 0)) 1 else 0;
 }
 
 export fn st_strhasarg(narg: c_int, index: c_int) c_int {
-    return if (narg > index) 1 else 0;
+    return if ((StringArgs{ .count = narg }).has(index)) 1 else 0;
 }
 
 test "tstrsequence maps C1 controls to string types" {
