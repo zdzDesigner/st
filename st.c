@@ -837,7 +837,7 @@ selsnap(int *x, int *y, int direction)
 			    !(TLINE(word_plan.wrap_y)[word_plan.wrap_x].mode & ATTR_WRAP))
 				break;
 
-			if (newx >= tlinelen(newy))
+			if (st_selsnapwordpastline(newx, tlinelen(newy)))
 				break;
 
 			gp = &TLINE(newy)[newx];
