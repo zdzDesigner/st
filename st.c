@@ -1034,13 +1034,13 @@ stty(char **args)
 	char cmd[_POSIX_ARG_MAX], **p, *q, *s;
 	size_t n, siz;
 
-	if ((n = strlen(stty_args)) > sizeof(cmd)-1)
+	if (!st_sttyfits((n = strlen(stty_args)), sizeof(cmd)))
 		die("incorrect stty parameters\n");
 	memcpy(cmd, stty_args, n);
 	q = cmd + n;
 	siz = sizeof(cmd) - n;
 	for (p = args; p && (s = *p); ++p) {
-		if ((n = strlen(s)) > siz-1)
+		if (!st_sttyfits((n = strlen(s)), siz))
 			die("stty parameter length too long\n");
 		*q++ = ' ';
 		memcpy(q, s, n);
@@ -1133,7 +1133,7 @@ ttyread(void)
 		written = twrite(buf, buflen, 0);
 		buflen -= written;
 		/* keep any incomplete UTF-8 byte sequence for the next call */
-		if (buflen > 0)
+		if (st_ttyreadpending(buflen))
 			memmove(buf, buf + written, buflen);
 		return ret;
 	}

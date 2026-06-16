@@ -578,6 +578,8 @@ int st_getselnewline(int, int, int, int, unsigned short, int);
 size_t st_ttywritecount(size_t, size_t);
 size_t st_ttywritechunk(const unsigned char *, size_t);
 int st_tprinterwrite(int);
+int st_sttyfits(size_t, size_t);
+int st_ttyreadpending(int);
 ZigSelBounds st_planselnormalize(int, int, int, int, int);
 ZigSelBounds st_planselnormalizecols(int, int, int, int, int, int);
 

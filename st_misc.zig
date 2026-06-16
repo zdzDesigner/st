@@ -64,6 +64,14 @@ export fn st_tprinterwrite(iofd: c_int) c_int {
     return if (iofd != -1) 1 else 0;
 }
 
+export fn st_sttyfits(len: usize, available: usize) c_int {
+    return if (len < available) 1 else 0;
+}
+
+export fn st_ttyreadpending(buflen: c_int) c_int {
+    return if (buflen > 0) 1 else 0;
+}
+
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
     if (index >= args.len) return fallback;
     return args[index];
@@ -124,4 +132,14 @@ test "tty write chunk stops at carriage return" {
 test "printer write requires open fd" {
     try std.testing.expectEqual(@as(c_int, 0), st_tprinterwrite(-1));
     try std.testing.expectEqual(@as(c_int, 1), st_tprinterwrite(3));
+}
+
+test "stty length must leave room for terminator" {
+    try std.testing.expectEqual(@as(c_int, 1), st_sttyfits(3, 4));
+    try std.testing.expectEqual(@as(c_int, 0), st_sttyfits(4, 4));
+}
+
+test "tty read pending follows buffered byte count" {
+    try std.testing.expectEqual(@as(c_int, 0), st_ttyreadpending(0));
+    try std.testing.expectEqual(@as(c_int, 1), st_ttyreadpending(2));
 }
