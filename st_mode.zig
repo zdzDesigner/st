@@ -40,62 +40,99 @@ const charset_graphic0 = 0;
 const charset_usa = 3;
 const charset_unknown = -1;
 
-export fn st_planmode(priv: c_int, arg: c_int) ZigModePlan {
-    if (priv != 0) {
-        return .{ .kind = switch (arg) {
-            1 => mode_appcursor,
-            5 => mode_reverse,
-            6 => mode_origin,
-            7 => mode_wrap,
-            0, 2, 3, 4, 8, 12, 18, 19, 42, 1001, 1005, 1015 => mode_ignore,
-            25 => mode_cursor_visibility,
-            9 => mode_mouse_x10,
-            1000 => mode_mouse_btn,
-            1002 => mode_mouse_motion,
-            1003 => mode_mouse_many,
-            1004 => mode_focus,
-            1006 => mode_mouse_sgr,
-            1034 => mode_8bit,
-            1049 => mode_alt1049,
-            47, 1047 => mode_alt47,
-            1048 => mode_cursor1048,
-            2004 => mode_bracketed_paste,
-            else => mode_private_unknown,
+const ModeParam = struct {
+    private: bool,
+    arg: c_int,
+
+    fn plan(self: ModeParam) ZigModePlan {
+        if (self.private) {
+            return .{ .kind = switch (self.arg) {
+                1 => mode_appcursor,
+                5 => mode_reverse,
+                6 => mode_origin,
+                7 => mode_wrap,
+                0, 2, 3, 4, 8, 12, 18, 19, 42, 1001, 1005, 1015 => mode_ignore,
+                25 => mode_cursor_visibility,
+                9 => mode_mouse_x10,
+                1000 => mode_mouse_btn,
+                1002 => mode_mouse_motion,
+                1003 => mode_mouse_many,
+                1004 => mode_focus,
+                1006 => mode_mouse_sgr,
+                1034 => mode_8bit,
+                1049 => mode_alt1049,
+                47, 1047 => mode_alt47,
+                1048 => mode_cursor1048,
+                2004 => mode_bracketed_paste,
+                else => mode_private_unknown,
+            } };
+        }
+
+        return .{ .kind = switch (self.arg) {
+            0 => mode_ignore,
+            2 => mode_kbdlock,
+            4 => mode_insert,
+            12 => mode_echo,
+            20 => mode_crlf,
+            else => mode_regular_unknown,
         } };
     }
+};
 
-    return .{ .kind = switch (arg) {
-        0 => mode_ignore,
-        2 => mode_kbdlock,
-        4 => mode_insert,
-        12 => mode_echo,
-        20 => mode_crlf,
-        else => mode_regular_unknown,
-    } };
+const Utf8Selector = struct {
+    ascii: c_char,
+
+    fn apply(self: Utf8Selector, mode: c_int) c_int {
+        return switch (self.ascii) {
+            'G' => mode | term_mode_utf8,
+            '@' => mode & ~@as(c_int, term_mode_utf8),
+            else => mode,
+        };
+    }
+};
+
+const CharsetSelector = struct {
+    ascii: c_char,
+
+    fn value(self: CharsetSelector) c_int {
+        return switch (self.ascii) {
+            '0' => charset_graphic0,
+            'B' => charset_usa,
+            else => charset_unknown,
+        };
+    }
+};
+
+const AltScreen = struct {
+    mode: c_int,
+
+    fn swapped(self: AltScreen) c_int {
+        return self.mode ^ term_mode_altscreen;
+    }
+
+    fn shouldSwap(set: bool, alt: bool) bool {
+        return set != alt;
+    }
+};
+
+export fn st_planmode(priv: c_int, arg: c_int) ZigModePlan {
+    return (ModeParam{ .private = priv != 0, .arg = arg }).plan();
 }
 
 export fn st_tdefutf8(mode: c_int, ascii: c_char) c_int {
-    return switch (ascii) {
-        'G' => mode | term_mode_utf8,
-        '@' => mode & ~@as(c_int, term_mode_utf8),
-        else => mode,
-    };
+    return (Utf8Selector{ .ascii = ascii }).apply(mode);
 }
 
 export fn st_tdeftran(ascii: c_char) c_int {
-    return switch (ascii) {
-        '0' => charset_graphic0,
-        'B' => charset_usa,
-        else => charset_unknown,
-    };
+    return (CharsetSelector{ .ascii = ascii }).value();
 }
 
 export fn st_tswapscreenmode(mode: c_int) c_int {
-    return mode ^ term_mode_altscreen;
+    return (AltScreen{ .mode = mode }).swapped();
 }
 
 export fn st_tsetmodeswap(set: c_int, alt: c_int) c_int {
-    return if ((set != 0) != (alt != 0)) 1 else 0;
+    return if (AltScreen.shouldSwap(set != 0, alt != 0)) 1 else 0;
 }
 
 test "private 1049 maps to alt1049" {
