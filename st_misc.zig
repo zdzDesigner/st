@@ -60,6 +60,10 @@ export fn st_ttywritechunk(input: [*]const u8, len: usize) usize {
     return index;
 }
 
+export fn st_tprinterwrite(iofd: c_int) c_int {
+    return if (iofd != -1) 1 else 0;
+}
+
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
     if (index >= args.len) return fallback;
     return args[index];
@@ -115,4 +119,9 @@ test "tty write count clamps to limit" {
 test "tty write chunk stops at carriage return" {
     try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc\rdef", 7));
     try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc", 3));
+}
+
+test "printer write requires open fd" {
+    try std.testing.expectEqual(@as(c_int, 0), st_tprinterwrite(-1));
+    try std.testing.expectEqual(@as(c_int, 1), st_tprinterwrite(3));
 }

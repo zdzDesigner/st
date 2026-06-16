@@ -128,6 +128,14 @@ export fn st_drawregionline(dirty: c_int) c_int {
     return if (dirty != 0) 1 else 0;
 }
 
+export fn st_drawsearchscan(active: c_int) c_int {
+    return if (active != 0) 1 else 0;
+}
+
+export fn st_drawcursoractive(scr: c_int) c_int {
+    return if (scr == 0) 1 else 0;
+}
+
 export fn st_tcursorplan(mode: c_int, alt: c_int) ZigCursorStorePlan {
     return .{
         .action = switch (mode) {
@@ -251,6 +259,13 @@ test "draw cursor plan clamps old cursor and adjusts dummy cells" {
 test "draw region line follows dirty flag" {
     try std.testing.expectEqual(@as(c_int, 0), st_drawregionline(0));
     try std.testing.expectEqual(@as(c_int, 1), st_drawregionline(2));
+}
+
+test "draw plans gate search scan and cursor" {
+    try std.testing.expectEqual(@as(c_int, 1), st_drawsearchscan(1));
+    try std.testing.expectEqual(@as(c_int, 0), st_drawsearchscan(0));
+    try std.testing.expectEqual(@as(c_int, 1), st_drawcursoractive(0));
+    try std.testing.expectEqual(@as(c_int, 0), st_drawcursoractive(2));
 }
 
 test "tcursor plan maps mode and alt slot" {

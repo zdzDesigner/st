@@ -492,6 +492,8 @@ ZigNewlinePlan st_treverseindex(int, int, int);
 int st_tmoveato_y(int, int, int);
 ZigDrawCursorPlan st_drawcursorplan(int, int, int, int, int, int, const ZigGlyph * const *);
 int st_drawregionline(int);
+int st_drawsearchscan(int);
+int st_drawcursoractive(int);
 ZigCursorStorePlan st_tcursorplan(int, int);
 ZigEditPlan st_planedit(char, const int *, int, int, int);
 ZigEditMove st_tdeletechar(int, int, int);
@@ -575,6 +577,7 @@ int st_getsellastx(int, int);
 int st_getselnewline(int, int, int, int, unsigned short, int);
 size_t st_ttywritecount(size_t, size_t);
 size_t st_ttywritechunk(const unsigned char *, size_t);
+int st_tprinterwrite(int);
 ZigSelBounds st_planselnormalize(int, int, int, int, int);
 ZigSelBounds st_planselnormalizecols(int, int, int, int, int, int);
 

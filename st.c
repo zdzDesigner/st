@@ -2191,7 +2191,7 @@ sendbreak(const Arg *arg)
 void
 tprinter(char *s, size_t len)
 {
-	if (iofd != -1 && xwrite(iofd, s, len) < 0) {
+	if (st_tprinterwrite(iofd) && xwrite(iofd, s, len) < 0) {
 		perror("Error writing to output file");
 		close(iofd);
 		iofd = -1;
@@ -2710,7 +2710,7 @@ draw(void)
 
 	if (!xstartdraw())
 		return;
-	if (search.active)
+	if (st_drawsearchscan(search.active))
 		searchscan();
 
 	/* adjust cursor position */
@@ -2721,7 +2721,7 @@ draw(void)
 	term.ocy = cursor.ocy;
 
 	drawregion(0, 0, term.col, term.row);
-	if (term.scr == 0)
+	if (st_drawcursoractive(term.scr))
 		xdrawcursor(cx, term.c.y, term.line[term.c.y][cx],
 				term.ocx, term.ocy, term.line[term.ocy][term.ocx],
 				term.line[term.ocy], term.col);
