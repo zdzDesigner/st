@@ -279,25 +279,11 @@ export fn st_searchcurrentvalid(active: c_int, current: c_int, nmatches: c_int) 
 }
 
 export fn st_searchhit(active: c_int, match_scr: c_int, term_scr: c_int, match_y: c_int, y: c_int, x: c_int, match_x: c_int, match_len: c_int) c_int {
-    return if (active != 0 and match_scr == term_scr and match_y == y and between(x, match_x, match_x + match_len - 1)) 1 else 0;
+    return if (search.hit(active != 0, match_scr, term_scr, match_y, y, x, match_x, match_len)) 1 else 0;
 }
 
 export fn st_searchlinematch(line: [*]const ZigGlyph, x: c_int, linelen: c_int, query: [*]const u32, qlen: c_int, col: c_int) c_int {
-    if ((line[@intCast(x)].mode & attr_wdummy) != 0) return 0;
-
-    var pos = x;
-    var i: c_int = 0;
-    while (i < qlen) : (i += 1) {
-        while (pos < linelen and (line[@intCast(pos)].mode & attr_wdummy) != 0) {
-            pos += 1;
-        }
-        if (pos >= linelen or line[@intCast(pos)].u != query[@intCast(i)]) return 0;
-        pos += 1;
-    }
-    while (pos < col and (line[@intCast(pos)].mode & attr_wdummy) != 0) {
-        pos += 1;
-    }
-    return pos - x;
+    return search.lineMatch(ZigGlyph, line[0..@intCast(col)], x, linelen, query[0..@intCast(qlen)], col);
 }
 
 export fn st_searchnextcurrent(oldcurrent: c_int, nmatches: c_int) c_int {

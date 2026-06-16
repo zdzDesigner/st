@@ -4,6 +4,7 @@
 //! [定位]: 承载 search 相关纯逻辑，C adapter 只负责转换 extern struct。
 
 const std = @import("std");
+const model = @import("term_model.zig");
 
 pub const StepPlan = struct {
     run: bool,
@@ -35,6 +36,28 @@ pub const SetPlan = struct {
     active: bool,
     current: i32,
 };
+
+pub fn hit(active: bool, match_scr: i32, term_scr: i32, match_y: i32, y: i32, x: i32, match_x: i32, match_len: i32) bool {
+    return active and match_scr == term_scr and match_y == y and between(x, match_x, match_x + match_len - 1);
+}
+
+pub fn lineMatch(comptime Glyph: type, line: []const Glyph, x: i32, linelen: i32, query: []const u32, cols: i32) i32 {
+    if (model.hasWideDummy(line[@intCast(x)].mode)) return 0;
+
+    var pos = x;
+    var query_pos: usize = 0;
+    while (query_pos < query.len) : (query_pos += 1) {
+        while (pos < linelen and model.hasWideDummy(line[@intCast(pos)].mode)) {
+            pos += 1;
+        }
+        if (pos >= linelen or line[@intCast(pos)].u != query[query_pos]) return 0;
+        pos += 1;
+    }
+    while (pos < cols and model.hasWideDummy(line[@intCast(pos)].mode)) {
+        pos += 1;
+    }
+    return pos - x;
+}
 
 pub fn currentValid(active: bool, current: i32, nmatches: i32) bool {
     return active and current >= 0 and current < nmatches;
@@ -172,6 +195,22 @@ pub fn matchCap(nmatches: i32, cap: i32) i32 {
 
 fn between(value: i32, lower: i32, upper: i32) bool {
     return lower <= value and value <= upper;
+}
+
+test "search hit and line match scan glyphs" {
+    const Glyph = struct { u: u32, mode: u16 };
+    const line = [_]Glyph{
+        .{ .u = 'a', .mode = 0 },
+        .{ .u = 'x', .mode = model.attr_wdummy },
+        .{ .u = 'b', .mode = 0 },
+        .{ .u = 'c', .mode = 0 },
+    };
+    const query = [_]u32{ 'a', 'b', 'c' };
+
+    try std.testing.expect(hit(true, 2, 2, 4, 4, 7, 5, 3));
+    try std.testing.expect(!hit(true, 2, 2, 4, 4, 9, 5, 3));
+    try std.testing.expectEqual(@as(i32, 4), lineMatch(Glyph, &line, 0, line.len, &query, line.len));
+    try std.testing.expectEqual(@as(i32, 0), lineMatch(Glyph, &line, 1, line.len, &query, line.len));
 }
 
 test "search current and step plans handle bounds" {
