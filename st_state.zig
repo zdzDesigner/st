@@ -67,99 +67,174 @@ const mode_wrap = 1 << 0;
 const mode_utf8 = 1 << 6;
 const charset_usa = 3;
 
+const CsiCommand = struct {
+    mode: c_char,
+    private: bool,
+    args: []const c_int,
+    row: c_int,
+
+    fn plan(self: CsiCommand) ZigStatePlan {
+        return switch (self.mode) {
+            'r' => if (self.private)
+                .{ .kind = state_unknown, .top = 0, .bottom = 0 }
+            else
+                .{
+                    .kind = state_set_scroll,
+                    .top = defaultArg(self.args, 0, 1) - 1,
+                    .bottom = defaultArg(self.args, 1, self.row) - 1,
+                },
+            's' => .{ .kind = state_save_cursor, .top = 0, .bottom = 0 },
+            'u' => .{ .kind = state_load_cursor, .top = 0, .bottom = 0 },
+            else => .{ .kind = state_unknown, .top = 0, .bottom = 0 },
+        };
+    }
+};
+
+const ScrollBounds = struct {
+    top: c_int,
+    bottom: c_int,
+    row: c_int,
+
+    fn region(self: ScrollBounds) ZigScrollRegion {
+        var top = limitInt(self.top, 0, self.row - 1);
+        var bottom = limitInt(self.bottom, 0, self.row - 1);
+
+        if (top > bottom) {
+            const tmp = top;
+            top = bottom;
+            bottom = tmp;
+        }
+
+        return .{ .top = top, .bottom = bottom };
+    }
+};
+
+const ResizeRequest = struct {
+    requested_col: c_int,
+    requested_row: c_int,
+    current_col: c_int,
+    current_row: c_int,
+    current_maxcol: c_int,
+    cursor_y: c_int,
+
+    fn plan(self: ResizeRequest) ZigResizePlan {
+        const base_maxcol = if (self.current_maxcol == 0) self.current_col else self.current_maxcol;
+        const alloc_col = maxInt(self.requested_col, base_maxcol);
+        const slide_count = if (self.cursor_y >= self.requested_row) self.cursor_y - self.requested_row + 1 else 0;
+
+        return .{
+            .invalid = if (alloc_col < 1 or self.requested_row < 1) 1 else 0,
+            .requested_col = self.requested_col,
+            .alloc_col = alloc_col,
+            .base_maxcol = base_maxcol,
+            .minrow = minInt(self.requested_row, self.current_row),
+            .mincol = minInt(alloc_col, base_maxcol),
+            .slide_count = slide_count,
+            .tail_start = slide_count + self.requested_row,
+            .resize_rows = minInt(self.requested_row, self.current_row),
+            .new_row_start = minInt(self.requested_row, self.current_row),
+        };
+    }
+};
+
+const ResizeTabs = struct {
+    tabs: []const c_int,
+    old_col: c_int,
+    tabspaces: c_int,
+
+    fn start(self: ResizeTabs) c_int {
+        if (self.old_col <= 0) return self.tabspaces;
+
+        var index = self.old_col - 1;
+        while (index > 0 and self.tabs[@intCast(index)] == 0) {
+            index -= 1;
+        }
+        return index + self.tabspaces;
+    }
+};
+
+const ResetRequest = struct {
+    default_fg: u32,
+    default_bg: u32,
+    row: c_int,
+
+    fn plan(self: ResetRequest) ZigResetPlan {
+        return .{
+            .cursor_attr_mode = attr_null,
+            .cursor_fg = self.default_fg,
+            .cursor_bg = self.default_bg,
+            .cursor_x = 0,
+            .cursor_y = 0,
+            .cursor_state = cursor_default,
+            .top = 0,
+            .bot = self.row - 1,
+            .mode = mode_wrap | mode_utf8,
+            .charset = 0,
+            .trantbl = charset_usa,
+        };
+    }
+};
+
+const TabReset = struct {
+    tabs: []c_int,
+    col: c_int,
+    tabspaces: c_uint,
+
+    fn apply(self: TabReset) void {
+        var x: c_int = 0;
+        while (x < self.col) : (x += 1) {
+            self.tabs[@intCast(x)] = 0;
+        }
+
+        var tab = self.tabspaces;
+        while (tab < @as(c_uint, @intCast(self.col))) : (tab += self.tabspaces) {
+            self.tabs[@intCast(tab)] = 1;
+        }
+    }
+};
+
+const ResizeClear = struct {
+    mincol: c_int,
+    col: c_int,
+    minrow: c_int,
+    row: c_int,
+
+    fn plan(self: ResizeClear) ZigResizeClearPlan {
+        var result = ZigResizeClearPlan{ .count = 0, .rects = std.mem.zeroes([2]ZigClearRect) };
+        if (self.mincol < self.col and 0 < self.minrow) addResizeRect(&result, self.mincol, 0, self.col - 1, self.minrow - 1);
+        if (0 < self.col and self.minrow < self.row) addResizeRect(&result, 0, self.minrow, self.col - 1, self.row - 1);
+        return result;
+    }
+};
+
 export fn st_planstate(mode: c_char, priv: c_int, arg: [*]const c_int, len: c_int, row: c_int) ZigStatePlan {
     const args = arg[0..@intCast(len)];
-
-    return switch (mode) {
-        'r' => if (priv != 0)
-            .{ .kind = state_unknown, .top = 0, .bottom = 0 }
-        else
-            .{
-                .kind = state_set_scroll,
-                .top = defaultArg(args, 0, 1) - 1,
-                .bottom = defaultArg(args, 1, row) - 1,
-            },
-        's' => .{ .kind = state_save_cursor, .top = 0, .bottom = 0 },
-        'u' => .{ .kind = state_load_cursor, .top = 0, .bottom = 0 },
-        else => .{ .kind = state_unknown, .top = 0, .bottom = 0 },
-    };
+    return (CsiCommand{ .mode = mode, .private = priv != 0, .args = args, .row = row }).plan();
 }
 
 export fn st_tsetscroll(t: c_int, b: c_int, row: c_int) ZigScrollRegion {
-    var top = limitInt(t, 0, row - 1);
-    var bottom = limitInt(b, 0, row - 1);
-
-    if (top > bottom) {
-        const tmp = top;
-        top = bottom;
-        bottom = tmp;
-    }
-
-    return .{ .top = top, .bottom = bottom };
+    return (ScrollBounds{ .top = t, .bottom = b, .row = row }).region();
 }
 
 export fn st_tresizeplan(requested_col: c_int, requested_row: c_int, current_col: c_int, current_row: c_int, current_maxcol: c_int, cursor_y: c_int) ZigResizePlan {
-    const base_maxcol = if (current_maxcol == 0) current_col else current_maxcol;
-    const alloc_col = maxInt(requested_col, base_maxcol);
-    const slide_count = if (cursor_y >= requested_row) cursor_y - requested_row + 1 else 0;
-
-    return .{
-        .invalid = if (alloc_col < 1 or requested_row < 1) 1 else 0,
-        .requested_col = requested_col,
-        .alloc_col = alloc_col,
-        .base_maxcol = base_maxcol,
-        .minrow = minInt(requested_row, current_row),
-        .mincol = minInt(alloc_col, base_maxcol),
-        .slide_count = slide_count,
-        .tail_start = slide_count + requested_row,
-        .resize_rows = minInt(requested_row, current_row),
-        .new_row_start = minInt(requested_row, current_row),
-    };
+    return (ResizeRequest{ .requested_col = requested_col, .requested_row = requested_row, .current_col = current_col, .current_row = current_row, .current_maxcol = current_maxcol, .cursor_y = cursor_y }).plan();
 }
 
 export fn st_tresizetabstart(tabs: [*]const c_int, old_col: c_int, tabspaces: c_int) c_int {
-    if (old_col <= 0) return tabspaces;
-
-    var index = old_col - 1;
-    while (index > 0 and tabs[@intCast(index)] == 0) {
-        index -= 1;
-    }
-    return index + tabspaces;
+    const tab_count = if (old_col > 0) old_col else 0;
+    return (ResizeTabs{ .tabs = tabs[0..@intCast(tab_count)], .old_col = old_col, .tabspaces = tabspaces }).start();
 }
 
 export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPlan {
-    return .{
-        .cursor_attr_mode = attr_null,
-        .cursor_fg = default_fg,
-        .cursor_bg = default_bg,
-        .cursor_x = 0,
-        .cursor_y = 0,
-        .cursor_state = cursor_default,
-        .top = 0,
-        .bot = row - 1,
-        .mode = mode_wrap | mode_utf8,
-        .charset = 0,
-        .trantbl = charset_usa,
-    };
+    return (ResetRequest{ .default_fg = default_fg, .default_bg = default_bg, .row = row }).plan();
 }
 
 export fn st_tresettabs(tabs: [*]c_int, col: c_int, tabspaces: c_uint) void {
-    var x: c_int = 0;
-    while (x < col) : (x += 1) {
-        tabs[@intCast(x)] = 0;
-    }
-
-    var tab = tabspaces;
-    while (tab < @as(c_uint, @intCast(col))) : (tab += tabspaces) {
-        tabs[@intCast(tab)] = 1;
-    }
+    (TabReset{ .tabs = tabs[0..@intCast(col)], .col = col, .tabspaces = tabspaces }).apply();
 }
 
 export fn st_tresizeclearplan(mincol: c_int, col: c_int, minrow: c_int, row: c_int) ZigResizeClearPlan {
-    var plan = ZigResizeClearPlan{ .count = 0, .rects = std.mem.zeroes([2]ZigClearRect) };
-    if (mincol < col and 0 < minrow) addResizeRect(&plan, mincol, 0, col - 1, minrow - 1);
-    if (0 < col and minrow < row) addResizeRect(&plan, 0, minrow, col - 1, row - 1);
-    return plan;
+    return (ResizeClear{ .mincol = mincol, .col = col, .minrow = minrow, .row = row }).plan();
 }
 
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
@@ -260,6 +335,12 @@ test "tresize tab start falls back from no previous tab" {
     const tabs = [_]c_int{ 0, 0, 0, 0 };
 
     try std.testing.expectEqual(@as(c_int, 4), st_tresizetabstart(&tabs, tabs.len, 4));
+}
+
+test "tresize tab start handles empty old columns" {
+    const tabs = [_]c_int{};
+
+    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabstart(&tabs, 0, 4));
 }
 
 test "treset plan sets default terminal state" {
