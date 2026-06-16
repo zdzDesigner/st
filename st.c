@@ -815,7 +815,8 @@ selsnap(int *x, int *y, int direction)
 {
 	int newx, newy;
 	int delim, prevdelim;
-	Glyph *gp, *prevgp;
+	Rune prevrune;
+	Glyph *gp;
 	ZigSelSnapWordPlan word_plan;
 	ZigSelSnapWordStep word_step;
 
@@ -825,8 +826,8 @@ selsnap(int *x, int *y, int direction)
 		 * Snap around if the word wraps around at the end or
 		 * beginning of a line.
 		 */
-		prevgp = &TLINE(*y)[*x];
-		prevdelim = ISDELIM(prevgp->u);
+		prevrune = TLINE(*y)[*x].u;
+		prevdelim = ISDELIM(prevrune);
 		for (;;) {
 			word_plan = st_selsnapwordplan(*x, *y, direction,
 				term.col, term.row);
@@ -841,14 +842,14 @@ selsnap(int *x, int *y, int direction)
 			gp = &TLINE(newy)[newx];
 			delim = ISDELIM(gp->u);
 			word_step = st_selsnapwordstep(newx, newy, tlinelen(newy),
-				gp->mode, delim, prevdelim, gp->u, prevgp->u);
+				gp->mode, delim, prevdelim, gp->u, prevrune);
 			if (word_step.action == ST_ZIG_SEL_SNAP_WORD_BREAK)
 				break;
 
 			*x = word_step.x;
 			*y = word_step.y;
-			prevgp = gp;
 			prevdelim = word_step.prevdelim;
+			prevrune = word_step.prevrune;
 		}
 		break;
 	case SNAP_LINE:
