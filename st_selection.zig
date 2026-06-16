@@ -120,6 +120,27 @@ pub fn extendPlan(old_point: model.Point, old_type: SelectionType, old_bounds: B
     };
 }
 
+pub fn normalize(selection_type: SelectionType, origin: model.Point, extent: model.Point) Bounds {
+    if (selection_type == .regular and origin.y != extent.y) {
+        return .{
+            .start = .{ .x = if (origin.y < extent.y) origin.x else extent.x, .y = minInt(origin.y, extent.y) },
+            .end = .{ .x = if (origin.y < extent.y) extent.x else origin.x, .y = maxInt(origin.y, extent.y) },
+        };
+    }
+    return .{
+        .start = .{ .x = minInt(origin.x, extent.x), .y = minInt(origin.y, extent.y) },
+        .end = .{ .x = maxInt(origin.x, extent.x), .y = maxInt(origin.y, extent.y) },
+    };
+}
+
+pub fn normalizeColumns(selection_type: SelectionType, bounds: Bounds, start_len: i32, end_len: i32, cols: i32) Bounds {
+    if (selection_type == .rectangular) return bounds;
+    return .{
+        .start = .{ .x = if (start_len < bounds.start.x) start_len else bounds.start.x, .y = bounds.start.y },
+        .end = .{ .x = if (end_len <= bounds.end.x) cols - 1 else bounds.end.x, .y = bounds.end.y },
+    };
+}
+
 pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
     if (!active or !alt_matches) return false;
 
@@ -229,6 +250,22 @@ test "selection extend plan reports dirty range and final mode" {
 
     const done = extendPlan(.{ .x = 3, .y = 4 }, .regular, old_bounds, .{ .x = 3, .y = 4 }, .regular, old_bounds, .ready, true);
     try std.testing.expectEqual(SelectionMode.idle, done.mode);
+}
+
+test "selection normalize keeps multiline edge columns" {
+    const bounds = normalize(.regular, .{ .x = 7, .y = 4 }, .{ .x = 2, .y = 9 });
+    try std.testing.expectEqual(model.Point{ .x = 7, .y = 4 }, bounds.start);
+    try std.testing.expectEqual(model.Point{ .x = 2, .y = 9 }, bounds.end);
+
+    const same_line = normalize(.regular, .{ .x = 8, .y = 3 }, .{ .x = 2, .y = 3 });
+    try std.testing.expectEqual(model.Point{ .x = 2, .y = 3 }, same_line.start);
+    try std.testing.expectEqual(model.Point{ .x = 8, .y = 3 }, same_line.end);
+}
+
+test "selection normalize columns adjusts regular edges" {
+    const bounds = normalizeColumns(.regular, .{ .start = .{ .x = 8, .y = 0 }, .end = .{ .x = 9, .y = 0 } }, 5, 9, 10);
+    try std.testing.expectEqual(@as(i32, 5), bounds.start.x);
+    try std.testing.expectEqual(@as(i32, 9), bounds.end.x);
 }
 
 test "selection hit test handles regular and rectangular bounds" {

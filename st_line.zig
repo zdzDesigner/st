@@ -463,30 +463,15 @@ export fn st_getselnewline(y: c_int, ne_y: c_int, last_x: c_int, linelen: c_int,
 }
 
 export fn st_planselnormalize(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
-    var bounds: ZigSelBounds = .{
-        .nb_x = 0,
-        .nb_y = minInt(ob_y, oe_y),
-        .ne_x = 0,
-        .ne_y = maxInt(ob_y, oe_y),
-    };
-
-    if (sel_type == sel_regular and ob_y != oe_y) {
-        bounds.nb_x = if (ob_y < oe_y) ob_x else oe_x;
-        bounds.ne_x = if (ob_y < oe_y) oe_x else ob_x;
-        return bounds;
-    }
-
-    bounds.nb_x = minInt(ob_x, oe_x);
-    bounds.ne_x = maxInt(ob_x, oe_x);
-    return bounds;
+    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const bounds = selection.normalize(selection_type, .{ .x = ob_x, .y = ob_y }, .{ .x = oe_x, .y = oe_y });
+    return .{ .nb_x = bounds.start.x, .nb_y = bounds.start.y, .ne_x = bounds.end.x, .ne_y = bounds.end.y };
 }
 
 export fn st_planselnormalizecols(sel_type: c_int, nb_x: c_int, ne_x: c_int, nb_len: c_int, ne_len: c_int, col: c_int) ZigSelBounds {
-    var bounds = ZigSelBounds{ .nb_x = nb_x, .nb_y = 0, .ne_x = ne_x, .ne_y = 0 };
-    if (sel_type == sel_rectangular) return bounds;
-    if (nb_len < bounds.nb_x) bounds.nb_x = nb_len;
-    if (ne_len <= bounds.ne_x) bounds.ne_x = col - 1;
-    return bounds;
+    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const bounds = selection.normalizeColumns(selection_type, .{ .start = .{ .x = nb_x, .y = 0 }, .end = .{ .x = ne_x, .y = 0 } }, nb_len, ne_len, col);
+    return .{ .nb_x = bounds.start.x, .nb_y = 0, .ne_x = bounds.end.x, .ne_y = 0 };
 }
 
 fn between(value: c_int, lower: c_int, upper: c_int) bool {
