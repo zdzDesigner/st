@@ -14,53 +14,69 @@ const DecodeResult = extern struct {
     len: usize,
 };
 
-export fn st_utf8decode(src: [*]const u8, clen: usize) DecodeResult {
-    var result = DecodeResult{
-        .rune = utf_invalid,
-        .len = 0,
-    };
+const Utf8Input = struct {
+    bytes: []const u8,
 
-    if (clen == 0) return result;
+    fn decode(self: Utf8Input) DecodeResult {
+        var result = DecodeResult{
+            .rune = utf_invalid,
+            .len = 0,
+        };
 
-    const first = src[0];
-    const seq_len = std.unicode.utf8ByteSequenceLength(first) catch {
-        result.len = 1;
-        return result;
-    };
+        if (self.bytes.len == 0) return result;
 
-    if (seq_len < 1 or seq_len > utf_siz) {
-        result.len = 1;
-        return result;
-    }
+        const first = self.bytes[0];
+        const seq_len = std.unicode.utf8ByteSequenceLength(first) catch {
+            result.len = 1;
+            return result;
+        };
 
-    var rune: u32 = first & firstMask(seq_len);
-    var j: usize = 1;
-    var i: usize = 1;
-    while (i < clen and j < seq_len) : ({
-        i += 1;
-        j += 1;
-    }) {
-        const cont = src[i];
-        if ((cont & 0b1100_0000) != 0b1000_0000) {
-            result.len = j;
+        if (seq_len < 1 or seq_len > utf_siz) {
+            result.len = 1;
             return result;
         }
-        rune = (rune << 6) | @as(u32, cont & 0b0011_1111);
+
+        var rune: u32 = first & firstMask(seq_len);
+        var j: usize = 1;
+        var i: usize = 1;
+        while (i < self.bytes.len and j < seq_len) : ({
+            i += 1;
+            j += 1;
+        }) {
+            const cont = self.bytes[i];
+            if ((cont & 0b1100_0000) != 0b1000_0000) {
+                result.len = j;
+                return result;
+            }
+            rune = (rune << 6) | @as(u32, cont & 0b0011_1111);
+        }
+
+        if (j < seq_len) return result;
+
+        result.rune = validateRune(rune, seq_len);
+        result.len = seq_len;
+        return result;
     }
+};
 
-    if (j < seq_len) return result;
+const Utf8Rune = struct {
+    rune: u32,
 
-    result.rune = validateRune(rune, seq_len);
-    result.len = seq_len;
-    return result;
+    fn encode(self: Utf8Rune, out: [*]u8) usize {
+        const valid_rune = validateRune(self.rune, 0);
+        var buf: [utf_siz]u8 = undefined;
+        const len = std.unicode.utf8Encode(valid_rune, &buf) catch return 0;
+        @memcpy(out[0..len], buf[0..len]);
+        return len;
+    }
+};
+
+export fn st_utf8decode(src: [*]const u8, clen: usize) DecodeResult {
+    return (Utf8Input{ .bytes = src[0..clen] }).decode();
 }
 
 export fn st_utf8encode(rune: u32, out: [*]u8) usize {
-    const valid_rune = validateRune(rune, 0);
-    var buf: [utf_siz]u8 = undefined;
-    const len = std.unicode.utf8Encode(valid_rune, &buf) catch return 0;
-    @memcpy(out[0..len], buf[0..len]);
-    return len;
+    return (Utf8Rune{ .rune = rune }).encode(out);
 }
 
 fn firstMask(seq_len: usize) u8 {
