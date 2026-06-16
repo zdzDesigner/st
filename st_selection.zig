@@ -48,6 +48,13 @@ pub const ScrollPlan = struct {
     extent_y: i32,
 };
 
+pub const ExtendPlan = struct {
+    dirty: bool,
+    top: i32,
+    bot: i32,
+    mode: SelectionMode,
+};
+
 pub const SnapWordPlan = struct {
     point: model.Point,
     wrap_point: model.Point,
@@ -103,6 +110,16 @@ pub fn scrollPlan(origin_x: i32, origin_y: i32, extent_y: i32, bounds: Bounds, s
     return .{ .action = .normalize, .origin_y = next_origin_y, .extent_y = next_extent_y };
 }
 
+pub fn extendPlan(old_point: model.Point, old_type: SelectionType, old_bounds: Bounds, new_point: model.Point, new_type: SelectionType, new_bounds: Bounds, old_mode: SelectionMode, done: bool) ExtendPlan {
+    const dirty = old_point.y != new_point.y or old_point.x != new_point.x or old_type != new_type or old_mode == .empty;
+    return .{
+        .dirty = dirty,
+        .top = minInt(new_bounds.start.y, old_bounds.start.y),
+        .bot = maxInt(new_bounds.end.y, old_bounds.end.y),
+        .mode = if (done) .idle else .ready,
+    };
+}
+
 pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
     if (!active or !alt_matches) return false;
 
@@ -154,6 +171,14 @@ fn between(value: i32, lower: i32, upper: i32) bool {
     return lower <= value and value <= upper;
 }
 
+fn minInt(a: i32, b: i32) i32 {
+    return if (a < b) a else b;
+}
+
+fn maxInt(a: i32, b: i32) i32 {
+    return if (a > b) a else b;
+}
+
 test "snap word plan handles wrapping" {
     const forward = snapWordPlan(.{ .x = 9, .y = 2 }, 1, .{ .cols = 10, .rows = 5 });
     try std.testing.expectEqual(model.Point{ .x = 0, .y = 3 }, forward.point);
@@ -191,6 +216,19 @@ test "selection scroll plan clears or normalizes affected selection" {
 
     const inactive = scrollPlan(-1, 3, 4, bounds, 0, 0, 8, 1);
     try std.testing.expectEqual(ScrollAction.none, inactive.action);
+}
+
+test "selection extend plan reports dirty range and final mode" {
+    const old_bounds = Bounds{ .start = .{ .x = 1, .y = 2 }, .end = .{ .x = 3, .y = 4 } };
+    const new_bounds = Bounds{ .start = .{ .x = 1, .y = 1 }, .end = .{ .x = 4, .y = 5 } };
+    const plan = extendPlan(.{ .x = 3, .y = 4 }, .regular, old_bounds, .{ .x = 4, .y = 5 }, .regular, new_bounds, .ready, false);
+    try std.testing.expect(plan.dirty);
+    try std.testing.expectEqual(@as(i32, 1), plan.top);
+    try std.testing.expectEqual(@as(i32, 5), plan.bot);
+    try std.testing.expectEqual(SelectionMode.ready, plan.mode);
+
+    const done = extendPlan(.{ .x = 3, .y = 4 }, .regular, old_bounds, .{ .x = 3, .y = 4 }, .regular, old_bounds, .ready, true);
+    try std.testing.expectEqual(SelectionMode.idle, done.mode);
 }
 
 test "selection hit test handles regular and rectangular bounds" {

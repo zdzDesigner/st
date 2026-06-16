@@ -195,12 +195,24 @@ export fn st_selscrollplan(ob_x: c_int, ob_y: c_int, oe_y: c_int, nb_y: c_int, n
 }
 
 export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, old_nb_y: c_int, old_ne_y: c_int, new_oe_x: c_int, new_oe_y: c_int, new_type: c_int, new_nb_y: c_int, new_ne_y: c_int, old_mode: c_int, done: c_int) ZigSelExtendPlan {
-    const dirty = old_oe_y != new_oe_y or old_oe_x != new_oe_x or old_type != new_type or old_mode == sel_empty;
+    const old_selection_type: selection.SelectionType = if (old_type == sel_rectangular) .rectangular else .regular;
+    const new_selection_type: selection.SelectionType = if (new_type == sel_rectangular) .rectangular else .regular;
+    const mode: selection.SelectionMode = if (old_mode == sel_empty) .empty else if (old_mode == 0) .idle else .ready;
+    const plan = selection.extendPlan(
+        .{ .x = old_oe_x, .y = old_oe_y },
+        old_selection_type,
+        .{ .start = .{ .x = 0, .y = old_nb_y }, .end = .{ .x = 0, .y = old_ne_y } },
+        .{ .x = new_oe_x, .y = new_oe_y },
+        new_selection_type,
+        .{ .start = .{ .x = 0, .y = new_nb_y }, .end = .{ .x = 0, .y = new_ne_y } },
+        mode,
+        done != 0,
+    );
     return .{
-        .dirty = if (dirty) 1 else 0,
-        .top = minInt(new_nb_y, old_nb_y),
-        .bot = maxInt(new_ne_y, old_ne_y),
-        .mode = if (done != 0) sel_empty - 1 else sel_empty + 1,
+        .dirty = if (plan.dirty) 1 else 0,
+        .top = plan.top,
+        .bot = plan.bot,
+        .mode = @intFromEnum(plan.mode),
     };
 }
 
