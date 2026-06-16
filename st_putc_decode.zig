@@ -19,40 +19,58 @@ pub const ZigWriteControlPlan = extern struct {
     bracket: c_int,
 };
 
-export fn st_putcdecode(rune: u32, utf8_mode: c_int) ZigPutcDecode {
-    var result: ZigPutcDecode = .{
-        .control = if (isControl(rune)) 1 else 0,
-        .width = 1,
-        .len = 1,
-        .bytes = std.mem.zeroes([4]u8),
-    };
+const RuneInput = struct {
+    rune: u32,
+    utf8_mode: bool,
 
-    if (rune < 127 or utf8_mode == 0) {
-        result.bytes[0] = @truncate(rune);
+    fn decode(self: RuneInput) ZigPutcDecode {
+        var result: ZigPutcDecode = .{
+            .control = if (isControl(self.rune)) 1 else 0,
+            .width = 1,
+            .len = 1,
+            .bytes = std.mem.zeroes([4]u8),
+        };
+
+        if (self.rune < 127 or !self.utf8_mode) {
+            result.bytes[0] = @truncate(self.rune);
+            return result;
+        }
+
+        result.len = @intCast(encodeRune(self.rune, &result.bytes));
+        if (result.control == 0) {
+            result.width = runeWidth(self.rune);
+        }
         return result;
     }
+};
 
-    result.len = @intCast(encodeRune(rune, &result.bytes));
-    if (result.control == 0) {
-        result.width = runeWidth(rune);
+const ControlWriter = struct {
+    rune: u32,
+    show_ctrl: bool,
+
+    fn plan(self: ControlWriter) ZigWriteControlPlan {
+        if (!self.show_ctrl or !isControl(self.rune)) {
+            return .{ .rune = self.rune, .caret = 0, .bracket = 0 };
+        }
+
+        if ((self.rune & 0x80) != 0) {
+            return .{ .rune = self.rune & 0x7f, .caret = 1, .bracket = 1 };
+        }
+
+        if (self.rune != '\n' and self.rune != '\r' and self.rune != '\t') {
+            return .{ .rune = self.rune ^ 0x40, .caret = 1, .bracket = 0 };
+        }
+
+        return .{ .rune = self.rune, .caret = 0, .bracket = 0 };
     }
-    return result;
+};
+
+export fn st_putcdecode(rune: u32, utf8_mode: c_int) ZigPutcDecode {
+    return (RuneInput{ .rune = rune, .utf8_mode = utf8_mode != 0 }).decode();
 }
 
 export fn st_twritecontrol(rune: u32, show_ctrl: c_int) ZigWriteControlPlan {
-    if (show_ctrl == 0 or !isControl(rune)) {
-        return .{ .rune = rune, .caret = 0, .bracket = 0 };
-    }
-
-    if ((rune & 0x80) != 0) {
-        return .{ .rune = rune & 0x7f, .caret = 1, .bracket = 1 };
-    }
-
-    if (rune != '\n' and rune != '\r' and rune != '\t') {
-        return .{ .rune = rune ^ 0x40, .caret = 1, .bracket = 0 };
-    }
-
-    return .{ .rune = rune, .caret = 0, .bracket = 0 };
+    return (ControlWriter{ .rune = rune, .show_ctrl = show_ctrl != 0 }).plan();
 }
 
 fn isControl(rune: u32) bool {
