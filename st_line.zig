@@ -5,6 +5,7 @@
 //! [定位]: 替代 `tlinelen(...)`、`tlinehistlen(...)`、`tputtab(...)` 的扫描主体、`selected(...)` 的纯判断主体，以及 `selnormalize(...)` 的 bounds 计算主体。
 
 const std = @import("std");
+const line_core = @import("st_line_core.zig");
 const selection = @import("st_selection.zig");
 const search = @import("st_search.zig");
 
@@ -125,68 +126,34 @@ const externalpipe_skip = 1;
 const externalpipe_write = 2;
 
 export fn st_tlinelen(line: [*]const ZigGlyph, col: c_int) c_int {
-    var i = col;
-
-    if ((line[@intCast(i - 1)].mode & attr_wrap) != 0) return i;
-
-    while (i > 0 and line[@intCast(i - 1)].u == ' ') {
-        i -= 1;
-    }
-
-    return i;
+    return line_core.lineLen(ZigGlyph, line[0..@intCast(col)], col);
 }
 
 export fn st_tputtab(x: c_int, col: c_int, n: c_int, tabs: [*]const c_int) c_int {
-    var next_x = x;
-
-    if (n > 0) {
-        var remaining = n;
-        while (next_x < col and remaining > 0) : (remaining -= 1) {
-            next_x += 1;
-            while (next_x < col and tabs[@intCast(next_x)] == 0) {
-                next_x += 1;
-            }
-        }
-    } else if (n < 0) {
-        var remaining = n;
-        while (next_x > 0 and remaining < 0) : (remaining += 1) {
-            next_x -= 1;
-            while (next_x > 0 and tabs[@intCast(next_x)] == 0) {
-                next_x -= 1;
-            }
-        }
-    }
-
-    return limitInt(next_x, 0, col - 1);
+    return line_core.tabTarget(x, col, n, tabs[0..@intCast(col)]);
 }
 
 export fn st_tattrset(lines: [*]const [*]const ZigGlyph, row: c_int, col: c_int, attr: c_int) c_int {
-    const mask = attrMask(attr);
-    var y: c_int = 0;
-
-    while (y < row - 1) : (y += 1) {
-        if (lineHasAttr(lines[@intCast(y)], col, mask)) return 1;
-    }
-
-    return 0;
+    return if (line_core.attrSet(ZigGlyph, lines[0..@intCast(row)], row, col, attrMask(attr))) 1 else 0;
 }
 
 export fn st_tlineattrset(line: [*]const ZigGlyph, col: c_int, attr: c_int) c_int {
-    return if (lineHasAttr(line, col, attrMask(attr))) 1 else 0;
+    return if (line_core.lineAttrSet(ZigGlyph, line, col, attrMask(attr))) 1 else 0;
 }
 
 export fn st_tdumplineplan(linelen: c_int, col: c_int) ZigDumpLinePlan {
-    const end = minInt(linelen, col);
+    const plan = line_core.dumpLinePlan(linelen, col);
     return .{
-        .write = if (end > 0) 1 else 0,
-        .last = end - 1,
+        .write = if (plan.write) 1 else 0,
+        .last = plan.last,
     };
 }
 
 export fn st_tsetdirtrange(top: c_int, bot: c_int, row: c_int) ZigLineRange {
+    const range = line_core.dirtyRange(top, bot, row);
     return .{
-        .top = limitInt(top, 0, row - 1),
-        .bot = limitInt(bot, 0, row - 1),
+        .top = range.top,
+        .bot = range.bot,
     };
 }
 
@@ -368,14 +335,12 @@ export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
 }
 
 export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
-    const lastpos = minInt(linelen + 1, col) - 1;
-    if (lastpos < 0) return .{ .kind = externalpipe_break, .lastpos = lastpos };
-    if (lastpos == 0) return .{ .kind = externalpipe_skip, .lastpos = lastpos };
-    return .{ .kind = externalpipe_write, .lastpos = lastpos };
+    const plan = line_core.externalPipeLine(linelen, col);
+    return .{ .kind = @intFromEnum(plan.kind), .lastpos = plan.lastpos };
 }
 
 export fn st_externalpipewrap(mode: c_ushort) c_int {
-    return if ((mode & attr_wrap) != 0) 1 else 0;
+    return if (line_core.externalPipeWrap(mode)) 1 else 0;
 }
 
 export fn st_searchpromptplan(has_input: c_int, inputcap: usize) ZigSearchPromptPlan {
@@ -440,30 +405,12 @@ fn between(value: c_int, lower: c_int, upper: c_int) bool {
     return lower <= value and value <= upper;
 }
 
-fn minInt(a: c_int, b: c_int) c_int {
-    return if (a < b) a else b;
-}
-
 fn maxInt(a: c_int, b: c_int) c_int {
     return if (a > b) a else b;
 }
 
-fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
-    if (value < lower) return lower;
-    if (value > upper) return upper;
-    return value;
-}
-
 fn attrMask(attr: c_int) c_ushort {
     return @truncate(@as(c_uint, @bitCast(attr)));
-}
-
-fn lineHasAttr(line: [*]const ZigGlyph, col: c_int, mask: c_ushort) bool {
-    var x: c_int = 0;
-    while (x < col - 1) : (x += 1) {
-        if ((line[@intCast(x)].mode & mask) != 0) return true;
-    }
-    return false;
 }
 
 test "line length ignores trailing spaces" {
