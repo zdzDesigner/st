@@ -36,6 +36,18 @@ pub const StartPlan = struct {
     final_mode: SelectionMode,
 };
 
+pub const ScrollAction = enum(i32) {
+    none = 0,
+    clear = 1,
+    normalize = 2,
+};
+
+pub const ScrollPlan = struct {
+    action: ScrollAction,
+    origin_y: i32,
+    extent_y: i32,
+};
+
 pub const SnapWordPlan = struct {
     point: model.Point,
     wrap_point: model.Point,
@@ -73,6 +85,22 @@ pub fn startPlan(point: model.Point, snap: i32, alt_screen: bool) StartPlan {
         .point = point,
         .final_mode = if (snap != 0) .ready else .empty,
     };
+}
+
+pub fn scrollPlan(origin_x: i32, origin_y: i32, extent_y: i32, bounds: Bounds, scroll_origin: i32, top: i32, bot: i32, delta: i32) ScrollPlan {
+    if (origin_x == -1) return .{ .action = .none, .origin_y = origin_y, .extent_y = extent_y };
+
+    const start_inside = between(bounds.start.y, scroll_origin, bot);
+    const end_inside = between(bounds.end.y, scroll_origin, bot);
+    if (start_inside != end_inside) return .{ .action = .clear, .origin_y = origin_y, .extent_y = extent_y };
+    if (!start_inside) return .{ .action = .none, .origin_y = origin_y, .extent_y = extent_y };
+
+    const next_origin_y = origin_y + delta;
+    const next_extent_y = extent_y + delta;
+    if (!between(next_origin_y, top, bot) or !between(next_extent_y, top, bot)) {
+        return .{ .action = .clear, .origin_y = next_origin_y, .extent_y = next_extent_y };
+    }
+    return .{ .action = .normalize, .origin_y = next_origin_y, .extent_y = next_extent_y };
 }
 
 pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
@@ -149,6 +177,20 @@ test "selection clear and start plans describe state" {
     try std.testing.expectEqual(@as(i32, 1), plan.snap);
     try std.testing.expectEqual(model.Point{ .x = 3, .y = 4 }, plan.point);
     try std.testing.expectEqual(SelectionMode.ready, plan.final_mode);
+}
+
+test "selection scroll plan clears or normalizes affected selection" {
+    const bounds = Bounds{ .start = .{ .x = 0, .y = 3 }, .end = .{ .x = 0, .y = 4 } };
+    const moved = scrollPlan(0, 3, 4, bounds, 0, 0, 8, 2);
+    try std.testing.expectEqual(ScrollAction.normalize, moved.action);
+    try std.testing.expectEqual(@as(i32, 5), moved.origin_y);
+    try std.testing.expectEqual(@as(i32, 6), moved.extent_y);
+
+    const split = scrollPlan(0, 3, 9, .{ .start = .{ .x = 0, .y = 3 }, .end = .{ .x = 0, .y = 9 } }, 0, 0, 8, 1);
+    try std.testing.expectEqual(ScrollAction.clear, split.action);
+
+    const inactive = scrollPlan(-1, 3, 4, bounds, 0, 0, 8, 1);
+    try std.testing.expectEqual(ScrollAction.none, inactive.action);
 }
 
 test "selection hit test handles regular and rectangular bounds" {

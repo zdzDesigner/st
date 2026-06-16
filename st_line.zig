@@ -190,19 +190,8 @@ export fn st_tsetdirtrange(top: c_int, bot: c_int, row: c_int) ZigLineRange {
 }
 
 export fn st_selscrollplan(ob_x: c_int, ob_y: c_int, oe_y: c_int, nb_y: c_int, ne_y: c_int, orig: c_int, top: c_int, bot: c_int, n: c_int) ZigSelScrollPlan {
-    if (ob_x == -1) return .{ .action = sel_scroll_none, .ob_y = ob_y, .oe_y = oe_y };
-
-    const nb_inside = between(nb_y, orig, bot);
-    const ne_inside = between(ne_y, orig, bot);
-    if (nb_inside != ne_inside) return .{ .action = sel_scroll_clear, .ob_y = ob_y, .oe_y = oe_y };
-    if (!nb_inside) return .{ .action = sel_scroll_none, .ob_y = ob_y, .oe_y = oe_y };
-
-    const next_ob_y = ob_y + n;
-    const next_oe_y = oe_y + n;
-    if (next_ob_y < top or next_ob_y > bot or next_oe_y < top or next_oe_y > bot) {
-        return .{ .action = sel_scroll_clear, .ob_y = next_ob_y, .oe_y = next_oe_y };
-    }
-    return .{ .action = sel_scroll_normalize, .ob_y = next_ob_y, .oe_y = next_oe_y };
+    const plan = selection.scrollPlan(ob_x, ob_y, oe_y, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, orig, top, bot, n);
+    return .{ .action = @intFromEnum(plan.action), .ob_y = plan.origin_y, .oe_y = plan.extent_y };
 }
 
 export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, old_nb_y: c_int, old_ne_y: c_int, new_oe_x: c_int, new_oe_y: c_int, new_type: c_int, new_nb_y: c_int, new_ne_y: c_int, old_mode: c_int, done: c_int) ZigSelExtendPlan {
