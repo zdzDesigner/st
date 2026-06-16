@@ -62,6 +62,11 @@ pub const SnapWordPlan = struct {
     in_bounds: bool,
 };
 
+pub const GetLinePlan = struct {
+    start_x: i32,
+    last_x: i32,
+};
+
 pub const SnapWordAction = enum(i32) {
     stop = 0,
     accept = 1,
@@ -139,6 +144,28 @@ pub fn normalizeColumns(selection_type: SelectionType, bounds: Bounds, start_len
         .start = .{ .x = if (start_len < bounds.start.x) start_len else bounds.start.x, .y = bounds.start.y },
         .end = .{ .x = if (end_len <= bounds.end.x) cols - 1 else bounds.end.x, .y = bounds.end.y },
     };
+}
+
+pub fn getLinePlan(selection_type: SelectionType, bounds: Bounds, y: i32, cols: i32) GetLinePlan {
+    if (selection_type == .rectangular) return .{ .start_x = bounds.start.x, .last_x = bounds.end.x };
+    return .{
+        .start_x = if (bounds.start.y == y) bounds.start.x else 0,
+        .last_x = if (bounds.end.y == y) bounds.end.x else cols - 1,
+    };
+}
+
+pub fn getBufferSize(cols: i32, bounds: Bounds, utf_size: i32) i32 {
+    return (cols + 1) * (bounds.end.y - bounds.start.y + 1) * utf_size;
+}
+
+pub fn getLastX(last_x: i32, linelen: i32) i32 {
+    return minInt(last_x, linelen - 1);
+}
+
+pub fn needsNewline(y: i32, bounds: Bounds, last_x: i32, linelen: i32, last_mode: u16, selection_type: SelectionType) bool {
+    const crosses_line = y < bounds.end.y or last_x >= linelen;
+    const can_break = !model.hasWrap(last_mode) or selection_type == .rectangular;
+    return crosses_line and can_break;
 }
 
 pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
@@ -266,6 +293,28 @@ test "selection normalize columns adjusts regular edges" {
     const bounds = normalizeColumns(.regular, .{ .start = .{ .x = 8, .y = 0 }, .end = .{ .x = 9, .y = 0 } }, 5, 9, 10);
     try std.testing.expectEqual(@as(i32, 5), bounds.start.x);
     try std.testing.expectEqual(@as(i32, 9), bounds.end.x);
+}
+
+test "selection get line plans describe output bounds" {
+    const bounds = Bounds{ .start = .{ .x = 3, .y = 2 }, .end = .{ .x = 5, .y = 4 } };
+    const first = getLinePlan(.regular, bounds, 2, 10);
+    const middle = getLinePlan(.regular, bounds, 3, 10);
+    const rectangular = getLinePlan(.rectangular, bounds, 3, 10);
+
+    try std.testing.expectEqual(@as(i32, 3), first.start_x);
+    try std.testing.expectEqual(@as(i32, 9), middle.last_x);
+    try std.testing.expectEqual(@as(i32, 3), rectangular.start_x);
+    try std.testing.expectEqual(@as(i32, 5), rectangular.last_x);
+}
+
+test "selection get output sizing follows wraps" {
+    const bounds = Bounds{ .start = .{ .x = 0, .y = 2 }, .end = .{ .x = 0, .y = 3 } };
+
+    try std.testing.expectEqual(@as(i32, 88), getBufferSize(10, bounds, 4));
+    try std.testing.expectEqual(@as(i32, 4), getLastX(9, 5));
+    try std.testing.expect(needsNewline(0, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = 1 } }, 3, 5, 0, .regular));
+    try std.testing.expect(!needsNewline(0, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = 1 } }, 3, 5, model.attr_wrap, .regular));
+    try std.testing.expect(needsNewline(0, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = 1 } }, 3, 5, model.attr_wrap, .rectangular));
 }
 
 test "selection hit test handles regular and rectangular bounds" {

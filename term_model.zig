@@ -22,7 +22,16 @@ pub fn hasWideDummy(mode: u16) bool {
     return (mode & attr_wdummy) != 0;
 }
 
+pub fn hasWrap(mode: u16) bool {
+    return (mode & attr_wrap) != 0;
+}
+
 test "glyph mode detects wide dummy" {
     try @import("std").testing.expect(hasWideDummy(attr_wdummy));
     try @import("std").testing.expect(!hasWideDummy(0));
+}
+
+test "glyph mode detects wrap" {
+    try @import("std").testing.expect(hasWrap(attr_wrap));
+    try @import("std").testing.expect(!hasWrap(0));
 }

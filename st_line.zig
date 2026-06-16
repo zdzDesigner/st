@@ -441,25 +441,25 @@ export fn st_searchmatchcap(nmatches: c_int, cap: c_int) c_int {
 }
 
 export fn st_getsellineplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int) ZigGetSelLinePlan {
-    if (sel_type == sel_rectangular) return .{ .start_x = nb_x, .last_x = ne_x };
+    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const plan = selection.getLinePlan(selection_type, .{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } }, y, col);
     return .{
-        .start_x = if (nb_y == y) nb_x else 0,
-        .last_x = if (ne_y == y) ne_x else col - 1,
+        .start_x = plan.start_x,
+        .last_x = plan.last_x,
     };
 }
 
 export fn st_getselbufsize(col: c_int, nb_y: c_int, ne_y: c_int, utf_siz: c_int) c_int {
-    return (col + 1) * (ne_y - nb_y + 1) * utf_siz;
+    return selection.getBufferSize(col, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, utf_siz);
 }
 
 export fn st_getsellastx(last_x: c_int, linelen: c_int) c_int {
-    return minInt(last_x, linelen - 1);
+    return selection.getLastX(last_x, linelen);
 }
 
 export fn st_getselnewline(y: c_int, ne_y: c_int, last_x: c_int, linelen: c_int, last_mode: c_ushort, sel_type: c_int) c_int {
-    const crosses_line = y < ne_y or last_x >= linelen;
-    const can_break = (last_mode & attr_wrap) == 0 or sel_type == sel_rectangular;
-    return if (crosses_line and can_break) 1 else 0;
+    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    return if (selection.needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, last_x, linelen, last_mode, selection_type)) 1 else 0;
 }
 
 export fn st_planselnormalize(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
