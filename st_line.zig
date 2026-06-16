@@ -216,18 +216,19 @@ export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, ol
 }
 
 export fn st_selclearplan(ob_x: c_int) c_int {
-    return if (ob_x == -1) 0 else 1;
+    return if (selection.shouldClear(ob_x)) 1 else 0;
 }
 
 export fn st_selstartplan(col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelStartPlan {
+    const plan = selection.startPlan(.{ .x = col, .y = row }, snap, alt_screen != 0);
     return .{
-        .mode = sel_empty,
-        .sel_type = sel_regular,
-        .alt = if (alt_screen != 0) 1 else 0,
-        .snap = snap,
-        .x = col,
-        .y = row,
-        .final_mode = if (snap != 0) sel_empty + 1 else sel_empty,
+        .mode = @intFromEnum(plan.mode),
+        .sel_type = @intFromEnum(plan.selection_type),
+        .alt = if (plan.alt) 1 else 0,
+        .snap = plan.snap,
+        .x = plan.point.x,
+        .y = plan.point.y,
+        .final_mode = @intFromEnum(plan.final_mode),
     };
 }
 

@@ -21,6 +21,21 @@ pub const SelectionType = enum(i32) {
     rectangular = 2,
 };
 
+pub const SelectionMode = enum(i32) {
+    idle = 0,
+    empty = 1,
+    ready = 2,
+};
+
+pub const StartPlan = struct {
+    mode: SelectionMode,
+    selection_type: SelectionType,
+    alt: bool,
+    snap: i32,
+    point: model.Point,
+    final_mode: SelectionMode,
+};
+
 pub const SnapWordPlan = struct {
     point: model.Point,
     wrap_point: model.Point,
@@ -43,6 +58,21 @@ pub const SnapWordStep = union(enum) {
 
 pub fn snapLineX(direction: i32, col: i32) i32 {
     return if (direction < 0) 0 else col - 1;
+}
+
+pub fn shouldClear(origin_x: i32) bool {
+    return origin_x != -1;
+}
+
+pub fn startPlan(point: model.Point, snap: i32, alt_screen: bool) StartPlan {
+    return .{
+        .mode = .empty,
+        .selection_type = .regular,
+        .alt = alt_screen,
+        .snap = snap,
+        .point = point,
+        .final_mode = if (snap != 0) .ready else .empty,
+    };
 }
 
 pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
@@ -106,6 +136,19 @@ test "snap word plan handles wrapping" {
     const backward = snapWordPlan(.{ .x = 0, .y = 2 }, -1, .{ .cols = 10, .rows = 5 });
     try std.testing.expectEqual(model.Point{ .x = 9, .y = 1 }, backward.point);
     try std.testing.expectEqual(model.Point{ .x = 9, .y = 1 }, backward.wrap_point);
+}
+
+test "selection clear and start plans describe state" {
+    try std.testing.expect(!shouldClear(-1));
+    try std.testing.expect(shouldClear(0));
+
+    const plan = startPlan(.{ .x = 3, .y = 4 }, 1, true);
+    try std.testing.expectEqual(SelectionMode.empty, plan.mode);
+    try std.testing.expectEqual(SelectionType.regular, plan.selection_type);
+    try std.testing.expect(plan.alt);
+    try std.testing.expectEqual(@as(i32, 1), plan.snap);
+    try std.testing.expectEqual(model.Point{ .x = 3, .y = 4 }, plan.point);
+    try std.testing.expectEqual(SelectionMode.ready, plan.final_mode);
 }
 
 test "selection hit test handles regular and rectangular bounds" {
