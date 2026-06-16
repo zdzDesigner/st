@@ -22,26 +22,48 @@ pub const misc_repeat_last = 6;
 pub const misc_set_cursor_style = 7;
 pub const misc_unknown = 8;
 
+const MiscCommand = struct {
+    mode0: c_char,
+    mode1: c_char,
+    args: []const c_int,
+
+    fn plan(self: MiscCommand) ZigMiscPlan {
+        const arg0 = defaultArg(self.args, 0, 0);
+
+        return switch (self.mode0) {
+            'i' => switch (arg0) {
+                0 => .{ .kind = misc_media_dump, .value = 0, .extra = 0 },
+                1 => .{ .kind = misc_media_dump_line, .value = 0, .extra = 0 },
+                2 => .{ .kind = misc_media_dump_sel, .value = 0, .extra = 0 },
+                4 => .{ .kind = misc_media_print_off, .value = 0, .extra = 0 },
+                5 => .{ .kind = misc_media_print_on, .value = 0, .extra = 0 },
+                else => .{ .kind = misc_none, .value = 0, .extra = 0 },
+            },
+            'b' => .{ .kind = misc_repeat_last, .value = countArg(self.args), .extra = 0 },
+            ' ' => if (self.mode1 == 'q')
+                .{ .kind = misc_set_cursor_style, .value = arg0, .extra = 0 }
+            else
+                .{ .kind = misc_unknown, .value = 0, .extra = 0 },
+            else => .{ .kind = misc_unknown, .value = 0, .extra = 0 },
+        };
+    }
+};
+
+const TtyWrite = struct {
+    input: []const u8,
+
+    fn chunk(self: TtyWrite) usize {
+        var index: usize = 0;
+        while (index < self.input.len and self.input[index] != '\r') {
+            index += 1;
+        }
+        return index;
+    }
+};
+
 export fn st_planmisc(mode0: c_char, mode1: c_char, arg: [*]const c_int, len: c_int) ZigMiscPlan {
     const args = arg[0..@intCast(len)];
-    const arg0 = defaultArg(args, 0, 0);
-
-    return switch (mode0) {
-        'i' => switch (arg0) {
-            0 => .{ .kind = misc_media_dump, .value = 0, .extra = 0 },
-            1 => .{ .kind = misc_media_dump_line, .value = 0, .extra = 0 },
-            2 => .{ .kind = misc_media_dump_sel, .value = 0, .extra = 0 },
-            4 => .{ .kind = misc_media_print_off, .value = 0, .extra = 0 },
-            5 => .{ .kind = misc_media_print_on, .value = 0, .extra = 0 },
-            else => .{ .kind = misc_none, .value = 0, .extra = 0 },
-        },
-        'b' => .{ .kind = misc_repeat_last, .value = countArg(args), .extra = 0 },
-        ' ' => if (mode1 == 'q')
-            .{ .kind = misc_set_cursor_style, .value = arg0, .extra = 0 }
-        else
-            .{ .kind = misc_unknown, .value = 0, .extra = 0 },
-        else => .{ .kind = misc_unknown, .value = 0, .extra = 0 },
-    };
+    return (MiscCommand{ .mode0 = mode0, .mode1 = mode1, .args = args }).plan();
 }
 
 export fn st_tdectest(c: c_char) c_int {
@@ -53,11 +75,7 @@ export fn st_ttywritecount(n: usize, limit: usize) usize {
 }
 
 export fn st_ttywritechunk(input: [*]const u8, len: usize) usize {
-    var index: usize = 0;
-    while (index < len and input[index] != '\r') {
-        index += 1;
-    }
-    return index;
+    return (TtyWrite{ .input = input[0..len] }).chunk();
 }
 
 export fn st_tprinterwrite(iofd: c_int) c_int {
