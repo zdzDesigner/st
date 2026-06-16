@@ -401,14 +401,6 @@ export fn st_planselnormalizecols(sel_type: c_int, nb_x: c_int, ne_x: c_int, nb_
     return .{ .nb_x = bounds.start.x, .nb_y = 0, .ne_x = bounds.end.x, .ne_y = 0 };
 }
 
-fn between(value: c_int, lower: c_int, upper: c_int) bool {
-    return lower <= value and value <= upper;
-}
-
-fn maxInt(a: c_int, b: c_int) c_int {
-    return if (a > b) a else b;
-}
-
 fn attrMask(attr: c_int) c_ushort {
     return @truncate(@as(c_uint, @bitCast(attr)));
 }
