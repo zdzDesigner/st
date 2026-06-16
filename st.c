@@ -817,6 +817,7 @@ selsnap(int *x, int *y, int direction)
 	int delim, prevdelim;
 	Glyph *gp, *prevgp;
 	ZigSelSnapWordPlan word_plan;
+	ZigSelSnapWordStep word_step;
 
 	switch (sel.snap) {
 	case SNAP_WORD:
@@ -837,19 +838,17 @@ selsnap(int *x, int *y, int direction)
 			    !(TLINE(word_plan.wrap_y)[word_plan.wrap_x].mode & ATTR_WRAP))
 				break;
 
-			if (st_selsnapwordpastline(newx, tlinelen(newy)))
-				break;
-
 			gp = &TLINE(newy)[newx];
 			delim = ISDELIM(gp->u);
-			if (st_selsnapwordbreak(gp->mode, delim, prevdelim,
-				gp->u, prevgp->u))
+			word_step = st_selsnapwordstep(newx, newy, tlinelen(newy),
+				gp->mode, delim, prevdelim, gp->u, prevgp->u);
+			if (word_step.action == ST_ZIG_SEL_SNAP_WORD_BREAK)
 				break;
 
-			*x = newx;
-			*y = newy;
+			*x = word_step.x;
+			*y = word_step.y;
 			prevgp = gp;
-			prevdelim = delim;
+			prevdelim = word_step.prevdelim;
 		}
 		break;
 	case SNAP_LINE:

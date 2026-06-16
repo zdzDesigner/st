@@ -328,6 +328,14 @@ typedef struct {
 } ZigSelSnapWordPlan;
 
 typedef struct {
+	int action;
+	int x;
+	int y;
+	int prevdelim;
+	uint32_t prevrune;
+} ZigSelSnapWordStep;
+
+typedef struct {
 	int start_x;
 	int last_x;
 } ZigGetSelLinePlan;
@@ -371,6 +379,11 @@ enum {
 	ST_ZIG_SEL_SCROLL_NONE = 0,
 	ST_ZIG_SEL_SCROLL_CLEAR = 1,
 	ST_ZIG_SEL_SCROLL_NORMALIZE = 2,
+};
+
+enum {
+	ST_ZIG_SEL_SNAP_WORD_BREAK = 0,
+	ST_ZIG_SEL_SNAP_WORD_ACCEPT = 1,
 };
 
 enum {
@@ -560,6 +573,7 @@ int st_selsnaplinex(int, int);
 ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
 int st_selsnapwordbreak(unsigned short, int, int, uint32_t, uint32_t);
 int st_selsnapwordpastline(int, int);
+ZigSelSnapWordStep st_selsnapwordstep(int, int, int, unsigned short, int, int, uint32_t, uint32_t);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchcurrentvalid(int, int, int);
 int st_searchhit(int, int, int, int, int, int, int, int);

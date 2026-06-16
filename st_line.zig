@@ -62,6 +62,14 @@ const ZigSelSnapWordPlan = extern struct {
     in_bounds: c_int,
 };
 
+const ZigSelSnapWordStep = extern struct {
+    action: c_int,
+    x: c_int,
+    y: c_int,
+    prevdelim: c_int,
+    prevrune: u32,
+};
+
 const ZigGetSelLinePlan = extern struct {
     start_x: c_int,
     last_x: c_int,
@@ -104,6 +112,8 @@ const sel_rectangular = 2;
 const sel_scroll_none = 0;
 const sel_scroll_clear = 1;
 const sel_scroll_normalize = 2;
+const sel_snap_word_break = 0;
+const sel_snap_word_accept = 1;
 const search_action_none = 0;
 const search_action_clear = 1;
 const search_action_set = 2;
@@ -257,6 +267,13 @@ export fn st_selsnapwordbreak(mode: c_ushort, delim: c_int, prevdelim: c_int, ru
 
 export fn st_selsnapwordpastline(x: c_int, linelen: c_int) c_int {
     return if (x >= linelen) 1 else 0;
+}
+
+export fn st_selsnapwordstep(x: c_int, y: c_int, linelen: c_int, mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) ZigSelSnapWordStep {
+    if (st_selsnapwordpastline(x, linelen) != 0 or st_selsnapwordbreak(mode, delim, prevdelim, rune, prevrune) != 0) {
+        return .{ .action = sel_snap_word_break, .x = x, .y = y, .prevdelim = prevdelim, .prevrune = prevrune };
+    }
+    return .{ .action = sel_snap_word_accept, .x = x, .y = y, .prevdelim = delim, .prevrune = rune };
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
@@ -693,6 +710,20 @@ test "selection word snap break follows delimiter state" {
     try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordbreak(0, 0, 0, 'b', 'a'));
     try std.testing.expectEqual(@as(c_int, 1), st_selsnapwordpastline(5, 5));
     try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordpastline(4, 5));
+}
+
+test "selection word snap step accepts and updates previous glyph" {
+    const step = st_selsnapwordstep(3, 2, 6, 0, 0, 0, 'b', 'a');
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_accept), step.action);
+    try std.testing.expectEqual(@as(c_int, 3), step.x);
+    try std.testing.expectEqual(@as(c_int, 2), step.y);
+    try std.testing.expectEqual(@as(c_int, 0), step.prevdelim);
+    try std.testing.expectEqual(@as(u32, 'b'), step.prevrune);
+}
+
+test "selection word snap step breaks on line end or delimiter" {
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordstep(6, 2, 6, 0, 0, 0, 'b', 'a').action);
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordstep(3, 2, 6, 0, 1, 0, ',', 'a').action);
 }
 
 test "search hit requires active matching row and x range" {
