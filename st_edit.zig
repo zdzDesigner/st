@@ -47,55 +47,116 @@ pub const edit_clear_region = 5;
 pub const edit_delete_char = 6;
 pub const edit_unknown = 7;
 
+const EditCommand = struct {
+    mode: c_char,
+    args: []const c_int,
+    x: c_int,
+    y: c_int,
+
+    fn plan(self: EditCommand) ZigEditPlan {
+        const count = defaultArg(self.args, 0, 1);
+
+        return switch (self.mode) {
+            '@' => .{ .kind = edit_insert_blank, .count = count, .rect = zeroRect() },
+            'S' => .{ .kind = edit_scroll_up, .count = count, .rect = zeroRect() },
+            'T' => .{ .kind = edit_scroll_down, .count = count, .rect = zeroRect() },
+            'L' => .{ .kind = edit_insert_blank_line, .count = count, .rect = zeroRect() },
+            'M' => .{ .kind = edit_delete_line, .count = count, .rect = zeroRect() },
+            'P' => .{ .kind = edit_delete_char, .count = count, .rect = zeroRect() },
+            'X' => .{ .kind = edit_clear_region, .count = count, .rect = .{ .x1 = self.x, .y1 = self.y, .x2 = self.x + count - 1, .y2 = self.y } },
+            else => .{ .kind = edit_unknown, .count = count, .rect = zeroRect() },
+        };
+    }
+};
+
+const TextSpan = struct {
+    x: c_int,
+    col: c_int,
+
+    fn deleteChars(self: TextSpan, n: c_int) ZigEditMove {
+        const count = limitInt(n, 0, self.col - self.x);
+        return .{
+            .dst = self.x,
+            .src = self.x + count,
+            .size = self.col - (self.x + count),
+            .clear_x1 = self.col - count,
+            .clear_x2 = self.col - 1,
+        };
+    }
+
+    fn insertBlanks(self: TextSpan, n: c_int) ZigEditMove {
+        const count = limitInt(n, 0, self.col - self.x);
+        return .{
+            .dst = self.x + count,
+            .src = self.x,
+            .size = self.col - (self.x + count),
+            .clear_x1 = self.x,
+            .clear_x2 = self.x + count - 1,
+        };
+    }
+};
+
+const LineRegion = struct {
+    top: c_int,
+    bot: c_int,
+
+    fn contains(self: LineRegion, y: c_int) bool {
+        return self.top <= y and y <= self.bot;
+    }
+
+    fn scroll(self: LineRegion, n: c_int, scr: c_int, histsize: c_int, scroll_up: bool) ZigScrollPlan {
+        const count = limitInt(n, 0, self.bot - self.top + 1);
+        const new_scr = if (scroll_up and scr > 0 and scr < histsize)
+            minInt(scr + count, histsize - 1)
+        else
+            scr;
+        return .{ .count = count, .new_scr = new_scr };
+    }
+};
+
+const KeyboardScroll = struct {
+    n: c_int,
+    row: c_int,
+    scr: c_int,
+    histsize: c_int,
+
+    fn down(self: KeyboardScroll) ZigKScrollPlan {
+        var count = if (self.n < 0) self.row + self.n else self.n;
+        if (count > self.scr) count = self.scr;
+        return if (self.scr > 0)
+            .{ .run = 1, .new_scr = self.scr - count, .delta = -count }
+        else
+            .{ .run = 0, .new_scr = self.scr, .delta = 0 };
+    }
+
+    fn up(self: KeyboardScroll) ZigKScrollPlan {
+        const count = if (self.n < 0) self.row + self.n else self.n;
+        return if (self.scr <= self.histsize - count)
+            .{ .run = 1, .new_scr = self.scr + count, .delta = count }
+        else
+            .{ .run = 0, .new_scr = self.scr, .delta = 0 };
+    }
+};
+
 export fn st_planedit(mode: c_char, arg: [*]const c_int, len: c_int, x: c_int, y: c_int) ZigEditPlan {
     const args = arg[0..@intCast(len)];
-    const count = defaultArg(args, 0, 1);
-
-    return switch (mode) {
-        '@' => .{ .kind = edit_insert_blank, .count = count, .rect = zeroRect() },
-        'S' => .{ .kind = edit_scroll_up, .count = count, .rect = zeroRect() },
-        'T' => .{ .kind = edit_scroll_down, .count = count, .rect = zeroRect() },
-        'L' => .{ .kind = edit_insert_blank_line, .count = count, .rect = zeroRect() },
-        'M' => .{ .kind = edit_delete_line, .count = count, .rect = zeroRect() },
-        'P' => .{ .kind = edit_delete_char, .count = count, .rect = zeroRect() },
-        'X' => .{ .kind = edit_clear_region, .count = count, .rect = .{ .x1 = x, .y1 = y, .x2 = x + count - 1, .y2 = y } },
-        else => .{ .kind = edit_unknown, .count = count, .rect = zeroRect() },
-    };
+    return (EditCommand{ .mode = mode, .args = args, .x = x, .y = y }).plan();
 }
 
 export fn st_tdeletechar(n: c_int, x: c_int, col: c_int) ZigEditMove {
-    const count = limitInt(n, 0, col - x);
-    return .{
-        .dst = x,
-        .src = x + count,
-        .size = col - (x + count),
-        .clear_x1 = col - count,
-        .clear_x2 = col - 1,
-    };
+    return (TextSpan{ .x = x, .col = col }).deleteChars(n);
 }
 
 export fn st_tinsertblank(n: c_int, x: c_int, col: c_int) ZigEditMove {
-    const count = limitInt(n, 0, col - x);
-    return .{
-        .dst = x + count,
-        .src = x,
-        .size = col - (x + count),
-        .clear_x1 = x,
-        .clear_x2 = x + count - 1,
-    };
+    return (TextSpan{ .x = x, .col = col }).insertBlanks(n);
 }
 
 export fn st_tlineinregion(y: c_int, top: c_int, bot: c_int) c_int {
-    return if (top <= y and y <= bot) 1 else 0;
+    return if ((LineRegion{ .top = top, .bot = bot }).contains(y)) 1 else 0;
 }
 
 export fn st_tscrollplan(n: c_int, orig: c_int, bot: c_int, scr: c_int, histsize: c_int, scroll_up: c_int) ZigScrollPlan {
-    const count = limitInt(n, 0, bot - orig + 1);
-    const new_scr = if (scroll_up != 0 and scr > 0 and scr < histsize)
-        minInt(scr + count, histsize - 1)
-    else
-        scr;
-    return .{ .count = count, .new_scr = new_scr };
+    return (LineRegion{ .top = orig, .bot = bot }).scroll(n, scr, histsize, scroll_up != 0);
 }
 
 export fn st_tscrollselplan(scr: c_int) c_int {
@@ -103,20 +164,11 @@ export fn st_tscrollselplan(scr: c_int) c_int {
 }
 
 export fn st_kscrolldownplan(n: c_int, row: c_int, scr: c_int) ZigKScrollPlan {
-    var count = if (n < 0) row + n else n;
-    if (count > scr) count = scr;
-    return if (scr > 0)
-        .{ .run = 1, .new_scr = scr - count, .delta = -count }
-    else
-        .{ .run = 0, .new_scr = scr, .delta = 0 };
+    return (KeyboardScroll{ .n = n, .row = row, .scr = scr, .histsize = 0 }).down();
 }
 
 export fn st_kscrollupplan(n: c_int, row: c_int, scr: c_int, histsize: c_int) ZigKScrollPlan {
-    const count = if (n < 0) row + n else n;
-    return if (scr <= histsize - count)
-        .{ .run = 1, .new_scr = scr + count, .delta = count }
-    else
-        .{ .run = 0, .new_scr = scr, .delta = 0 };
+    return (KeyboardScroll{ .n = n, .row = row, .scr = scr, .histsize = histsize }).up();
 }
 
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
