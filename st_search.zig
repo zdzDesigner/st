@@ -196,6 +196,8 @@ pub fn LineMatcher(comptime Glyph: type) type {
         const Self = @This();
 
         pub fn match(self: Self, x: i32, query: []const u32) i32 {
+            if (x < 0 or x >= self.linelen or x >= self.cols or self.line.len == 0) return 0;
+
             if (model.hasWideDummy(self.line[@intCast(x)].mode)) return 0;
 
             var pos = x;
@@ -343,6 +345,16 @@ test "search hit and line match scan glyphs" {
     try std.testing.expect(!hit(true, 2, 2, 4, 4, 9, 5, 3));
     try std.testing.expectEqual(@as(i32, 4), lineMatch(Glyph, &line, 0, line.len, &query, line.len));
     try std.testing.expectEqual(@as(i32, 0), lineMatch(Glyph, &line, 1, line.len, &query, line.len));
+}
+
+test "search line matcher rejects out of range starts" {
+    const Glyph = struct { u: u32, mode: u16 };
+    const line = [_]Glyph{.{ .u = '中', .mode = 0 }};
+    const query = [_]u32{'中'};
+
+    try std.testing.expectEqual(@as(i32, 0), lineMatch(Glyph, &line, -1, line.len, &query, line.len));
+    try std.testing.expectEqual(@as(i32, 0), lineMatch(Glyph, &line, 1, line.len, &query, line.len));
+    try std.testing.expectEqual(@as(i32, 0), lineMatch(Glyph, &line, 0, 0, &query, line.len));
 }
 
 test "search current and step plans handle bounds" {

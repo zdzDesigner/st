@@ -35,6 +35,8 @@ pub fn Line(comptime Glyph: type) type {
         const Self = @This();
 
         pub fn length(self: Self) i32 {
+            if (self.cols <= 0 or self.glyphs.len == 0) return 0;
+
             var end = self.cols;
 
             if (model.hasWrap(self.glyphs[@intCast(end - 1)].mode)) return end;
@@ -47,6 +49,8 @@ pub fn Line(comptime Glyph: type) type {
         }
 
         pub fn hasAttr(self: Self, mask: u16) bool {
+            if (self.cols <= 1 or self.glyphs.len == 0) return false;
+
             var x: i32 = 0;
             while (x < self.cols - 1) : (x += 1) {
                 if ((self.glyphs[@intCast(x)].mode & mask) != 0) return true;
@@ -61,6 +65,8 @@ pub const TabStops = struct {
     cols: i32,
 
     pub fn target(self: TabStops, x: i32, count: i32) i32 {
+        if (self.cols <= 0) return 0;
+
         var next_x = x;
 
         if (count > 0) {
@@ -191,6 +197,17 @@ test "line core trims spaces and preserves wraps" {
 
     try std.testing.expectEqual(@as(i32, 2), lineLen(Glyph, &plain, plain.len));
     try std.testing.expectEqual(@as(i32, 2), lineLen(Glyph, &wrapped, wrapped.len));
+}
+
+test "line core handles empty and narrow lines" {
+    const Glyph = struct { u: u32, mode: u16 };
+    const empty = [_]Glyph{};
+    const narrow = [_]Glyph{.{ .u = '中', .mode = 1 << 3 }};
+
+    try std.testing.expectEqual(@as(i32, 0), lineLen(Glyph, &empty, 0));
+    try std.testing.expect(!(Line(Glyph){ .glyphs = &empty, .cols = 0 }).hasAttr(1 << 3));
+    try std.testing.expect(!(Line(Glyph){ .glyphs = &narrow, .cols = 1 }).hasAttr(1 << 3));
+    try std.testing.expectEqual(@as(i32, 0), (TabStops{ .stops = &.{}, .cols = 0 }).target(3, 1));
 }
 
 test "line core tab movement and ranges" {

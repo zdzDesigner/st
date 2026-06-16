@@ -25,10 +25,11 @@ pub const Bounds = struct {
 
     pub fn contains(self: Bounds, point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType) bool {
         if (!active or !alt_matches) return false;
+        const ordered = normalize(selection_type, self.start, self.end);
 
         return switch (selection_type) {
-            .rectangular => between(point.y, self.start.y, self.end.y) and between(point.x, self.start.x, self.end.x),
-            .regular => between(point.y, self.start.y, self.end.y) and (point.y != self.start.y or point.x >= self.start.x) and (point.y != self.end.y or point.x <= self.end.x),
+            .rectangular => between(point.y, ordered.start.y, ordered.end.y) and between(point.x, ordered.start.x, ordered.end.x),
+            .regular => between(point.y, ordered.start.y, ordered.end.y) and (point.y != ordered.start.y or point.x >= ordered.start.x) and (point.y != ordered.end.y or point.x <= ordered.end.x),
         };
     }
 
@@ -152,10 +153,14 @@ pub fn scrollPlan(origin_x: i32, origin_y: i32, extent_y: i32, bounds: Bounds, s
 
 pub fn extendPlan(old_point: model.Point, old_type: SelectionType, old_bounds: Bounds, new_point: model.Point, new_type: SelectionType, new_bounds: Bounds, old_mode: SelectionMode, done: bool) ExtendPlan {
     const dirty = old_point.y != new_point.y or old_point.x != new_point.x or old_type != new_type or old_mode == .empty;
+    const old_top = minInt(old_bounds.start.y, old_bounds.end.y);
+    const old_bot = maxInt(old_bounds.start.y, old_bounds.end.y);
+    const new_top = minInt(new_bounds.start.y, new_bounds.end.y);
+    const new_bot = maxInt(new_bounds.start.y, new_bounds.end.y);
     return .{
         .dirty = dirty,
-        .top = minInt(new_bounds.start.y, old_bounds.start.y),
-        .bot = maxInt(new_bounds.end.y, old_bounds.end.y),
+        .top = minInt(new_top, old_top),
+        .bot = maxInt(new_bot, old_bot),
         .mode = if (done) .idle else .ready,
     };
 }
@@ -299,6 +304,15 @@ test "selection extend plan reports dirty range and final mode" {
     try std.testing.expectEqual(SelectionMode.idle, done.mode);
 }
 
+test "selection extend plan accepts unnormalized bounds" {
+    const old_bounds = Bounds{ .start = .{ .x = 0, .y = 8 }, .end = .{ .x = 0, .y = 3 } };
+    const new_bounds = Bounds{ .start = .{ .x = 0, .y = 6 }, .end = .{ .x = 0, .y = 1 } };
+    const plan = extendPlan(.{ .x = 0, .y = 8 }, .regular, old_bounds, .{ .x = 0, .y = 6 }, .regular, new_bounds, .ready, false);
+
+    try std.testing.expectEqual(@as(i32, 1), plan.top);
+    try std.testing.expectEqual(@as(i32, 8), plan.bot);
+}
+
 test "selection normalize keeps multiline edge columns" {
     const bounds = normalize(.regular, .{ .x = 7, .y = 4 }, .{ .x = 2, .y = 9 });
     try std.testing.expectEqual(model.Point{ .x = 7, .y = 4 }, bounds.start);
@@ -344,6 +358,13 @@ test "selection hit test handles regular and rectangular bounds" {
     try std.testing.expect(isSelected(.{ .x = 8, .y = 2 }, true, true, .regular, bounds));
     try std.testing.expect(!isSelected(.{ .x = 1, .y = 1 }, true, true, .regular, bounds));
     try std.testing.expect(!isSelected(.{ .x = 4, .y = 3 }, false, true, .rectangular, bounds));
+}
+
+test "selection hit test accepts unnormalized bounds" {
+    const bounds = Bounds{ .start = .{ .x = 5, .y = 4 }, .end = .{ .x = 2, .y = 1 } };
+
+    try std.testing.expect(isSelected(.{ .x = 4, .y = 3 }, true, true, .rectangular, bounds));
+    try std.testing.expect(isSelected(.{ .x = 8, .y = 2 }, true, true, .regular, bounds));
 }
 
 test "snap word step accepts and stops" {
