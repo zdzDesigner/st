@@ -69,6 +69,14 @@ export fn st_planstrhandle(seq_type: c_char, narg: c_int, par: c_int) ZigStrHand
     };
 }
 
+export fn st_strclipboardrun(narg: c_int, allow_window_ops: c_int) c_int {
+    return if (narg > 2 and allow_window_ops != 0) 1 else 0;
+}
+
+export fn st_strhasarg(narg: c_int, index: c_int) c_int {
+    return if (narg > index) 1 else 0;
+}
+
 test "tstrsequence maps C1 controls to string types" {
     try std.testing.expectEqual(@as(u8, 'P'), st_tstrsequence(0x90, 0).seq_type);
     try std.testing.expectEqual(@as(u8, '_'), st_tstrsequence(0x9f, 0).seq_type);
@@ -96,6 +104,17 @@ test "osc 1 without payload is ignored" {
 test "osc 52 maps to clipboard action" {
     const plan = st_planstrhandle(']', 3, 52);
     try std.testing.expectEqual(@as(c_int, str_plan_osc_52), plan.kind);
+}
+
+test "osc clipboard action requires payload and permission" {
+    try std.testing.expectEqual(@as(c_int, 1), st_strclipboardrun(3, 1));
+    try std.testing.expectEqual(@as(c_int, 0), st_strclipboardrun(2, 1));
+    try std.testing.expectEqual(@as(c_int, 0), st_strclipboardrun(3, 0));
+}
+
+test "string argument presence checks index" {
+    try std.testing.expectEqual(@as(c_int, 1), st_strhasarg(2, 1));
+    try std.testing.expectEqual(@as(c_int, 0), st_strhasarg(1, 1));
 }
 
 test "osc 4 with enough args maps to color set" {

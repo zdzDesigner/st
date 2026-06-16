@@ -2018,7 +2018,7 @@ strhandle(void)
 	case 5:
 		return;
 	case 0:
-		if (narg > 2 && allowwindowops) {
+		if (st_strclipboardrun(narg, allowwindowops)) {
 			dec = base64dec(strescseq.args[2]);
 			if (dec) {
 				xsetsel(dec);
@@ -2030,7 +2030,7 @@ strhandle(void)
 		return;
 	case 7:
 		p = strescseq.args[2];
-		j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+		j = st_strhasarg(narg, 1) ? atoi(strescseq.args[1]) : -1;
 		if (xsetcolorname(j, p)) {
 			fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
 			        j, p ? p : "(null)");
@@ -2039,9 +2039,9 @@ strhandle(void)
 		}
 		return;
 	case 8:
-		j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+		j = st_strhasarg(narg, 1) ? atoi(strescseq.args[1]) : -1;
 		if (xsetcolorname(j, p)) {
-			if (narg <= 1)
+			if (!st_strhasarg(narg, 1))
 				return;
 			fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
 			        j, p ? p : "(null)");

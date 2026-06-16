@@ -521,6 +521,8 @@ int st_tsetmodeswap(int, int);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrSequence st_tstrsequence(unsigned char, int);
 ZigStrHandlePlan st_planstrhandle(char, int, int);
+int st_strclipboardrun(int, int);
+int st_strhasarg(int, int);
 ZigEscExec st_tescexec(unsigned char, int *, int *, int *, int *, int);
 ZigControlExec st_tcontrolexec(unsigned char, int *, int *, int *, int);
 ZigPutcDecode st_putcdecode(uint32_t, int);
