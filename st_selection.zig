@@ -11,6 +11,16 @@ pub const SnapPrev = struct {
     rune: model.Rune,
 };
 
+pub const Bounds = struct {
+    start: model.Point,
+    end: model.Point,
+};
+
+pub const SelectionType = enum(i32) {
+    regular = 1,
+    rectangular = 2,
+};
+
 pub const SnapWordPlan = struct {
     point: model.Point,
     wrap_point: model.Point,
@@ -33,6 +43,15 @@ pub const SnapWordStep = union(enum) {
 
 pub fn snapLineX(direction: i32, col: i32) i32 {
     return if (direction < 0) 0 else col - 1;
+}
+
+pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection_type: SelectionType, bounds: Bounds) bool {
+    if (!active or !alt_matches) return false;
+
+    return switch (selection_type) {
+        .rectangular => between(point.y, bounds.start.y, bounds.end.y) and between(point.x, bounds.start.x, bounds.end.x),
+        .regular => between(point.y, bounds.start.y, bounds.end.y) and (point.y != bounds.start.y or point.x >= bounds.start.x) and (point.y != bounds.end.y or point.x <= bounds.end.x),
+    };
 }
 
 pub fn snapWordPlan(point: model.Point, direction: i32, size: model.Size) SnapWordPlan {
@@ -87,6 +106,15 @@ test "snap word plan handles wrapping" {
     const backward = snapWordPlan(.{ .x = 0, .y = 2 }, -1, .{ .cols = 10, .rows = 5 });
     try std.testing.expectEqual(model.Point{ .x = 9, .y = 1 }, backward.point);
     try std.testing.expectEqual(model.Point{ .x = 9, .y = 1 }, backward.wrap_point);
+}
+
+test "selection hit test handles regular and rectangular bounds" {
+    const bounds = Bounds{ .start = .{ .x = 2, .y = 1 }, .end = .{ .x = 5, .y = 4 } };
+    try std.testing.expect(isSelected(.{ .x = 4, .y = 3 }, true, true, .rectangular, bounds));
+    try std.testing.expect(!isSelected(.{ .x = 6, .y = 3 }, true, true, .rectangular, bounds));
+    try std.testing.expect(isSelected(.{ .x = 8, .y = 2 }, true, true, .regular, bounds));
+    try std.testing.expect(!isSelected(.{ .x = 1, .y = 1 }, true, true, .regular, bounds));
+    try std.testing.expect(!isSelected(.{ .x = 4, .y = 3 }, false, true, .rectangular, bounds));
 }
 
 test "snap word step accepts and stops" {

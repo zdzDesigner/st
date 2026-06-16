@@ -265,13 +265,10 @@ export fn st_selsnapwordstep(x: c_int, y: c_int, linelen: c_int, mode: c_ushort,
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
-    if (mode == sel_empty or ob_x == -1 or sel_alt != alt_screen) return 0;
-
-    if (sel_type == sel_rectangular) {
-        return if (between(y, nb_y, ne_y) and between(x, nb_x, ne_x)) 1 else 0;
-    }
-
-    return if (between(y, nb_y, ne_y) and (y != nb_y or x >= nb_x) and (y != ne_y or x <= ne_x)) 1 else 0;
+    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const bounds = selection.Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
+    const active = mode != sel_empty and ob_x != -1;
+    return if (selection.isSelected(.{ .x = x, .y = y }, active, sel_alt == alt_screen, selection_type, bounds)) 1 else 0;
 }
 
 export fn st_searchcurrentvalid(active: c_int, current: c_int, nmatches: c_int) c_int {
