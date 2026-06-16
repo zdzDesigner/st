@@ -501,6 +501,7 @@ ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 int st_tlineinregion(int, int, int);
 ZigScrollPlan st_tscrollplan(int, int, int, int, int, int);
+int st_tscrollselplan(int);
 ZigKScrollPlan st_kscrolldownplan(int, int, int);
 ZigKScrollPlan st_kscrollupplan(int, int, int, int);
 ZigLightPlan st_planlight(char, const int *, int, int, int);

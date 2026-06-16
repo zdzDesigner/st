@@ -98,6 +98,10 @@ export fn st_tscrollplan(n: c_int, orig: c_int, bot: c_int, scr: c_int, histsize
     return .{ .count = count, .new_scr = new_scr };
 }
 
+export fn st_tscrollselplan(scr: c_int) c_int {
+    return if (scr == 0) 1 else 0;
+}
+
 export fn st_kscrolldownplan(n: c_int, row: c_int, scr: c_int) ZigKScrollPlan {
     var count = if (n < 0) row + n else n;
     if (count > scr) count = scr;
@@ -192,6 +196,11 @@ test "scroll up plan advances scrollback view" {
 
     try std.testing.expectEqual(@as(c_int, 5), plan.count);
     try std.testing.expectEqual(@as(c_int, 99), plan.new_scr);
+}
+
+test "scroll selection sync only runs on live screen" {
+    try std.testing.expectEqual(@as(c_int, 1), st_tscrollselplan(0));
+    try std.testing.expectEqual(@as(c_int, 0), st_tscrollselplan(3));
 }
 
 test "keyboard scroll down clamps to current scroll" {

@@ -1399,7 +1399,7 @@ tscrolldown(int orig, int n, int copyhist)
 		term.line[i-n] = temp;
 	}
 
-	if (term.scr == 0)
+	if (st_tscrollselplan(term.scr))
 		selscroll(orig, n);
 }
 
@@ -1431,7 +1431,7 @@ tscrollup(int orig, int n, int copyhist)
 		term.line[i+n] = temp;
 	}
 
-	if (term.scr == 0)
+	if (st_tscrollselplan(term.scr))
 		selscroll(orig, -n);
 }
 
