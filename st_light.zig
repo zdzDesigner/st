@@ -21,28 +21,39 @@ pub const light_write_vtident = 4;
 pub const light_write_cursor_position = 5;
 pub const light_unknown = 6;
 
+const LightCommand = struct {
+    mode: c_char,
+    args: []const c_int,
+    x: c_int,
+    y: c_int,
+
+    fn plan(self: LightCommand) ZigLightPlan {
+        const arg0 = defaultArg(self.args, 0, 0);
+
+        return switch (self.mode) {
+            'c' => if (arg0 == 0)
+                .{ .kind = light_write_vtident, .value = 0, .x = 0, .y = 0 }
+            else
+                .{ .kind = light_none, .value = 0, .x = 0, .y = 0 },
+            'g' => switch (arg0) {
+                0 => .{ .kind = light_clear_tab_current, .value = 0, .x = 0, .y = 0 },
+                3 => .{ .kind = light_clear_tab_all, .value = 0, .x = 0, .y = 0 },
+                else => .{ .kind = light_unknown, .value = arg0, .x = 0, .y = 0 },
+            },
+            'I' => .{ .kind = light_put_tab, .value = countArg(self.args), .x = 0, .y = 0 },
+            'Z' => .{ .kind = light_put_tab, .value = -countArg(self.args), .x = 0, .y = 0 },
+            'n' => if (arg0 == 6)
+                .{ .kind = light_write_cursor_position, .value = 0, .x = self.x + 1, .y = self.y + 1 }
+            else
+                .{ .kind = light_none, .value = 0, .x = 0, .y = 0 },
+            else => .{ .kind = light_unknown, .value = 0, .x = 0, .y = 0 },
+        };
+    }
+};
+
 export fn st_planlight(mode: c_char, arg: [*]const c_int, len: c_int, x: c_int, y: c_int) ZigLightPlan {
     const args = arg[0..@intCast(len)];
-    const arg0 = defaultArg(args, 0, 0);
-
-    return switch (mode) {
-        'c' => if (arg0 == 0)
-            .{ .kind = light_write_vtident, .value = 0, .x = 0, .y = 0 }
-        else
-            .{ .kind = light_none, .value = 0, .x = 0, .y = 0 },
-        'g' => switch (arg0) {
-            0 => .{ .kind = light_clear_tab_current, .value = 0, .x = 0, .y = 0 },
-            3 => .{ .kind = light_clear_tab_all, .value = 0, .x = 0, .y = 0 },
-            else => .{ .kind = light_unknown, .value = arg0, .x = 0, .y = 0 },
-        },
-        'I' => .{ .kind = light_put_tab, .value = countArg(args), .x = 0, .y = 0 },
-        'Z' => .{ .kind = light_put_tab, .value = -countArg(args), .x = 0, .y = 0 },
-        'n' => if (arg0 == 6)
-            .{ .kind = light_write_cursor_position, .value = 0, .x = x + 1, .y = y + 1 }
-        else
-            .{ .kind = light_none, .value = 0, .x = 0, .y = 0 },
-        else => .{ .kind = light_unknown, .value = 0, .x = 0, .y = 0 },
-    };
+    return (LightCommand{ .mode = mode, .args = args, .x = x, .y = y }).plan();
 }
 
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {

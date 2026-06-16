@@ -21,6 +21,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_cursor.zig` 通过 `CursorCommand`、`CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载 CSI 光标、移动 clamp、换行、draw cursor 和保存/恢复规划。
 - `st_erase.zig` 通过 `EraseCommand`、`ClearRect` 承载 ED/EL 清理计划和清理矩形归一化。
 - `st_mode.zig` 通过 `ModeParam`、`Utf8Selector`、`CharsetSelector`、`AltScreen` 承载 mode、UTF-8、charset 和 alternate screen 参数分类。
+- `st_light.zig` 通过 `LightCommand` 承载轻量 CSI 动作分类。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
 - `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit 和 line match 纯逻辑。
 - `st_line.zig` 作为 line、selection、search 相关 C ABI adapter。
