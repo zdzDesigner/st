@@ -22,62 +22,85 @@ pub const ZigErasePlan = extern struct {
 pub const erase_ok = 0;
 pub const erase_unknown = 1;
 
-export fn st_planerase(mode: c_char, arg0: c_int, x: c_int, y: c_int, col: c_int, row: c_int) ZigErasePlan {
-    var plan: ZigErasePlan = .{
-        .kind = erase_ok,
-        .count = 0,
-        .rects = std.mem.zeroes([2]ZigClearRect),
-    };
+const EraseCommand = struct {
+    mode: c_char,
+    arg: c_int,
+    x: c_int,
+    y: c_int,
+    col: c_int,
+    row: c_int,
 
-    switch (mode) {
-        'J' => switch (arg0) {
-            0 => {
-                addRect(&plan, x, y, col - 1, y);
-                if (y < row - 1) addRect(&plan, 0, y + 1, col - 1, row - 1);
+    fn plan(self: EraseCommand) ZigErasePlan {
+        var result: ZigErasePlan = .{
+            .kind = erase_ok,
+            .count = 0,
+            .rects = std.mem.zeroes([2]ZigClearRect),
+        };
+
+        switch (self.mode) {
+            'J' => switch (self.arg) {
+                0 => {
+                    addRect(&result, self.x, self.y, self.col - 1, self.y);
+                    if (self.y < self.row - 1) addRect(&result, 0, self.y + 1, self.col - 1, self.row - 1);
+                },
+                1 => {
+                    if (self.y > 1) addRect(&result, 0, 0, self.col - 1, self.y - 1);
+                    addRect(&result, 0, self.y, self.x, self.y);
+                },
+                2 => addRect(&result, 0, 0, self.col - 1, self.row - 1),
+                else => result.kind = erase_unknown,
             },
-            1 => {
-                if (y > 1) addRect(&plan, 0, 0, col - 1, y - 1);
-                addRect(&plan, 0, y, x, y);
+            'K' => switch (self.arg) {
+                0 => addRect(&result, self.x, self.y, self.col - 1, self.y),
+                1 => addRect(&result, 0, self.y, self.x, self.y),
+                2 => addRect(&result, 0, self.y, self.col - 1, self.y),
+                else => result.kind = erase_unknown,
             },
-            2 => addRect(&plan, 0, 0, col - 1, row - 1),
-            else => plan.kind = erase_unknown,
-        },
-        'K' => switch (arg0) {
-            0 => addRect(&plan, x, y, col - 1, y),
-            1 => addRect(&plan, 0, y, x, y),
-            2 => addRect(&plan, 0, y, col - 1, y),
-            else => plan.kind = erase_unknown,
-        },
-        else => plan.kind = erase_unknown,
+            else => result.kind = erase_unknown,
+        }
+
+        return result;
     }
+};
 
-    return plan;
+const ClearRect = struct {
+    rect: ZigClearRect,
+    maxcol: c_int,
+    row: c_int,
+
+    fn normalized(self: ClearRect) ZigClearRect {
+        var result = self.rect;
+
+        if (result.x1 > result.x2) {
+            const tmp = result.x1;
+            result.x1 = result.x2;
+            result.x2 = tmp;
+        }
+        if (result.y1 > result.y2) {
+            const tmp = result.y1;
+            result.y1 = result.y2;
+            result.y2 = tmp;
+        }
+
+        result.x1 = limitInt(result.x1, 0, self.maxcol - 1);
+        result.x2 = limitInt(result.x2, 0, self.maxcol - 1);
+        result.y1 = limitInt(result.y1, 0, self.row - 1);
+        result.y2 = limitInt(result.y2, 0, self.row - 1);
+        return result;
+    }
+};
+
+export fn st_planerase(mode: c_char, arg0: c_int, x: c_int, y: c_int, col: c_int, row: c_int) ZigErasePlan {
+    return (EraseCommand{ .mode = mode, .arg = arg0, .x = x, .y = y, .col = col, .row = row }).plan();
 }
 
 export fn st_tclearregionrect(x1: c_int, y1: c_int, x2: c_int, y2: c_int, maxcol: c_int, row: c_int) ZigClearRect {
-    var rect = ZigClearRect{
+    return (ClearRect{ .rect = .{
         .x1 = x1,
         .y1 = y1,
         .x2 = x2,
         .y2 = y2,
-    };
-
-    if (rect.x1 > rect.x2) {
-        const tmp = rect.x1;
-        rect.x1 = rect.x2;
-        rect.x2 = tmp;
-    }
-    if (rect.y1 > rect.y2) {
-        const tmp = rect.y1;
-        rect.y1 = rect.y2;
-        rect.y2 = tmp;
-    }
-
-    rect.x1 = limitInt(rect.x1, 0, maxcol - 1);
-    rect.x2 = limitInt(rect.x2, 0, maxcol - 1);
-    rect.y1 = limitInt(rect.y1, 0, row - 1);
-    rect.y2 = limitInt(rect.y2, 0, row - 1);
-    return rect;
+    }, .maxcol = maxcol, .row = row }).normalized();
 }
 
 fn addRect(plan: *ZigErasePlan, x1: c_int, y1: c_int, x2: c_int, y2: c_int) void {
