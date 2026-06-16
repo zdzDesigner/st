@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const line_core = @import("st_line_core.zig");
+const model = @import("term_model.zig");
 const selection = @import("st_selection.zig");
 const search = @import("st_search.zig");
 
@@ -107,23 +108,23 @@ const ZigExternalPipeLinePlan = extern struct {
     lastpos: c_int,
 };
 
-const attr_wrap: c_ushort = 1 << 8;
-const attr_wdummy: c_ushort = 1 << 10;
-const sel_regular = 1;
-const sel_empty = 1;
-const sel_rectangular = 2;
-const sel_scroll_none = 0;
-const sel_scroll_clear = 1;
-const sel_scroll_normalize = 2;
-const sel_snap_word_break = 0;
-const sel_snap_word_accept = 1;
-const search_action_none = 0;
-const search_action_clear = 1;
-const search_action_set = 2;
-const search_action_redraw = 3;
-const externalpipe_break = 0;
-const externalpipe_skip = 1;
-const externalpipe_write = 2;
+const attr_wrap = model.attr_wrap;
+const attr_wdummy = model.attr_wdummy;
+const sel_regular = @intFromEnum(selection.SelectionType.regular);
+const sel_empty = @intFromEnum(selection.SelectionMode.empty);
+const sel_rectangular = @intFromEnum(selection.SelectionType.rectangular);
+const sel_scroll_none = @intFromEnum(selection.ScrollAction.none);
+const sel_scroll_clear = @intFromEnum(selection.ScrollAction.clear);
+const sel_scroll_normalize = @intFromEnum(selection.ScrollAction.normalize);
+const sel_snap_word_break = @intFromEnum(selection.SnapWordAction.stop);
+const sel_snap_word_accept = @intFromEnum(selection.SnapWordAction.accept);
+const search_action_none = @intFromEnum(search.Action.none);
+const search_action_clear = @intFromEnum(search.Action.clear);
+const search_action_set = @intFromEnum(search.Action.set);
+const search_action_redraw = @intFromEnum(search.Action.redraw);
+const externalpipe_break = @intFromEnum(line_core.ExternalPipeLineKind.break_line);
+const externalpipe_skip = @intFromEnum(line_core.ExternalPipeLineKind.skip);
+const externalpipe_write = @intFromEnum(line_core.ExternalPipeLineKind.write);
 
 export fn st_tlinelen(line: [*]const ZigGlyph, col: c_int) c_int {
     return (line_core.Line(ZigGlyph){ .glyphs = line[0..@intCast(col)], .cols = col }).length();
