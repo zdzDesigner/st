@@ -5,6 +5,7 @@
 //! [定位]: 收敛 `csihandle(...)` 的 CUU/CUD/CUP/HVP 等 cursor 分支，以及 `tmoveto(...)` 的 clamp 主体。
 
 const std = @import("std");
+const model = @import("term_model.zig");
 
 pub const ZigCursorPlan = extern struct {
     kind: c_int,
@@ -54,74 +55,157 @@ const cursor_load = 1;
 const cursor_store_none = 0;
 const cursor_store_save = 1;
 const cursor_store_load = 2;
-const attr_wdummy: c_ushort = 1 << 10;
+const attr_wdummy = model.attr_wdummy;
+
+const CursorCommand = struct {
+    mode: c_char,
+    x: c_int,
+    y: c_int,
+    args: []const c_int,
+
+    fn plan(self: CursorCommand) ZigCursorPlan {
+        const arg0 = defaultArg(self.args, 0, 1);
+        const arg1 = defaultArg(self.args, 1, 1);
+
+        return switch (self.mode) {
+            'A' => .{ .kind = cursor_move_to, .x = self.x, .y = self.y - arg0 },
+            'B', 'e' => .{ .kind = cursor_move_to, .x = self.x, .y = self.y + arg0 },
+            'C', 'a' => .{ .kind = cursor_move_to, .x = self.x + arg0, .y = self.y },
+            'D' => .{ .kind = cursor_move_to, .x = self.x - arg0, .y = self.y },
+            'E' => .{ .kind = cursor_move_to, .x = 0, .y = self.y + arg0 },
+            'F' => .{ .kind = cursor_move_to, .x = 0, .y = self.y - arg0 },
+            'G', '`' => .{ .kind = cursor_move_to, .x = arg0 - 1, .y = self.y },
+            'H', 'f' => .{ .kind = cursor_move_to_abs, .x = arg1 - 1, .y = arg0 - 1 },
+            'd' => .{ .kind = cursor_move_to_abs, .x = self.x, .y = arg0 - 1 },
+            else => .{ .kind = cursor_unknown, .x = self.x, .y = self.y },
+        };
+    }
+};
+
+const CursorMove = struct {
+    x: c_int,
+    y: c_int,
+    state: c_int,
+    col: c_int,
+    row: c_int,
+    top: c_int,
+    bot: c_int,
+
+    fn clamp(self: CursorMove) ZigCursorMove {
+        const min_y: c_int = if ((self.state & cursor_origin) != 0) self.top else 0;
+        const max_y: c_int = if ((self.state & cursor_origin) != 0) self.bot else self.row - 1;
+
+        return .{
+            .x = limitInt(self.x, 0, self.col - 1),
+            .y = limitInt(self.y, min_y, max_y),
+            .state = self.state & ~@as(c_int, cursor_wrapnext),
+        };
+    }
+};
+
+const CursorLine = struct {
+    x: c_int,
+    y: c_int,
+    top: c_int,
+    bot: c_int,
+
+    fn newline(self: CursorLine, first_col: bool) ZigNewlinePlan {
+        return .{
+            .scroll = if (self.y == self.bot) 1 else 0,
+            .scroll_top = self.top,
+            .x = if (first_col) 0 else self.x,
+            .y = if (self.y == self.bot) self.y else self.y + 1,
+        };
+    }
+
+    fn reverseIndex(self: CursorLine) ZigNewlinePlan {
+        return .{
+            .scroll = if (self.y == self.top) 1 else 0,
+            .scroll_top = self.top,
+            .x = self.x,
+            .y = if (self.y == self.top) self.y else self.y - 1,
+        };
+    }
+};
+
+const CursorOrigin = struct {
+    state: c_int,
+    top: c_int,
+
+    fn absoluteY(self: CursorOrigin, y: c_int) c_int {
+        return y + if ((self.state & cursor_origin) != 0) self.top else 0;
+    }
+};
+
+fn DrawCursor(comptime Glyph: type) type {
+    return struct {
+        cx: c_int,
+        current_y: c_int,
+        ocx: c_int,
+        ocy: c_int,
+        col: c_int,
+        row: c_int,
+        lines: []const [*]const Glyph,
+
+        const Self = @This();
+
+        fn plan(self: Self) ZigDrawCursorPlan {
+            var result = ZigDrawCursorPlan{
+                .cx = self.cx,
+                .ocx = limitInt(self.ocx, 0, self.col - 1),
+                .ocy = limitInt(self.ocy, 0, self.row - 1),
+            };
+
+            if ((self.lines[@intCast(result.ocy)][@intCast(result.ocx)].mode & attr_wdummy) != 0) {
+                result.ocx -= 1;
+            }
+            if ((self.lines[@intCast(self.current_y)][@intCast(result.cx)].mode & attr_wdummy) != 0) {
+                result.cx -= 1;
+            }
+            return result;
+        }
+    };
+}
+
+const CursorStore = struct {
+    mode: c_int,
+    alt: bool,
+
+    fn plan(self: CursorStore) ZigCursorStorePlan {
+        return .{
+            .action = switch (self.mode) {
+                cursor_save => cursor_store_save,
+                cursor_load => cursor_store_load,
+                else => cursor_store_none,
+            },
+            .slot = if (self.alt) 1 else 0,
+        };
+    }
+};
 
 export fn st_plancursor(mode: c_char, x: c_int, y: c_int, arg: [*]const c_int, len: c_int) ZigCursorPlan {
     const args = arg[0..@intCast(len)];
-    const arg0 = defaultArg(args, 0, 1);
-    const arg1 = defaultArg(args, 1, 1);
-
-    return switch (mode) {
-        'A' => .{ .kind = cursor_move_to, .x = x, .y = y - arg0 },
-        'B', 'e' => .{ .kind = cursor_move_to, .x = x, .y = y + arg0 },
-        'C', 'a' => .{ .kind = cursor_move_to, .x = x + arg0, .y = y },
-        'D' => .{ .kind = cursor_move_to, .x = x - arg0, .y = y },
-        'E' => .{ .kind = cursor_move_to, .x = 0, .y = y + arg0 },
-        'F' => .{ .kind = cursor_move_to, .x = 0, .y = y - arg0 },
-        'G', '`' => .{ .kind = cursor_move_to, .x = arg0 - 1, .y = y },
-        'H', 'f' => .{ .kind = cursor_move_to_abs, .x = arg1 - 1, .y = arg0 - 1 },
-        'd' => .{ .kind = cursor_move_to_abs, .x = x, .y = arg0 - 1 },
-        else => .{ .kind = cursor_unknown, .x = x, .y = y },
-    };
+    return (CursorCommand{ .mode = mode, .x = x, .y = y, .args = args }).plan();
 }
 
 export fn st_tmoveto(x: c_int, y: c_int, state: c_int, col: c_int, row: c_int, top: c_int, bot: c_int) ZigCursorMove {
-    const min_y: c_int = if ((state & cursor_origin) != 0) top else 0;
-    const max_y: c_int = if ((state & cursor_origin) != 0) bot else row - 1;
-
-    return .{
-        .x = limitInt(x, 0, col - 1),
-        .y = limitInt(y, min_y, max_y),
-        .state = state & ~@as(c_int, cursor_wrapnext),
-    };
+    return (CursorMove{ .x = x, .y = y, .state = state, .col = col, .row = row, .top = top, .bot = bot }).clamp();
 }
 
 export fn st_tnewline(first_col: c_int, x: c_int, y: c_int, top: c_int, bot: c_int) ZigNewlinePlan {
-    return .{
-        .scroll = if (y == bot) 1 else 0,
-        .scroll_top = top,
-        .x = if (first_col != 0) 0 else x,
-        .y = if (y == bot) y else y + 1,
-    };
+    return (CursorLine{ .x = x, .y = y, .top = top, .bot = bot }).newline(first_col != 0);
 }
 
 export fn st_treverseindex(x: c_int, y: c_int, top: c_int) ZigNewlinePlan {
-    return .{
-        .scroll = if (y == top) 1 else 0,
-        .scroll_top = top,
-        .x = x,
-        .y = if (y == top) y else y - 1,
-    };
+    return (CursorLine{ .x = x, .y = y, .top = top, .bot = top }).reverseIndex();
 }
 
 export fn st_tmoveato_y(y: c_int, state: c_int, top: c_int) c_int {
-    return y + if ((state & cursor_origin) != 0) top else 0;
+    return (CursorOrigin{ .state = state, .top = top }).absoluteY(y);
 }
 
 export fn st_drawcursorplan(cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawCursorPlan {
-    var plan = ZigDrawCursorPlan{
-        .cx = cx,
-        .ocx = limitInt(ocx, 0, col - 1),
-        .ocy = limitInt(ocy, 0, row - 1),
-    };
-
-    if ((lines[@intCast(plan.ocy)][@intCast(plan.ocx)].mode & attr_wdummy) != 0) {
-        plan.ocx -= 1;
-    }
-    if ((lines[@intCast(current_y)][@intCast(plan.cx)].mode & attr_wdummy) != 0) {
-        plan.cx -= 1;
-    }
-    return plan;
+    return (DrawCursor(ZigGlyph){ .cx = cx, .current_y = current_y, .ocx = ocx, .ocy = ocy, .col = col, .row = row, .lines = lines[0..@intCast(row)] }).plan();
 }
 
 export fn st_drawregionline(dirty: c_int) c_int {
@@ -137,14 +221,7 @@ export fn st_drawcursoractive(scr: c_int) c_int {
 }
 
 export fn st_tcursorplan(mode: c_int, alt: c_int) ZigCursorStorePlan {
-    return .{
-        .action = switch (mode) {
-            cursor_save => cursor_store_save,
-            cursor_load => cursor_store_load,
-            else => cursor_store_none,
-        },
-        .slot = if (alt != 0) 1 else 0,
-    };
+    return (CursorStore{ .mode = mode, .alt = alt != 0 }).plan();
 }
 
 export fn st_tsetmodecursor(set: c_int) c_int {
