@@ -53,6 +53,15 @@ const ZigSelStartPlan = extern struct {
     final_mode: c_int,
 };
 
+const ZigSelSnapWordPlan = extern struct {
+    x: c_int,
+    y: c_int,
+    wrap_x: c_int,
+    wrap_y: c_int,
+    wrapped: c_int,
+    in_bounds: c_int,
+};
+
 const ZigGetSelLinePlan = extern struct {
     start_x: c_int,
     last_x: c_int,
@@ -213,6 +222,30 @@ export fn st_selstartplan(col: c_int, row: c_int, snap: c_int, alt_screen: c_int
 
 export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
     return if (direction < 0) 0 else col - 1;
+}
+
+export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int) ZigSelSnapWordPlan {
+    var next_x = x + direction;
+    var next_y = y;
+    var wrapped: c_int = 0;
+
+    if (!between(next_x, 0, col - 1)) {
+        next_y += direction;
+        next_x = @mod(next_x + col, col);
+        wrapped = 1;
+        if (!between(next_y, 0, row - 1)) {
+            return .{ .x = next_x, .y = next_y, .wrap_x = next_x, .wrap_y = next_y, .wrapped = wrapped, .in_bounds = 0 };
+        }
+    }
+
+    return .{
+        .x = next_x,
+        .y = next_y,
+        .wrap_x = if (direction > 0) x else next_x,
+        .wrap_y = if (direction > 0) y else next_y,
+        .wrapped = wrapped,
+        .in_bounds = 1,
+    };
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
@@ -618,6 +651,28 @@ test "selection start plan initializes regular selection" {
 test "selection line snap x chooses edge by direction" {
     try std.testing.expectEqual(@as(c_int, 0), st_selsnaplinex(-1, 10));
     try std.testing.expectEqual(@as(c_int, 9), st_selsnaplinex(1, 10));
+}
+
+test "selection word snap plans wrapped coordinates" {
+    const forward = st_selsnapwordplan(9, 2, 1, 10, 5);
+    try std.testing.expectEqual(@as(c_int, 0), forward.x);
+    try std.testing.expectEqual(@as(c_int, 3), forward.y);
+    try std.testing.expectEqual(@as(c_int, 9), forward.wrap_x);
+    try std.testing.expectEqual(@as(c_int, 2), forward.wrap_y);
+    try std.testing.expectEqual(@as(c_int, 1), forward.wrapped);
+    try std.testing.expectEqual(@as(c_int, 1), forward.in_bounds);
+
+    const backward = st_selsnapwordplan(0, 2, -1, 10, 5);
+    try std.testing.expectEqual(@as(c_int, 9), backward.x);
+    try std.testing.expectEqual(@as(c_int, 1), backward.y);
+    try std.testing.expectEqual(@as(c_int, 9), backward.wrap_x);
+    try std.testing.expectEqual(@as(c_int, 1), backward.wrap_y);
+    try std.testing.expectEqual(@as(c_int, 1), backward.wrapped);
+}
+
+test "selection word snap reports row overflow" {
+    const plan = st_selsnapwordplan(0, 0, -1, 10, 5);
+    try std.testing.expectEqual(@as(c_int, 0), plan.in_bounds);
 }
 
 test "search hit requires active matching row and x range" {

@@ -813,9 +813,10 @@ searchjump(void)
 void
 selsnap(int *x, int *y, int direction)
 {
-	int newx, newy, xt, yt;
+	int newx, newy;
 	int delim, prevdelim;
 	Glyph *gp, *prevgp;
+	ZigSelSnapWordPlan word_plan;
 
 	switch (sel.snap) {
 	case SNAP_WORD:
@@ -826,21 +827,15 @@ selsnap(int *x, int *y, int direction)
 		prevgp = &TLINE(*y)[*x];
 		prevdelim = ISDELIM(prevgp->u);
 		for (;;) {
-			newx = *x + direction;
-			newy = *y;
-			if (!BETWEEN(newx, 0, term.col - 1)) {
-				newy += direction;
-				newx = (newx + term.col) % term.col;
-				if (!BETWEEN(newy, 0, term.row - 1))
-					break;
-
-				if (direction > 0)
-					yt = *y, xt = *x;
-				else
-					yt = newy, xt = newx;
-				if (!(TLINE(yt)[xt].mode & ATTR_WRAP))
-					break;
-			}
+			word_plan = st_selsnapwordplan(*x, *y, direction,
+				term.col, term.row);
+			newx = word_plan.x;
+			newy = word_plan.y;
+			if (!word_plan.in_bounds)
+				break;
+			if (word_plan.wrapped &&
+			    !(TLINE(word_plan.wrap_y)[word_plan.wrap_x].mode & ATTR_WRAP))
+				break;
 
 			if (newx >= tlinelen(newy))
 				break;

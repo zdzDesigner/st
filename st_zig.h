@@ -319,6 +319,15 @@ typedef struct {
 } ZigSelStartPlan;
 
 typedef struct {
+	int x;
+	int y;
+	int wrap_x;
+	int wrap_y;
+	int wrapped;
+	int in_bounds;
+} ZigSelSnapWordPlan;
+
+typedef struct {
 	int start_x;
 	int last_x;
 } ZigGetSelLinePlan;
@@ -548,6 +557,7 @@ ZigSelExtendPlan st_selextendplan(int, int, int, int, int, int, int, int, int, i
 int st_selclearplan(int);
 ZigSelStartPlan st_selstartplan(int, int, int, int);
 int st_selsnaplinex(int, int);
+ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchcurrentvalid(int, int, int);
 int st_searchhit(int, int, int, int, int, int, int, int);
