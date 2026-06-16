@@ -5,6 +5,7 @@
 //! [定位]: 替代 `tlinelen(...)`、`tlinehistlen(...)`、`tputtab(...)` 的扫描主体、`selected(...)` 的纯判断主体，以及 `selnormalize(...)` 的 bounds 计算主体。
 
 const std = @import("std");
+const selection = @import("st_selection.zig");
 
 const ZigGlyph = extern struct {
     u: u32,
@@ -231,49 +232,36 @@ export fn st_selstartplan(col: c_int, row: c_int, snap: c_int, alt_screen: c_int
 }
 
 export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
-    return if (direction < 0) 0 else col - 1;
+    return selection.snapLineX(direction, col);
 }
 
 export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int) ZigSelSnapWordPlan {
-    var next_x = x + direction;
-    var next_y = y;
-    var wrapped: c_int = 0;
-
-    if (!between(next_x, 0, col - 1)) {
-        next_y += direction;
-        next_x = @mod(next_x + col, col);
-        wrapped = 1;
-        if (!between(next_y, 0, row - 1)) {
-            return .{ .x = next_x, .y = next_y, .wrap_x = next_x, .wrap_y = next_y, .wrapped = wrapped, .in_bounds = 0 };
-        }
-    }
-
+    const plan = selection.snapWordPlan(.{ .x = x, .y = y }, direction, .{ .cols = col, .rows = row });
     return .{
-        .x = next_x,
-        .y = next_y,
-        .wrap_x = if (direction > 0) x else next_x,
-        .wrap_y = if (direction > 0) y else next_y,
-        .wrapped = wrapped,
-        .in_bounds = 1,
+        .x = plan.point.x,
+        .y = plan.point.y,
+        .wrap_x = plan.wrap_point.x,
+        .wrap_y = plan.wrap_point.y,
+        .wrapped = if (plan.wrapped) 1 else 0,
+        .in_bounds = if (plan.in_bounds) 1 else 0,
     };
 }
 
 export fn st_selsnapwordbreak(mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) c_int {
-    const dummy = (mode & attr_wdummy) != 0;
-    const delimiter_changed = delim != prevdelim;
-    const delimiter_rune_changed = delim != 0 and rune != prevrune;
-    return if (!dummy and (delimiter_changed or delimiter_rune_changed)) 1 else 0;
+    const prev = selection.SnapPrev{ .delim = prevdelim, .rune = prevrune };
+    return if (selection.snapWordBreak(mode, delim, prev, rune)) 1 else 0;
 }
 
 export fn st_selsnapwordpastline(x: c_int, linelen: c_int) c_int {
-    return if (x >= linelen) 1 else 0;
+    return if (selection.snapWordPastLine(x, linelen)) 1 else 0;
 }
 
 export fn st_selsnapwordstep(x: c_int, y: c_int, linelen: c_int, mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) ZigSelSnapWordStep {
-    if (st_selsnapwordpastline(x, linelen) != 0 or st_selsnapwordbreak(mode, delim, prevdelim, rune, prevrune) != 0) {
-        return .{ .action = sel_snap_word_break, .x = x, .y = y, .prevdelim = prevdelim, .prevrune = prevrune };
+    const step = selection.snapWordStep(.{ .x = x, .y = y }, linelen, mode, delim, .{ .delim = prevdelim, .rune = prevrune }, rune);
+    switch (step) {
+        .stop => |prev| return .{ .action = sel_snap_word_break, .x = x, .y = y, .prevdelim = prev.delim, .prevrune = prev.rune },
+        .accept => |accepted| return .{ .action = sel_snap_word_accept, .x = accepted.point.x, .y = accepted.point.y, .prevdelim = accepted.prev.delim, .prevrune = accepted.prev.rune },
     }
-    return .{ .action = sel_snap_word_accept, .x = x, .y = y, .prevdelim = delim, .prevrune = rune };
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
