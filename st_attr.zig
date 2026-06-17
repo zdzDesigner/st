@@ -34,83 +34,148 @@ const attr_struck = 1 << 7;
 const attr_error_none = 0;
 const attr_error_unknown = 1;
 
-export fn st_tsetattr(current: ZigAttrState, defaultfg: u32, defaultbg: u32, attr: [*]const c_int, len: c_int) ZigAttrUpdate {
-    var result: ZigAttrUpdate = .{
-        .state = current,
-        .error_kind = attr_error_none,
-        .error_value = 0,
-        .error_index = -1,
-        .color_error = .{
-            .idx = -1,
-            .input_npar = 0,
-            .next_npar = 0,
-            .kind = 0,
-            .r = 0,
-            .g = 0,
-            .b = 0,
-            .value = 0,
-        },
-    };
+const AttrDefaults = struct {
+    fg: u32,
+    bg: u32,
+};
 
-    const args = attr[0..@intCast(len)];
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        switch (args[i]) {
-            0 => {
-                result.state.mode &= ~@as(c_ushort, attr_bold | attr_faint | attr_italic | attr_underline | attr_blink | attr_reverse | attr_invisible | attr_struck);
-                result.state.fg = defaultfg;
-                result.state.bg = defaultbg;
+const AttrUpdate = struct {
+    result: ZigAttrUpdate,
+    defaults: AttrDefaults,
+
+    fn init(current: ZigAttrState, defaults: AttrDefaults) AttrUpdate {
+        return .{
+            .result = .{
+                .state = current,
+                .error_kind = attr_error_none,
+                .error_value = 0,
+                .error_index = -1,
+                .color_error = emptyColorError(),
             },
-            1 => result.state.mode |= attr_bold,
-            2 => result.state.mode |= attr_faint,
-            3 => result.state.mode |= attr_italic,
-            4 => result.state.mode |= attr_underline,
-            5, 6 => result.state.mode |= attr_blink,
-            7 => result.state.mode |= attr_reverse,
-            8 => result.state.mode |= attr_invisible,
-            9 => result.state.mode |= attr_struck,
-            22 => result.state.mode &= ~@as(c_ushort, attr_bold | attr_faint),
-            23 => result.state.mode &= ~@as(c_ushort, attr_italic),
-            24 => result.state.mode &= ~@as(c_ushort, attr_underline),
-            25 => result.state.mode &= ~@as(c_ushort, attr_blink),
-            27 => result.state.mode &= ~@as(c_ushort, attr_reverse),
-            28 => result.state.mode &= ~@as(c_ushort, attr_invisible),
-            29 => result.state.mode &= ~@as(c_ushort, attr_struck),
-            38 => {
-                const npar: c_int = @intCast(i);
-                const parsed = color.parseColor(args, npar);
-                result.color_error = parsed;
-                i = @intCast(parsed.next_npar);
-                if (parsed.idx >= 0) result.state.fg = @bitCast(parsed.idx);
-            },
-            39 => result.state.fg = defaultfg,
-            48 => {
-                const npar: c_int = @intCast(i);
-                const parsed = color.parseColor(args, npar);
-                result.color_error = parsed;
-                i = @intCast(parsed.next_npar);
-                if (parsed.idx >= 0) result.state.bg = @bitCast(parsed.idx);
-            },
-            49 => result.state.bg = defaultbg,
-            else => {
-                if (between(args[i], 30, 37)) {
-                    result.state.fg = @intCast(args[i] - 30);
-                } else if (between(args[i], 40, 47)) {
-                    result.state.bg = @intCast(args[i] - 40);
-                } else if (between(args[i], 90, 97)) {
-                    result.state.fg = @intCast(args[i] - 90 + 8);
-                } else if (between(args[i], 100, 107)) {
-                    result.state.bg = @intCast(args[i] - 100 + 8);
-                } else {
-                    result.error_kind = attr_error_unknown;
-                    result.error_value = args[i];
-                    result.error_index = @intCast(i);
-                }
-            },
-        }
+            .defaults = defaults,
+        };
     }
 
-    return result;
+    fn reset(self: *AttrUpdate) void {
+        self.result.state.mode &= ~@as(c_ushort, attr_bold | attr_faint | attr_italic | attr_underline | attr_blink | attr_reverse | attr_invisible | attr_struck);
+        self.result.state.fg = self.defaults.fg;
+        self.result.state.bg = self.defaults.bg;
+    }
+
+    fn setMode(self: *AttrUpdate, mask: c_ushort) void {
+        self.result.state.mode |= mask;
+    }
+
+    fn clearMode(self: *AttrUpdate, mask: c_ushort) void {
+        self.result.state.mode &= ~mask;
+    }
+
+    fn setUnknown(self: *AttrUpdate, value: c_int, index: usize) void {
+        self.result.error_kind = attr_error_unknown;
+        self.result.error_value = value;
+        self.result.error_index = @intCast(index);
+    }
+
+    fn setForeground(self: *AttrUpdate, value: u32) void {
+        self.result.state.fg = value;
+    }
+
+    fn setBackground(self: *AttrUpdate, value: u32) void {
+        self.result.state.bg = value;
+    }
+
+    fn parseForeground(self: *AttrUpdate, args: []const c_int, index: usize) usize {
+        const parsed = color.parseColor(args, @intCast(index));
+        self.result.color_error = parsed;
+        if (parsed.idx >= 0) self.setForeground(@bitCast(parsed.idx));
+        return @intCast(parsed.next_npar);
+    }
+
+    fn parseBackground(self: *AttrUpdate, args: []const c_int, index: usize) usize {
+        const parsed = color.parseColor(args, @intCast(index));
+        self.result.color_error = parsed;
+        if (parsed.idx >= 0) self.setBackground(@bitCast(parsed.idx));
+        return @intCast(parsed.next_npar);
+    }
+};
+
+const SgrParams = struct {
+    args: []const c_int,
+    defaults: AttrDefaults,
+
+    fn apply(self: SgrParams, current: ZigAttrState) ZigAttrUpdate {
+        var update = AttrUpdate.init(current, self.defaults);
+
+        var index: usize = 0;
+        while (index < self.args.len) : (index += 1) {
+            index = self.applyOne(&update, index);
+        }
+
+        return update.result;
+    }
+
+    fn applyOne(self: SgrParams, update: *AttrUpdate, index: usize) usize {
+        const value = self.args[index];
+        switch (value) {
+            0 => update.reset(),
+            1 => update.setMode(attr_bold),
+            2 => update.setMode(attr_faint),
+            3 => update.setMode(attr_italic),
+            4 => update.setMode(attr_underline),
+            5, 6 => update.setMode(attr_blink),
+            7 => update.setMode(attr_reverse),
+            8 => update.setMode(attr_invisible),
+            9 => update.setMode(attr_struck),
+            22 => update.clearMode(attr_bold | attr_faint),
+            23 => update.clearMode(attr_italic),
+            24 => update.clearMode(attr_underline),
+            25 => update.clearMode(attr_blink),
+            27 => update.clearMode(attr_reverse),
+            28 => update.clearMode(attr_invisible),
+            29 => update.clearMode(attr_struck),
+            38 => return update.parseForeground(self.args, index),
+            39 => update.setForeground(self.defaults.fg),
+            48 => return update.parseBackground(self.args, index),
+            49 => update.setBackground(self.defaults.bg),
+            else => self.applyColorAlias(update, value, index),
+        }
+        return index;
+    }
+
+    fn applyColorAlias(self: SgrParams, update: *AttrUpdate, value: c_int, index: usize) void {
+        _ = self;
+        if (between(value, 30, 37)) {
+            update.setForeground(@intCast(value - 30));
+        } else if (between(value, 40, 47)) {
+            update.setBackground(@intCast(value - 40));
+        } else if (between(value, 90, 97)) {
+            update.setForeground(@intCast(value - 90 + 8));
+        } else if (between(value, 100, 107)) {
+            update.setBackground(@intCast(value - 100 + 8));
+        } else {
+            update.setUnknown(value, index);
+        }
+    }
+};
+
+export fn st_tsetattr(current: ZigAttrState, defaultfg: u32, defaultbg: u32, attr: [*]const c_int, len: c_int) ZigAttrUpdate {
+    return (SgrParams{
+        .args = attr[0..@intCast(len)],
+        .defaults = .{ .fg = defaultfg, .bg = defaultbg },
+    }).apply(current);
+}
+
+fn emptyColorError() color.ZigColorParse {
+    return .{
+        .idx = -1,
+        .input_npar = 0,
+        .next_npar = 0,
+        .kind = 0,
+        .r = 0,
+        .g = 0,
+        .b = 0,
+        .value = 0,
+    };
 }
 
 fn between(value: c_int, lower: c_int, upper: c_int) bool {

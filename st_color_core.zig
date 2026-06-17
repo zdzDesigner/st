@@ -24,62 +24,97 @@ pub const color_bad_index = 3;
 pub const color_unknown = 4;
 
 pub fn parseColor(attr: []const c_int, npar: c_int) ZigColorParse {
-    var result: ZigColorParse = .{
-        .idx = -1,
-        .input_npar = npar,
-        .next_npar = npar,
-        .kind = color_ok,
-        .r = 0,
-        .g = 0,
-        .b = 0,
-        .value = 0,
-    };
-
-    const current: usize = @intCast(npar);
-    if (current + 1 >= attr.len) {
-        result.kind = color_unknown;
-        if (current < attr.len) result.value = attr[current];
-        return result;
-    }
-
-    switch (attr[current + 1]) {
-        2 => {
-            if (current + 4 >= attr.len) {
-                result.kind = color_bad_count;
-                return result;
-            }
-            result.r = @intCast(attr[current + 2]);
-            result.g = @intCast(attr[current + 3]);
-            result.b = @intCast(attr[current + 4]);
-            result.next_npar = npar + 4;
-            if (!between(result.r, 0, 255) or !between(result.g, 0, 255) or !between(result.b, 0, 255)) {
-                result.kind = color_bad_rgb;
-                return result;
-            }
-            result.idx = trueColor(result.r, result.g, result.b);
-            return result;
-        },
-        5 => {
-            if (current + 2 >= attr.len) {
-                result.kind = color_bad_count;
-                return result;
-            }
-            result.next_npar = npar + 2;
-            result.value = attr[@intCast(result.next_npar)];
-            if (!between(@intCast(result.value), 0, 255)) {
-                result.kind = color_bad_index;
-                return result;
-            }
-            result.idx = result.value;
-            return result;
-        },
-        else => {
-            result.kind = color_unknown;
-            result.value = attr[current];
-            return result;
-        },
-    }
+    return (ColorParams{ .args = attr }).parseAt(npar);
 }
+
+const ColorParams = struct {
+    args: []const c_int,
+
+    fn parseAt(self: ColorParams, npar: c_int) ZigColorParse {
+        var result = ColorParse.init(npar);
+        const current: usize = @intCast(npar);
+
+        if (current + 1 >= self.args.len) {
+            result.setUnknown(if (current < self.args.len) self.args[current] else 0);
+            return result.value;
+        }
+
+        return switch (self.args[current + 1]) {
+            2 => self.parseTrueColor(&result, current, npar),
+            5 => self.parseIndexed(&result, current, npar),
+            else => blk: {
+                result.setUnknown(self.args[current]);
+                break :blk result.value;
+            },
+        };
+    }
+
+    fn parseTrueColor(self: ColorParams, result: *ColorParse, current: usize, npar: c_int) ZigColorParse {
+        if (current + 4 >= self.args.len) {
+            result.setKind(color_bad_count);
+            return result.value;
+        }
+
+        result.setRgb(@intCast(self.args[current + 2]), @intCast(self.args[current + 3]), @intCast(self.args[current + 4]), npar + 4);
+        if (!between(result.value.r, 0, 255) or !between(result.value.g, 0, 255) or !between(result.value.b, 0, 255)) {
+            result.setKind(color_bad_rgb);
+            return result.value;
+        }
+
+        result.value.idx = trueColor(result.value.r, result.value.g, result.value.b);
+        return result.value;
+    }
+
+    fn parseIndexed(self: ColorParams, result: *ColorParse, current: usize, npar: c_int) ZigColorParse {
+        if (current + 2 >= self.args.len) {
+            result.setKind(color_bad_count);
+            return result.value;
+        }
+
+        result.value.next_npar = npar + 2;
+        result.value.value = self.args[@intCast(result.value.next_npar)];
+        if (!between(@intCast(result.value.value), 0, 255)) {
+            result.setKind(color_bad_index);
+            return result.value;
+        }
+
+        result.value.idx = result.value.value;
+        return result.value;
+    }
+};
+
+const ColorParse = struct {
+    value: ZigColorParse,
+
+    fn init(npar: c_int) ColorParse {
+        return .{ .value = .{
+            .idx = -1,
+            .input_npar = npar,
+            .next_npar = npar,
+            .kind = color_ok,
+            .r = 0,
+            .g = 0,
+            .b = 0,
+            .value = 0,
+        } };
+    }
+
+    fn setKind(self: *ColorParse, kind: c_int) void {
+        self.value.kind = kind;
+    }
+
+    fn setUnknown(self: *ColorParse, value: c_int) void {
+        self.value.kind = color_unknown;
+        self.value.value = value;
+    }
+
+    fn setRgb(self: *ColorParse, r: c_uint, g: c_uint, b: c_uint, next_npar: c_int) void {
+        self.value.r = r;
+        self.value.g = g;
+        self.value.b = b;
+        self.value.next_npar = next_npar;
+    }
+};
 
 fn trueColor(r: c_uint, g: c_uint, b: c_uint) i32 {
     return @bitCast(@as(u32, (1 << 24) | (r << 16) | (g << 8) | b));

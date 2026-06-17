@@ -157,110 +157,355 @@ const graphic0_map = [_]u32{
     0x2264, 0x2265, 0x03C0, 0x2260, 0x00A3, 0x00B7,
 };
 
-export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int) void {
-    const next_rune = translateRune(rune, trantbl);
-    const current_mode = line[@intCast(x)].mode;
+const GlyphLine = struct {
+    line: [*]ZigGlyph,
+    col: c_int,
+    trantbl: c_int,
 
-    if ((current_mode & attr_wide) != 0 and x + 1 < col) {
-        line[@intCast(x + 1)].u = ' ';
-        line[@intCast(x + 1)].mode &= ~attr_wdummy;
-    } else if ((current_mode & attr_wdummy) != 0 and x > 0) {
-        line[@intCast(x - 1)].u = ' ';
-        line[@intCast(x - 1)].mode &= ~attr_wide;
+    fn setChar(self: GlyphLine, rune: u32, attr: *const ZigGlyph, dirty: *c_int, x: c_int) void {
+        const next_rune = self.translateRune(rune);
+        const current_mode = self.line[@intCast(x)].mode;
+
+        if ((current_mode & attr_wide) != 0 and x + 1 < self.col) {
+            self.line[@intCast(x + 1)].u = ' ';
+            self.line[@intCast(x + 1)].mode &= ~attr_wdummy;
+        } else if ((current_mode & attr_wdummy) != 0 and x > 0) {
+            self.line[@intCast(x - 1)].u = ' ';
+            self.line[@intCast(x - 1)].mode &= ~attr_wide;
+        }
+
+        dirty.* = 1;
+        self.line[@intCast(x)] = attr.*;
+        self.line[@intCast(x)].u = next_rune;
     }
 
-    dirty.* = 1;
-    line[@intCast(x)] = attr.*;
-    line[@intCast(x)].u = next_rune;
-}
-
-export fn st_tclearglyph(line: [*]ZigGlyph, x: c_int, attr: *const ZigGlyph) void {
-    line[@intCast(x)].fg = attr.fg;
-    line[@intCast(x)].bg = attr.bg;
-    line[@intCast(x)].mode = 0;
-    line[@intCast(x)].u = ' ';
-}
-
-export fn st_tputcwrite(rune: u32, width: c_int, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int, insert_mode: c_int) ZigPutcWriteResult {
-    if (insert_mode != 0 and x + width < col) {
-        shiftRight(line, x, width, col);
+    fn clearGlyph(self: GlyphLine, x: c_int, attr: *const ZigGlyph) void {
+        self.line[@intCast(x)].fg = attr.fg;
+        self.line[@intCast(x)].bg = attr.bg;
+        self.line[@intCast(x)].mode = 0;
+        self.line[@intCast(x)].u = ' ';
     }
 
-    st_tsetchar(rune, attr, line, dirty, x, col, trantbl);
+    fn putcWrite(self: GlyphLine, rune: u32, width: c_int, attr: *const ZigGlyph, dirty: *c_int, x: c_int, insert_mode: bool) ZigPutcWriteResult {
+        if (insert_mode and x + width < self.col) {
+            self.shiftRight(x, width);
+        }
 
-    if (width == 2) {
-        line[@intCast(x)].mode |= attr_wide;
-        if (x + 1 < col) {
-            line[@intCast(x + 1)].u = 0;
-            line[@intCast(x + 1)].mode = attr_wdummy;
+        self.setChar(rune, attr, dirty, x);
+
+        if (width == 2) {
+            self.line[@intCast(x)].mode |= attr_wide;
+            if (x + 1 < self.col) {
+                self.line[@intCast(x + 1)].u = 0;
+                self.line[@intCast(x + 1)].mode = attr_wdummy;
+            }
+        }
+
+        return .{
+            .advance = if (x + width < self.col) putc_advance_move else putc_advance_wrapnext,
+            .next_x = x + width,
+        };
+    }
+
+    fn shiftRight(self: GlyphLine, x: c_int, width: c_int) void {
+        const move_count: usize = @intCast(self.col - x - width);
+        const base_x: usize = @intCast(x);
+        const gap: usize = @intCast(width);
+
+        var i = move_count;
+        while (i > 0) {
+            i -= 1;
+            self.line[base_x + gap + i] = self.line[base_x + i];
         }
     }
 
-    return .{
-        .advance = if (x + width < col) putc_advance_move else putc_advance_wrapnext,
-        .next_x = x + width,
-    };
+    fn translateRune(self: GlyphLine, rune: u32) u32 {
+        if (self.trantbl == cs_graphic0 and 0x41 <= rune and rune <= 0x7E) {
+            const mapped = graphic0_map[rune - 0x41];
+            if (mapped != 0) {
+                return mapped;
+            }
+        }
+
+        return rune;
+    }
+};
+
+const PutcPrepare = struct {
+    selected_current: bool,
+    mode_wrap: bool,
+    cursor_state: c_int,
+    x: c_int,
+    width: c_int,
+    col: c_int,
+
+    fn plan(self: PutcPrepare) ZigPutcPreparePlan {
+        return .{
+            .clear_selection = if (self.selected_current) 1 else 0,
+            .wrapnext = if (self.mode_wrap and (self.cursor_state & cursor_wrapnext) != 0) 1 else 0,
+            .overflow = if (self.x + self.width > self.col) 1 else 0,
+        };
+    }
+};
+
+const StringCollector = struct {
+    rune: u32,
+    esc: c_int,
+    buf: [*]u8,
+    len: usize,
+    chunk: [*]const u8,
+    chunk_len: usize,
+    size: usize,
+
+    fn exec(self: StringCollector) ZigStrCollectExec {
+        const next = self.plan();
+
+        if (next.kind == str_collect_finish) {
+            return .{
+                .kind = next.kind,
+                .new_esc = (self.esc & ~(esc_start | esc_str)) | esc_str_end,
+                .new_len = self.len,
+                .new_size = self.size,
+            };
+        }
+
+        if (next.kind == str_collect_abort) {
+            return .{
+                .kind = next.kind,
+                .new_esc = self.esc,
+                .new_len = self.len,
+                .new_size = self.size,
+            };
+        }
+
+        if (next.kind == str_collect_grow) {
+            return .{
+                .kind = next.kind,
+                .new_esc = self.esc,
+                .new_len = self.len,
+                .new_size = next.new_size,
+            };
+        }
+
+        @memcpy(self.buf[self.len .. self.len + @as(usize, @intCast(self.chunk_len))], self.chunk[0..@intCast(self.chunk_len)]);
+        return .{
+            .kind = next.kind,
+            .new_esc = self.esc,
+            .new_len = self.len + @as(usize, @intCast(self.chunk_len)),
+            .new_size = self.size,
+        };
+    }
+
+    fn plan(self: StringCollector) ZigStrCollectExec {
+        if (self.terminates()) {
+            return .{ .kind = str_collect_finish, .new_esc = 0, .new_len = self.len, .new_size = self.size };
+        }
+
+        if (self.len + self.chunk_len >= self.size) {
+            if (self.size > (std.math.maxInt(usize) - 4) / 2) {
+                return .{ .kind = str_collect_abort, .new_esc = 0, .new_len = self.len, .new_size = self.size };
+            }
+            return .{ .kind = str_collect_grow, .new_esc = 0, .new_len = self.len, .new_size = self.size * 2 };
+        }
+
+        return .{ .kind = str_collect_append, .new_esc = 0, .new_len = self.len, .new_size = self.size };
+    }
+
+    fn terminates(self: StringCollector) bool {
+        return self.rune == 0x07 or self.rune == 0x18 or self.rune == 0x1A or self.rune == 0x1B or (0x80 <= self.rune and self.rune <= 0x9F);
+    }
+};
+
+const EscFlow = struct {
+    esc: c_int,
+    rune: u32,
+    csi_buf: [*]u8,
+    csi_len: usize,
+    csi_cap: usize,
+
+    fn exec(self: EscFlow) ZigEscFlowExec {
+        if ((self.esc & esc_csi) != 0) {
+            self.csi_buf[self.csi_len] = @truncate(self.rune);
+            const new_len = self.csi_len + 1;
+            const handle_csi: c_int = if ((0x40 <= self.rune and self.rune <= 0x7E) or self.csi_len >= self.csi_cap - 1) 1 else 0;
+            return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .new_csi_len = new_len };
+        }
+        if ((self.esc & esc_utf8) != 0) return .{ .kind = esc_flow_utf8, .handle_csi = 0, .new_csi_len = self.csi_len };
+        if ((self.esc & esc_altcharset) != 0) return .{ .kind = esc_flow_altcharset, .handle_csi = 0, .new_csi_len = self.csi_len };
+        if ((self.esc & esc_test) != 0) return .{ .kind = esc_flow_test, .handle_csi = 0, .new_csi_len = self.csi_len };
+        if ((self.esc & esc_start) != 0) return .{ .kind = esc_flow_esc, .handle_csi = 0, .new_csi_len = self.csi_len };
+        return .{ .kind = esc_flow_none, .handle_csi = 0, .new_csi_len = self.csi_len };
+    }
+
+    fn after(kind: c_int, action_done: bool) ZigEscFlowAfter {
+        if ((kind == esc_flow_csi or kind == esc_flow_esc) and !action_done) {
+            return .{ .clear_esc = 0, .new_esc = 0, .stop = 1 };
+        }
+
+        return .{ .clear_esc = 1, .new_esc = 0, .stop = 1 };
+    }
+};
+
+const EscSequence = struct {
+    ascii: u8,
+
+    fn plan(self: EscSequence) ZigEscPlan {
+        return switch (self.ascii) {
+            '[' => .{ .kind = esc_set_csi, .value = 0, .ret = 0 },
+            '#' => .{ .kind = esc_set_test, .value = 0, .ret = 0 },
+            '%' => .{ .kind = esc_set_utf8, .value = 0, .ret = 0 },
+            'P', '_', '^', ']', 'k' => .{ .kind = esc_start_str, .value = self.ascii, .ret = 0 },
+            'n', 'o' => .{ .kind = esc_lock_shift, .value = 2 + @as(c_int, self.ascii - 'n'), .ret = 1 },
+            '(', ')', '*', '+' => .{ .kind = esc_set_altcharset, .value = @as(c_int, self.ascii - '('), .ret = 0 },
+            'D' => .{ .kind = esc_ind, .value = 0, .ret = 1 },
+            'E' => .{ .kind = esc_nel, .value = 0, .ret = 1 },
+            'H' => .{ .kind = esc_hts, .value = 0, .ret = 1 },
+            'M' => .{ .kind = esc_ri, .value = 0, .ret = 1 },
+            'Z' => .{ .kind = esc_decid, .value = 0, .ret = 1 },
+            'c' => .{ .kind = esc_ris, .value = 0, .ret = 1 },
+            '=' => .{ .kind = esc_keypad_app, .value = 0, .ret = 1 },
+            '>' => .{ .kind = esc_keypad_normal, .value = 0, .ret = 1 },
+            '7' => .{ .kind = esc_cursor_save, .value = 0, .ret = 1 },
+            '8' => .{ .kind = esc_cursor_load, .value = 0, .ret = 1 },
+            '\\' => .{ .kind = esc_st, .value = 0, .ret = 1 },
+            else => .{ .kind = esc_unknown, .value = 0, .ret = 1 },
+        };
+    }
+
+    fn exec(self: EscSequence, esc: *c_int, charset: *c_int, icharset: *c_int, tabs: [*]c_int, x: c_int) ZigEscExec {
+        const result = self.plan();
+
+        switch (result.kind) {
+            esc_set_csi => esc.* |= esc_csi,
+            esc_set_test => esc.* |= esc_test,
+            esc_set_utf8 => esc.* |= esc_utf8,
+            esc_lock_shift => charset.* = result.value,
+            esc_set_altcharset => {
+                icharset.* = result.value;
+                esc.* |= esc_altcharset;
+            },
+            esc_hts => tabs[@intCast(x)] = 1,
+            else => {},
+        }
+
+        return .{
+            .action = action(result.kind),
+            .ret = result.ret,
+        };
+    }
+
+    fn action(kind: c_int) c_int {
+        return switch (kind) {
+            esc_start_str => esc_action_start_str,
+            esc_ind => esc_action_ind,
+            esc_nel => esc_action_nel,
+            esc_ri => esc_action_ri,
+            esc_decid => esc_action_decid,
+            esc_ris => esc_action_ris,
+            esc_keypad_app => esc_action_keypad_app,
+            esc_keypad_normal => esc_action_keypad_normal,
+            esc_cursor_save => esc_action_cursor_save,
+            esc_cursor_load => esc_action_cursor_load,
+            esc_st => esc_action_st,
+            esc_unknown => esc_action_unknown,
+            else => esc_action_none,
+        };
+    }
+};
+
+const ControlSequence = struct {
+    ascii: u8,
+
+    fn plan(self: ControlSequence) ZigControlPlan {
+        return switch (self.ascii) {
+            '\t' => .{ .kind = ctl_tab, .value = 0 },
+            0x08 => .{ .kind = ctl_backspace, .value = 0 },
+            '\r' => .{ .kind = ctl_carriage_return, .value = 0 },
+            0x0c, 0x0b, '\n' => .{ .kind = ctl_linefeed, .value = 0 },
+            0x07 => .{ .kind = ctl_bell, .value = 0 },
+            '\x1b' => .{ .kind = ctl_escape, .value = 0 },
+            '\x0e', '\x0f' => .{ .kind = ctl_lock_shift, .value = 1 - @as(c_int, self.ascii - '\x0e') },
+            '\x1a' => .{ .kind = ctl_substitute, .value = 0 },
+            '\x18' => .{ .kind = ctl_cancel, .value = 0 },
+            '\x05', '\x00', '\x11', '\x13', 0x7f => .{ .kind = ctl_none, .value = 0 },
+            0x80, 0x81, 0x82, 0x83, 0x84 => .{ .kind = ctl_none, .value = 0 },
+            0x85 => .{ .kind = ctl_next_line, .value = 1 },
+            0x86, 0x87 => .{ .kind = ctl_none, .value = 0 },
+            0x88 => .{ .kind = ctl_set_tab_stop, .value = 0 },
+            0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99 => .{ .kind = ctl_none, .value = 0 },
+            0x9a => .{ .kind = ctl_decid, .value = 0 },
+            0x9b, 0x9c => .{ .kind = ctl_none, .value = 0 },
+            0x90, 0x9d, 0x9e, 0x9f => .{ .kind = ctl_start_str, .value = self.ascii },
+            else => .{ .kind = ctl_none, .value = 0 },
+        };
+    }
+
+    fn exec(self: ControlSequence, esc: *c_int, charset: *c_int, tabs: [*]c_int, x: c_int) ZigControlExec {
+        const result = self.plan();
+
+        switch (result.kind) {
+            ctl_escape => {
+                esc.* &= ~(esc_csi | esc_altcharset | esc_test);
+                esc.* |= esc_start;
+            },
+            ctl_lock_shift => charset.* = result.value,
+            ctl_set_tab_stop => tabs[@intCast(x)] = 1,
+            else => {},
+        }
+
+        return .{
+            .action = action(result.kind),
+            .clear_str = if (ControlSequence.clearsString(result.kind)) 1 else 0,
+        };
+    }
+
+    fn action(kind: c_int) c_int {
+        return switch (kind) {
+            ctl_tab => ctl_action_tab,
+            ctl_backspace => ctl_action_backspace,
+            ctl_carriage_return => ctl_action_carriage_return,
+            ctl_linefeed => ctl_action_linefeed,
+            ctl_bell => ctl_action_bell,
+            ctl_escape => ctl_action_escape,
+            ctl_substitute => ctl_action_substitute,
+            ctl_cancel => ctl_action_cancel,
+            ctl_next_line => ctl_action_next_line,
+            ctl_decid => ctl_action_decid,
+            ctl_start_str => ctl_action_start_str,
+            else => ctl_action_none,
+        };
+    }
+
+    fn clearsString(kind: c_int) bool {
+        return switch (kind) {
+            ctl_bell, ctl_substitute, ctl_cancel, ctl_next_line, ctl_set_tab_stop, ctl_decid => true,
+            else => false,
+        };
+    }
+};
+
+export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int) void {
+    (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).setChar(rune, attr, dirty, x);
+}
+
+export fn st_tclearglyph(line: [*]ZigGlyph, x: c_int, attr: *const ZigGlyph) void {
+    (GlyphLine{ .line = line, .col = x + 1, .trantbl = 0 }).clearGlyph(x, attr);
+}
+
+export fn st_tputcwrite(rune: u32, width: c_int, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int, insert_mode: c_int) ZigPutcWriteResult {
+    return (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).putcWrite(rune, width, attr, dirty, x, insert_mode != 0);
 }
 
 export fn st_tputcprepare(selected_current: c_int, mode_wrap: c_int, cursor_state: c_int, x: c_int, width: c_int, col: c_int) ZigPutcPreparePlan {
-    return .{
-        .clear_selection = if (selected_current != 0) 1 else 0,
-        .wrapnext = if (mode_wrap != 0 and (cursor_state & cursor_wrapnext) != 0) 1 else 0,
-        .overflow = if (x + width > col) 1 else 0,
-    };
+    return (PutcPrepare{ .selected_current = selected_current != 0, .mode_wrap = mode_wrap != 0, .cursor_state = cursor_state, .x = x, .width = width, .col = col }).plan();
 }
 
 export fn st_tcollectstr(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectExec {
-    const plan = planStrCollect(rune, len, chunk_len, size);
-
-    if (plan.kind == str_collect_finish) {
-        return .{
-            .kind = plan.kind,
-            .new_esc = (esc & ~(esc_start | esc_str)) | esc_str_end,
-            .new_len = len,
-            .new_size = size,
-        };
-    }
-
-    if (plan.kind == str_collect_abort) {
-        return .{
-            .kind = plan.kind,
-            .new_esc = esc,
-            .new_len = len,
-            .new_size = size,
-        };
-    }
-
-    if (plan.kind == str_collect_grow) {
-        return .{
-            .kind = plan.kind,
-            .new_esc = esc,
-            .new_len = len,
-            .new_size = plan.new_size,
-        };
-    }
-
-    @memcpy(buf[len .. len + @as(usize, @intCast(chunk_len))], chunk[0..@intCast(chunk_len)]);
-    return .{
-        .kind = plan.kind,
-        .new_esc = esc,
-        .new_len = len + @as(usize, @intCast(chunk_len)),
-        .new_size = size,
-    };
+    return (StringCollector{ .rune = rune, .esc = esc, .buf = buf, .len = len, .chunk = chunk, .chunk_len = chunk_len, .size = size }).exec();
 }
 
 export fn st_tescflow(esc: c_int, rune: u32, csi_buf: [*]u8, csi_len: usize, csi_cap: usize) ZigEscFlowExec {
-    if ((esc & esc_csi) != 0) {
-        csi_buf[csi_len] = @truncate(rune);
-        const new_len = csi_len + 1;
-        const handle_csi: c_int = if ((0x40 <= rune and rune <= 0x7E) or csi_len >= csi_cap - 1) 1 else 0;
-        return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .new_csi_len = new_len };
-    }
-    if ((esc & esc_utf8) != 0) return .{ .kind = esc_flow_utf8, .handle_csi = 0, .new_csi_len = csi_len };
-    if ((esc & esc_altcharset) != 0) return .{ .kind = esc_flow_altcharset, .handle_csi = 0, .new_csi_len = csi_len };
-    if ((esc & esc_test) != 0) return .{ .kind = esc_flow_test, .handle_csi = 0, .new_csi_len = csi_len };
-    if ((esc & esc_start) != 0) return .{ .kind = esc_flow_esc, .handle_csi = 0, .new_csi_len = csi_len };
-    return .{ .kind = esc_flow_none, .handle_csi = 0, .new_csi_len = csi_len };
+    return (EscFlow{ .esc = esc, .rune = rune, .csi_buf = csi_buf, .csi_len = csi_len, .csi_cap = csi_cap }).exec();
 }
 
 export fn st_tcontrolafter(esc: c_int) c_int {
@@ -273,183 +518,51 @@ export fn st_tcontrolfinish(esc: c_int, clear_str: c_int) c_int {
 }
 
 export fn st_tescflowafter(kind: c_int, action_done: c_int) ZigEscFlowAfter {
-    if ((kind == esc_flow_csi or kind == esc_flow_esc) and action_done == 0) {
-        return .{ .clear_esc = 0, .new_esc = 0, .stop = 1 };
-    }
-
-    return .{ .clear_esc = 1, .new_esc = 0, .stop = 1 };
+    return EscFlow.after(kind, action_done != 0);
 }
 
 fn planEsc(ascii: u8) ZigEscPlan {
-    return switch (ascii) {
-        '[' => .{ .kind = esc_set_csi, .value = 0, .ret = 0 },
-        '#' => .{ .kind = esc_set_test, .value = 0, .ret = 0 },
-        '%' => .{ .kind = esc_set_utf8, .value = 0, .ret = 0 },
-        'P', '_', '^', ']', 'k' => .{ .kind = esc_start_str, .value = ascii, .ret = 0 },
-        'n', 'o' => .{ .kind = esc_lock_shift, .value = 2 + @as(c_int, ascii - 'n'), .ret = 1 },
-        '(', ')', '*', '+' => .{ .kind = esc_set_altcharset, .value = @as(c_int, ascii - '('), .ret = 0 },
-        'D' => .{ .kind = esc_ind, .value = 0, .ret = 1 },
-        'E' => .{ .kind = esc_nel, .value = 0, .ret = 1 },
-        'H' => .{ .kind = esc_hts, .value = 0, .ret = 1 },
-        'M' => .{ .kind = esc_ri, .value = 0, .ret = 1 },
-        'Z' => .{ .kind = esc_decid, .value = 0, .ret = 1 },
-        'c' => .{ .kind = esc_ris, .value = 0, .ret = 1 },
-        '=' => .{ .kind = esc_keypad_app, .value = 0, .ret = 1 },
-        '>' => .{ .kind = esc_keypad_normal, .value = 0, .ret = 1 },
-        '7' => .{ .kind = esc_cursor_save, .value = 0, .ret = 1 },
-        '8' => .{ .kind = esc_cursor_load, .value = 0, .ret = 1 },
-        '\\' => .{ .kind = esc_st, .value = 0, .ret = 1 },
-        else => .{ .kind = esc_unknown, .value = 0, .ret = 1 },
-    };
+    return (EscSequence{ .ascii = ascii }).plan();
 }
 
 export fn st_tescexec(ascii: u8, esc: *c_int, charset: *c_int, icharset: *c_int, tabs: [*]c_int, x: c_int) ZigEscExec {
-    const plan = planEsc(ascii);
-
-    switch (plan.kind) {
-        esc_set_csi => esc.* |= esc_csi,
-        esc_set_test => esc.* |= esc_test,
-        esc_set_utf8 => esc.* |= esc_utf8,
-        esc_lock_shift => charset.* = plan.value,
-        esc_set_altcharset => {
-            icharset.* = plan.value;
-            esc.* |= esc_altcharset;
-        },
-        esc_hts => tabs[@intCast(x)] = 1,
-        else => {},
-    }
-
-    return .{
-        .action = escAction(plan.kind),
-        .ret = plan.ret,
-    };
+    return (EscSequence{ .ascii = ascii }).exec(esc, charset, icharset, tabs, x);
 }
 
 export fn st_tcontrolexec(ascii: u8, esc: *c_int, charset: *c_int, tabs: [*]c_int, x: c_int) ZigControlExec {
-    const plan = planControl(ascii);
-
-    switch (plan.kind) {
-        ctl_escape => {
-            esc.* &= ~(esc_csi | esc_altcharset | esc_test);
-            esc.* |= esc_start;
-        },
-        ctl_lock_shift => charset.* = plan.value,
-        ctl_set_tab_stop => tabs[@intCast(x)] = 1,
-        else => {},
-    }
-
-    return .{
-        .action = controlAction(plan.kind),
-        .clear_str = if (clearsString(plan.kind)) 1 else 0,
-    };
+    return (ControlSequence{ .ascii = ascii }).exec(esc, charset, tabs, x);
 }
 
 fn planControl(ascii: u8) ZigControlPlan {
-    return switch (ascii) {
-        '\t' => .{ .kind = ctl_tab, .value = 0 },
-        0x08 => .{ .kind = ctl_backspace, .value = 0 },
-        '\r' => .{ .kind = ctl_carriage_return, .value = 0 },
-        0x0c, 0x0b, '\n' => .{ .kind = ctl_linefeed, .value = 0 },
-        0x07 => .{ .kind = ctl_bell, .value = 0 },
-        '\x1b' => .{ .kind = ctl_escape, .value = 0 },
-        '\x0e', '\x0f' => .{ .kind = ctl_lock_shift, .value = 1 - @as(c_int, ascii - '\x0e') },
-        '\x1a' => .{ .kind = ctl_substitute, .value = 0 },
-        '\x18' => .{ .kind = ctl_cancel, .value = 0 },
-        '\x05', '\x00', '\x11', '\x13', 0x7f => .{ .kind = ctl_none, .value = 0 },
-        0x80, 0x81, 0x82, 0x83, 0x84 => .{ .kind = ctl_none, .value = 0 },
-        0x85 => .{ .kind = ctl_next_line, .value = 1 },
-        0x86, 0x87 => .{ .kind = ctl_none, .value = 0 },
-        0x88 => .{ .kind = ctl_set_tab_stop, .value = 0 },
-        0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99 => .{ .kind = ctl_none, .value = 0 },
-        0x9a => .{ .kind = ctl_decid, .value = 0 },
-        0x9b, 0x9c => .{ .kind = ctl_none, .value = 0 },
-        0x90, 0x9d, 0x9e, 0x9f => .{ .kind = ctl_start_str, .value = ascii },
-        else => .{ .kind = ctl_none, .value = 0 },
-    };
+    return (ControlSequence{ .ascii = ascii }).plan();
 }
 
 fn controlAction(kind: c_int) c_int {
-    return switch (kind) {
-        ctl_tab => ctl_action_tab,
-        ctl_backspace => ctl_action_backspace,
-        ctl_carriage_return => ctl_action_carriage_return,
-        ctl_linefeed => ctl_action_linefeed,
-        ctl_bell => ctl_action_bell,
-        ctl_escape => ctl_action_escape,
-        ctl_substitute => ctl_action_substitute,
-        ctl_cancel => ctl_action_cancel,
-        ctl_next_line => ctl_action_next_line,
-        ctl_decid => ctl_action_decid,
-        ctl_start_str => ctl_action_start_str,
-        else => ctl_action_none,
-    };
+    return ControlSequence.action(kind);
 }
 
 fn clearsString(kind: c_int) bool {
-    return switch (kind) {
-        ctl_bell, ctl_substitute, ctl_cancel, ctl_next_line, ctl_set_tab_stop, ctl_decid => true,
-        else => false,
-    };
+    return ControlSequence.clearsString(kind);
 }
 
 fn escAction(kind: c_int) c_int {
-    return switch (kind) {
-        esc_start_str => esc_action_start_str,
-        esc_ind => esc_action_ind,
-        esc_nel => esc_action_nel,
-        esc_ri => esc_action_ri,
-        esc_decid => esc_action_decid,
-        esc_ris => esc_action_ris,
-        esc_keypad_app => esc_action_keypad_app,
-        esc_keypad_normal => esc_action_keypad_normal,
-        esc_cursor_save => esc_action_cursor_save,
-        esc_cursor_load => esc_action_cursor_load,
-        esc_st => esc_action_st,
-        esc_unknown => esc_action_unknown,
-        else => esc_action_none,
-    };
+    return EscSequence.action(kind);
 }
 
 fn translateRune(rune: u32, trantbl: c_int) u32 {
-    if (trantbl == cs_graphic0 and 0x41 <= rune and rune <= 0x7E) {
-        const mapped = graphic0_map[rune - 0x41];
-        if (mapped != 0) {
-            return mapped;
-        }
-    }
-
-    return rune;
+    return (GlyphLine{ .line = undefined, .col = 0, .trantbl = trantbl }).translateRune(rune);
 }
 
 fn shiftRight(line: [*]ZigGlyph, x: c_int, width: c_int, col: c_int) void {
-    const move_count: usize = @intCast(col - x - width);
-    const base_x: usize = @intCast(x);
-    const gap: usize = @intCast(width);
-
-    var i = move_count;
-    while (i > 0) {
-        i -= 1;
-        line[base_x + gap + i] = line[base_x + i];
-    }
+    (GlyphLine{ .line = line, .col = col, .trantbl = 0 }).shiftRight(x, width);
 }
 
 fn planStrCollect(rune: u32, current_len: usize, chunk_len: usize, current_size: usize) ZigStrCollectExec {
-    if (terminatesString(rune)) {
-        return .{ .kind = str_collect_finish, .new_esc = 0, .new_len = current_len, .new_size = current_size };
-    }
-
-    if (current_len + chunk_len >= current_size) {
-        if (current_size > (std.math.maxInt(usize) - 4) / 2) {
-            return .{ .kind = str_collect_abort, .new_esc = 0, .new_len = current_len, .new_size = current_size };
-        }
-        return .{ .kind = str_collect_grow, .new_esc = 0, .new_len = current_len, .new_size = current_size * 2 };
-    }
-
-    return .{ .kind = str_collect_append, .new_esc = 0, .new_len = current_len, .new_size = current_size };
+    return (StringCollector{ .rune = rune, .esc = 0, .buf = undefined, .len = current_len, .chunk = undefined, .chunk_len = chunk_len, .size = current_size }).plan();
 }
 
 fn terminatesString(rune: u32) bool {
-    return rune == 0x07 or rune == 0x18 or rune == 0x1A or rune == 0x1B or (0x80 <= rune and rune <= 0x9F);
+    return (StringCollector{ .rune = rune, .esc = 0, .buf = undefined, .len = 0, .chunk = undefined, .chunk_len = 0, .size = 0 }).terminates();
 }
 
 test "tsetchar writes translated graphic rune" {

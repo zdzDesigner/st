@@ -135,17 +135,17 @@ export fn st_tputtab(x: c_int, col: c_int, n: c_int, tabs: [*]const c_int) c_int
 }
 
 export fn st_tattrset(lines: [*]const [*]const ZigGlyph, row: c_int, col: c_int, attr: c_int) c_int {
-    return if ((line_core.Lines(ZigGlyph){ .rows = lines[0..@intCast(row)], .row_count = row, .cols = col }).hasAttr(attrMask(attr))) 1 else 0;
+    return boolInt((line_core.Lines(ZigGlyph){ .rows = lines[0..@intCast(row)], .row_count = row, .cols = col }).hasAttr(attrMask(attr)));
 }
 
 export fn st_tlineattrset(line: [*]const ZigGlyph, col: c_int, attr: c_int) c_int {
-    return if ((line_core.Line(ZigGlyph){ .glyphs = line[0..@intCast(col)], .cols = col }).hasAttr(attrMask(attr))) 1 else 0;
+    return boolInt((line_core.Line(ZigGlyph){ .glyphs = line[0..@intCast(col)], .cols = col }).hasAttr(attrMask(attr)));
 }
 
 export fn st_tdumplineplan(linelen: c_int, col: c_int) ZigDumpLinePlan {
     const plan = (line_core.VisualLine{ .len = linelen, .cols = col }).dump();
     return .{
-        .write = if (plan.write) 1 else 0,
+        .write = boolInt(plan.write),
         .last = plan.last,
     };
 }
@@ -164,9 +164,9 @@ export fn st_selscrollplan(ob_x: c_int, ob_y: c_int, oe_y: c_int, nb_y: c_int, n
 }
 
 export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, old_nb_y: c_int, old_ne_y: c_int, new_oe_x: c_int, new_oe_y: c_int, new_type: c_int, new_nb_y: c_int, new_ne_y: c_int, old_mode: c_int, done: c_int) ZigSelExtendPlan {
-    const old_selection_type: selection.SelectionType = if (old_type == sel_rectangular) .rectangular else .regular;
-    const new_selection_type: selection.SelectionType = if (new_type == sel_rectangular) .rectangular else .regular;
-    const mode: selection.SelectionMode = if (old_mode == sel_empty) .empty else if (old_mode == 0) .idle else .ready;
+    const old_selection_type = selectionType(old_type);
+    const new_selection_type = selectionType(new_type);
+    const mode = selectionMode(old_mode);
     const plan = selection.extendPlan(
         .{ .x = old_oe_x, .y = old_oe_y },
         old_selection_type,
@@ -178,7 +178,7 @@ export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, ol
         done != 0,
     );
     return .{
-        .dirty = if (plan.dirty) 1 else 0,
+        .dirty = boolInt(plan.dirty),
         .top = plan.top,
         .bot = plan.bot,
         .mode = @intFromEnum(plan.mode),
@@ -186,7 +186,7 @@ export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, ol
 }
 
 export fn st_selclearplan(ob_x: c_int) c_int {
-    return if (selection.shouldClear(ob_x)) 1 else 0;
+    return boolInt(selection.shouldClear(ob_x));
 }
 
 export fn st_selstartplan(col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelStartPlan {
@@ -194,7 +194,7 @@ export fn st_selstartplan(col: c_int, row: c_int, snap: c_int, alt_screen: c_int
     return .{
         .mode = @intFromEnum(plan.mode),
         .sel_type = @intFromEnum(plan.selection_type),
-        .alt = if (plan.alt) 1 else 0,
+        .alt = boolInt(plan.alt),
         .snap = plan.snap,
         .x = plan.point.x,
         .y = plan.point.y,
@@ -213,18 +213,18 @@ export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, r
         .y = plan.point.y,
         .wrap_x = plan.wrap_point.x,
         .wrap_y = plan.wrap_point.y,
-        .wrapped = if (plan.wrapped) 1 else 0,
-        .in_bounds = if (plan.in_bounds) 1 else 0,
+        .wrapped = boolInt(plan.wrapped),
+        .in_bounds = boolInt(plan.in_bounds),
     };
 }
 
 export fn st_selsnapwordbreak(mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) c_int {
     const prev = selection.SnapPrev{ .delim = prevdelim, .rune = prevrune };
-    return if (selection.snapWordBreak(mode, delim, prev, rune)) 1 else 0;
+    return boolInt(selection.snapWordBreak(mode, delim, prev, rune));
 }
 
 export fn st_selsnapwordpastline(x: c_int, linelen: c_int) c_int {
-    return if (selection.snapWordPastLine(x, linelen)) 1 else 0;
+    return boolInt(selection.snapWordPastLine(x, linelen));
 }
 
 export fn st_selsnapwordstep(x: c_int, y: c_int, linelen: c_int, mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) ZigSelSnapWordStep {
@@ -236,18 +236,18 @@ export fn st_selsnapwordstep(x: c_int, y: c_int, linelen: c_int, mode: c_ushort,
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
-    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const selection_type = selectionType(sel_type);
     const bounds = selection.Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
     const active = mode != sel_empty and ob_x != -1;
-    return if (selection.isSelected(.{ .x = x, .y = y }, active, sel_alt == alt_screen, selection_type, bounds)) 1 else 0;
+    return boolInt(selection.isSelected(.{ .x = x, .y = y }, active, sel_alt == alt_screen, selection_type, bounds));
 }
 
 export fn st_searchcurrentvalid(active: c_int, current: c_int, nmatches: c_int) c_int {
-    return if (search.currentValid(active != 0, current, nmatches)) 1 else 0;
+    return boolInt(search.currentValid(active != 0, current, nmatches));
 }
 
 export fn st_searchhit(active: c_int, match_scr: c_int, term_scr: c_int, match_y: c_int, y: c_int, x: c_int, match_x: c_int, match_len: c_int) c_int {
-    return if (search.hit(active != 0, match_scr, term_scr, match_y, y, x, match_x, match_len)) 1 else 0;
+    return boolInt(search.hit(active != 0, match_scr, term_scr, match_y, y, x, match_x, match_len));
 }
 
 export fn st_searchlinematch(line: [*]const ZigGlyph, x: c_int, linelen: c_int, query: [*]const u32, qlen: c_int, col: c_int) c_int {
@@ -265,7 +265,7 @@ export fn st_searchjumpscr(current_valid: c_int, term_scr: c_int, match_scr: c_i
 export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
     const plan = search.step(active != 0, nmatches, current, direction);
     return .{
-        .run = if (plan.run) 1 else 0,
+        .run = boolInt(plan.run),
         .current = plan.current,
     };
 }
@@ -287,36 +287,36 @@ export fn st_searchinputcap(inputlen: usize, add_len: usize, inputcap: usize) us
 }
 
 export fn st_searchinputgrow(inputlen: usize, add_len: usize, inputcap: usize) c_int {
-    return if (search.inputGrow(inputlen, add_len, inputcap)) 1 else 0;
+    return boolInt(search.inputGrow(inputlen, add_len, inputcap));
 }
 
 export fn st_searchinputplan(inputmode: c_int, len: usize) c_int {
-    return if (search.inputPlan(inputmode != 0, len)) 1 else 0;
+    return boolInt(search.inputPlan(inputmode != 0, len));
 }
 
 export fn st_searchbackspaceplan(inputmode: c_int, inputlen: usize, cursor: usize) c_int {
-    return if (search.backspacePlan(inputmode != 0, inputlen, cursor)) 1 else 0;
+    return boolInt(search.backspacePlan(inputmode != 0, inputlen, cursor));
 }
 
 export fn st_searchdeleteforwardplan(inputmode: c_int, cursor: usize, inputlen: usize) c_int {
-    return if (search.deleteForwardPlan(inputmode != 0, cursor, inputlen)) 1 else 0;
+    return boolInt(search.deleteForwardPlan(inputmode != 0, cursor, inputlen));
 }
 
 export fn st_searchdeletewordplan(inputmode: c_int, cursor: usize) c_int {
-    return if (search.deleteWordPlan(inputmode != 0, cursor)) 1 else 0;
+    return boolInt(search.deleteWordPlan(inputmode != 0, cursor));
 }
 
 export fn st_searchcursorplan(inputmode: c_int) c_int {
-    return if (search.cursorPlan(inputmode != 0)) 1 else 0;
+    return boolInt(search.cursorPlan(inputmode != 0));
 }
 
 export fn st_searchscanplan(active: c_int, qlen: c_int) c_int {
-    return if (search.scanPlan(active != 0, qlen)) 1 else 0;
+    return boolInt(search.scanPlan(active != 0, qlen));
 }
 
 export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
     const plan = search.deletePlan(start, end, inputlen);
-    return .{ .run = if (plan.run) 1 else 0, .new_len = plan.new_len };
+    return .{ .run = boolInt(plan.run), .new_len = plan.new_len };
 }
 
 export fn st_searchcommitplan(inputmode: c_int, inputlen: usize) c_int {
@@ -328,11 +328,11 @@ export fn st_searchcancelplan(inputmode: c_int) c_int {
 }
 
 export fn st_searchclearinputplan(inputmode: c_int) c_int {
-    return if (search.clearInputPlan(inputmode != 0)) 1 else 0;
+    return boolInt(search.clearInputPlan(inputmode != 0));
 }
 
 export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
-    return if (search.barActive(inputmode != 0, active != 0)) 1 else 0;
+    return boolInt(search.barActive(inputmode != 0, active != 0));
 }
 
 export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
@@ -341,16 +341,16 @@ export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLine
 }
 
 export fn st_externalpipewrap(mode: c_ushort) c_int {
-    return if (line_core.externalPipeWrap(mode)) 1 else 0;
+    return boolInt(line_core.externalPipeWrap(mode));
 }
 
 export fn st_searchpromptplan(has_input: c_int, inputcap: usize) ZigSearchPromptPlan {
     const plan = search.promptPlan(has_input != 0, inputcap);
     return .{
-        .inputmode = if (plan.inputmode) 1 else 0,
+        .inputmode = boolInt(plan.inputmode),
         .inputlen = plan.inputlen,
         .inputcursor = plan.inputcursor,
-        .alloc = if (plan.alloc) 1 else 0,
+        .alloc = boolInt(plan.alloc),
         .inputcap = plan.inputcap,
     };
 }
@@ -359,7 +359,7 @@ export fn st_searchsetplan(query_len: usize, qlen: c_int) ZigSearchSetPlan {
     const plan = search.setPlan(query_len, qlen);
     return .{
         .alloc_len = plan.alloc_len,
-        .active = if (plan.active) 1 else 0,
+        .active = boolInt(plan.active),
         .current = plan.current,
     };
 }
@@ -369,7 +369,7 @@ export fn st_searchmatchcap(nmatches: c_int, cap: c_int) c_int {
 }
 
 export fn st_getsellineplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int) ZigGetSelLinePlan {
-    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const selection_type = selectionType(sel_type);
     const plan = selection.getLinePlan(selection_type, .{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } }, y, col);
     return .{
         .start_x = plan.start_x,
@@ -386,24 +386,38 @@ export fn st_getsellastx(last_x: c_int, linelen: c_int) c_int {
 }
 
 export fn st_getselnewline(y: c_int, ne_y: c_int, last_x: c_int, linelen: c_int, last_mode: c_ushort, sel_type: c_int) c_int {
-    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
-    return if (selection.needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, last_x, linelen, last_mode, selection_type)) 1 else 0;
+    const selection_type = selectionType(sel_type);
+    return boolInt(selection.needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, last_x, linelen, last_mode, selection_type));
 }
 
 export fn st_planselnormalize(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
-    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const selection_type = selectionType(sel_type);
     const bounds = selection.normalize(selection_type, .{ .x = ob_x, .y = ob_y }, .{ .x = oe_x, .y = oe_y });
     return .{ .nb_x = bounds.start.x, .nb_y = bounds.start.y, .ne_x = bounds.end.x, .ne_y = bounds.end.y };
 }
 
 export fn st_planselnormalizecols(sel_type: c_int, nb_x: c_int, ne_x: c_int, nb_len: c_int, ne_len: c_int, col: c_int) ZigSelBounds {
-    const selection_type: selection.SelectionType = if (sel_type == sel_rectangular) .rectangular else .regular;
+    const selection_type = selectionType(sel_type);
     const bounds = selection.normalizeColumns(selection_type, .{ .start = .{ .x = nb_x, .y = 0 }, .end = .{ .x = ne_x, .y = 0 } }, nb_len, ne_len, col);
     return .{ .nb_x = bounds.start.x, .nb_y = 0, .ne_x = bounds.end.x, .ne_y = 0 };
 }
 
 fn attrMask(attr: c_int) c_ushort {
     return @truncate(@as(c_uint, @bitCast(attr)));
+}
+
+fn boolInt(value: bool) c_int {
+    return if (value) 1 else 0;
+}
+
+fn selectionType(value: c_int) selection.SelectionType {
+    return if (value == sel_rectangular) .rectangular else .regular;
+}
+
+fn selectionMode(value: c_int) selection.SelectionMode {
+    if (value == sel_empty) return .empty;
+    if (value == 0) return .idle;
+    return .ready;
 }
 
 test "line length ignores trailing spaces" {

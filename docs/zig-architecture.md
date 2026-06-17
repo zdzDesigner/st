@@ -15,6 +15,10 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 ## 当前模块
 
 - `term_model.zig` 提供 `Point`、`Size`、`Rune` 和 glyph mode 判断。
+- `st_color_core.zig` 通过 `ColorParams`、`ColorParse` 承载 SGR truecolor/indexed color 参数解析纯逻辑。
+- `st_attr.zig` 通过 `SgrParams`、`AttrUpdate` 承载 SGR 属性更新规划，是 `tsetattr(...)` 的 Zig 迁移主体。
+- `st_base64.zig` 通过 `Base64Input`、`Base64Decoder` 承载 OSC 等路径复用的 base64 解码入口。
+- `st_csi.zig` 通过 `CsiParser`、`CsiArgParser` 承载 CSI 原始字节解析和 private marker 分类。
 - `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
 - `st_state.zig` 通过 `CsiCommand`、`ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 CSI 状态、scroll region、resize、reset、tab 和 clear rect 规划。
 - `st_edit.zig` 通过 `EditCommand`、`TextSpan`、`LineRegion`、`KeyboardScroll` 承载 CSI edit、行内搬移、区域滚动和键盘滚动规划。
@@ -26,10 +30,31 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_strhandle.zig` 通过 `StringSequence`、`StringAction`、`StringArgs` 承载字符串序列启动和 OSC/DCS action 分类。
 - `st_strparse.zig` 通过 `StringParser` 承载 OSC/DCS 参数边界扫描。
 - `st_putc_decode.zig` 通过 `RuneInput`、`ControlWriter` 承载 rune 解码和控制字符显示规划。
+- `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`EscFlow`、`EscSequence`、`ControlSequence` 承载字符写入、STR 收集、ESC/control 状态执行规划。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
 - `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit 和 line match 纯逻辑。
-- `st_line.zig` 作为 line、selection、search 相关 C ABI adapter。
+- `st_line.zig` 作为 line、selection、search 相关 C ABI adapter，并集中处理 C 标量到 Zig enum/bool/value object 的薄转换。
+
+## 当前状态
+
+- 已迁移 Zig 模块的核心逻辑已按领域 `struct` 或内部值类型组织；`export fn` 主要保留为 C ABI adapter。
+- `st_line.zig`、`st_attr.zig`、`st_setchar.zig` 等 C 入口较多的文件仍允许保留 adapter helper，但新领域逻辑应继续下沉到内部类型方法。
+- `st_zig.h` 与 Zig `export fn st_*` 符号集合已核对一致；C 侧只依赖公开的 `ST_ZIG_*` 常量和 extern struct 布局。
+
+## 完成定义
+
+- 迁移目标不是完全消除 C，而是把可测试的纯决策逻辑从 `st.c` 收敛到 Zig 领域模块。
+- C 侧保留 executor 职责：全局状态写回、X11/PTY/clipboard/IO、内存所有权、`TLINE(...)` 访问和实际副作用调用。
+- Zig 侧已覆盖 UTF-8、CSI/OSC/DCS 解析、SGR 属性和颜色、光标、编辑、清屏、模式、滚动、selection、search、字符写入和 line 级计划。
+- 后续新增行为如果只依赖值参数并返回计划结果，应优先进入 Zig 内部类型；如果需要访问 C 全局状态或执行副作用，应留在 C executor。
+
+## 验证基线
+
+- 结构化迁移完成后已运行 `zig fmt` 覆盖修改过的 Zig 文件。
+- 当前基线验证命令为 `zig build test` 和 `zig build`。
+- ABI 审查命令用于核对 Zig export 与 C 头文件符号集合：`comm -3 <(rg -o '^export fn st_[A-Za-z0-9_]+' --glob '*.zig' | sed 's/.*export fn //' | sort) <(rg -o 'st_[A-Za-z0-9_]+\(' st_zig.h | sed 's/(//' | sort)`。
+- 发布或提交前仍建议按迁移规则补跑 `timeout 5 ./zig-out/bin/st` 做最小启动冒烟验证。
 
 ## 迁移规则
 
