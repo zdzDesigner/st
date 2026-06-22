@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
     const install_step = b.getInstallStep();
     const sed = requireProgram(b, "sed", "生成带版本号的 manpage");
     const tic = requireProgram(b, "tic", "编译 terminfo 数据");
+    const bash = requireProgram(b, "bash", "执行 ABI 符号集合核对命令");
     const pkg_config = b.graph.environ_map.get("PKG_CONFIG") orelse requireProgram(b, "pkg-config", "解析 X11、Xft、Fontconfig、HarfBuzz 等系统依赖");
 
     requirePkgConfigPackage(b, pkg_config, "x11", "提供 Xlib 头文件和链接参数");
@@ -305,109 +306,50 @@ pub fn build(b: *std.Build) void {
     const clean_install_step = b.step("clean-install", "Remove files installed by this project from the current prefix");
     clean_install_step.makeFn = makeCleanInstall;
 
-    const base64_tests = b.addTest(.{
-        .name = "st_base64_test",
-        .root_module = base64_module,
+    const abi_check = b.addSystemCommand(&.{
+        bash,
+        "-lc",
+        "diff -u <(rg -o '^export fn st_[A-Za-z0-9_]+' --glob '*.zig' | sed 's/.*export fn //' | sort) <(rg -o 'st_[A-Za-z0-9_]+\\(' st_zig.h | sed 's/(//' | sort)",
     });
-    const utf8_tests = b.addTest(.{
-        .name = "st_utf8_test",
-        .root_module = utf8_module,
+    const abi_check_step = b.step("abi-check", "Verify Zig export symbols match st_zig.h declarations");
+    abi_check_step.dependOn(&abi_check.step);
+
+    addZigTests(b, &.{
+        .{ .name = "st_base64_test", .module = base64_module },
+        .{ .name = "st_utf8_test", .module = utf8_module },
+        .{ .name = "st_csi_test", .module = csi_module },
+        .{ .name = "st_color_core_test", .module = color_core_module },
+        .{ .name = "st_attr_test", .module = attr_module },
+        .{ .name = "st_erase_test", .module = erase_module },
+        .{ .name = "st_cursor_test", .module = cursor_module },
+        .{ .name = "st_edit_test", .module = edit_module },
+        .{ .name = "st_light_test", .module = light_module },
+        .{ .name = "st_state_test", .module = state_module },
+        .{ .name = "st_misc_test", .module = misc_module },
+        .{ .name = "st_mode_test", .module = mode_module },
+        .{ .name = "st_strparse_test", .module = strparse_module },
+        .{ .name = "st_strhandle_test", .module = strhandle_module },
+        .{ .name = "st_putc_decode_test", .module = putc_decode_module },
+        .{ .name = "st_setchar_test", .module = setchar_module },
+        .{ .name = "st_line_test", .module = line_module },
     });
-    const csi_tests = b.addTest(.{
-        .name = "st_csi_test",
-        .root_module = csi_module,
-    });
-    const color_core_tests = b.addTest(.{
-        .name = "st_color_core_test",
-        .root_module = color_core_module,
-    });
-    const attr_tests = b.addTest(.{
-        .name = "st_attr_test",
-        .root_module = attr_module,
-    });
-    const erase_tests = b.addTest(.{
-        .name = "st_erase_test",
-        .root_module = erase_module,
-    });
-    const cursor_tests = b.addTest(.{
-        .name = "st_cursor_test",
-        .root_module = cursor_module,
-    });
-    const edit_tests = b.addTest(.{
-        .name = "st_edit_test",
-        .root_module = edit_module,
-    });
-    const light_tests = b.addTest(.{
-        .name = "st_light_test",
-        .root_module = light_module,
-    });
-    const state_tests = b.addTest(.{
-        .name = "st_state_test",
-        .root_module = state_module,
-    });
-    const misc_tests = b.addTest(.{
-        .name = "st_misc_test",
-        .root_module = misc_module,
-    });
-    const mode_tests = b.addTest(.{
-        .name = "st_mode_test",
-        .root_module = mode_module,
-    });
-    const strparse_tests = b.addTest(.{
-        .name = "st_strparse_test",
-        .root_module = strparse_module,
-    });
-    const strhandle_tests = b.addTest(.{
-        .name = "st_strhandle_test",
-        .root_module = strhandle_module,
-    });
-    const putc_decode_tests = b.addTest(.{
-        .name = "st_putc_decode_test",
-        .root_module = putc_decode_module,
-    });
-    const setchar_tests = b.addTest(.{
-        .name = "st_setchar_test",
-        .root_module = setchar_module,
-    });
-    const line_tests = b.addTest(.{
-        .name = "st_line_test",
-        .root_module = line_module,
-    });
-    const run_base64_tests = b.addRunArtifact(base64_tests);
-    const run_utf8_tests = b.addRunArtifact(utf8_tests);
-    const run_csi_tests = b.addRunArtifact(csi_tests);
-    const run_color_core_tests = b.addRunArtifact(color_core_tests);
-    const run_attr_tests = b.addRunArtifact(attr_tests);
-    const run_erase_tests = b.addRunArtifact(erase_tests);
-    const run_cursor_tests = b.addRunArtifact(cursor_tests);
-    const run_edit_tests = b.addRunArtifact(edit_tests);
-    const run_light_tests = b.addRunArtifact(light_tests);
-    const run_state_tests = b.addRunArtifact(state_tests);
-    const run_misc_tests = b.addRunArtifact(misc_tests);
-    const run_mode_tests = b.addRunArtifact(mode_tests);
-    const run_strparse_tests = b.addRunArtifact(strparse_tests);
-    const run_strhandle_tests = b.addRunArtifact(strhandle_tests);
-    const run_putc_decode_tests = b.addRunArtifact(putc_decode_tests);
-    const run_setchar_tests = b.addRunArtifact(setchar_tests);
-    const run_line_tests = b.addRunArtifact(line_tests);
+}
+
+const ZigTestModule = struct {
+    name: []const u8,
+    module: *std.Build.Module,
+};
+
+fn addZigTests(b: *std.Build, modules: []const ZigTestModule) void {
     const test_step = b.step("test", "Run Zig unit tests");
-    test_step.dependOn(&run_base64_tests.step);
-    test_step.dependOn(&run_utf8_tests.step);
-    test_step.dependOn(&run_csi_tests.step);
-    test_step.dependOn(&run_color_core_tests.step);
-    test_step.dependOn(&run_attr_tests.step);
-    test_step.dependOn(&run_erase_tests.step);
-    test_step.dependOn(&run_cursor_tests.step);
-    test_step.dependOn(&run_edit_tests.step);
-    test_step.dependOn(&run_light_tests.step);
-    test_step.dependOn(&run_state_tests.step);
-    test_step.dependOn(&run_misc_tests.step);
-    test_step.dependOn(&run_mode_tests.step);
-    test_step.dependOn(&run_strparse_tests.step);
-    test_step.dependOn(&run_strhandle_tests.step);
-    test_step.dependOn(&run_putc_decode_tests.step);
-    test_step.dependOn(&run_setchar_tests.step);
-    test_step.dependOn(&run_line_tests.step);
+    for (modules) |module| {
+        const test_artifact = b.addTest(.{
+            .name = module.name,
+            .root_module = module.module,
+        });
+        const run_test = b.addRunArtifact(test_artifact);
+        test_step.dependOn(&run_test.step);
+    }
 }
 
 fn requireProgram(b: *std.Build, name: []const u8, reason: []const u8) []const u8 {

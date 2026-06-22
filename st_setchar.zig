@@ -666,6 +666,21 @@ test "tputcwrite wraps at right edge" {
     try std.testing.expectEqual(@as(c_int, 2), result.next_x);
 }
 
+test "tputcwrite wide rune at edge does not write dummy past column" {
+    var line = [_]ZigGlyph{
+        .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const attr = ZigGlyph{ .u = 0, .mode = 3, .fg = 1, .bg = 2 };
+    var dirty: c_int = 0;
+
+    const result = st_tputcwrite('界', 2, &attr, &line, &dirty, 1, 2, 1, 0);
+
+    try std.testing.expectEqual(@as(c_ushort, 3 | attr_wide), line[1].mode);
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), result.advance);
+    try std.testing.expectEqual(@as(c_int, 3), result.next_x);
+}
+
 test "tputcprepare combines current flags" {
     const plan = st_tputcprepare(1, 1, cursor_wrapnext, 9, 2, 10);
     try std.testing.expectEqual(@as(c_int, 1), plan.clear_selection);
@@ -712,6 +727,18 @@ test "tcollectstr requests growth without appending" {
     try std.testing.expectEqual(@as(usize, 3), exec.new_len);
 }
 
+test "tcollectstr aborts when growth would overflow" {
+    var buf = [_]u8{0};
+    const chunk = [_]u8{'A'};
+    const near_limit = (std.math.maxInt(usize) - 4) / 2 + 1;
+
+    const exec = st_tcollectstr('A', esc_start | esc_str, &buf, near_limit, &chunk, chunk.len, near_limit);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_abort), exec.kind);
+    try std.testing.expectEqual(@as(usize, near_limit), exec.new_size);
+    try std.testing.expectEqual(@as(usize, near_limit), exec.new_len);
+}
+
 test "tcollectstr appends chunk after planning" {
     var buf = [_]u8{ 0, 0, 0, 0 };
     const chunk = [_]u8{'X'};
@@ -732,6 +759,17 @@ test "tescflow appends csi byte and finishes on final byte" {
     try std.testing.expectEqual(@as(c_int, 1), exec.handle_csi);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
     try std.testing.expectEqual(@as(u8, 'm'), buf[0]);
+}
+
+test "tescflow keeps collecting non final csi byte" {
+    var buf = [_]u8{ 0, 0, 0, 0 };
+
+    const exec = st_tescflow(esc_start | esc_csi, '3', &buf, 0, buf.len);
+
+    try std.testing.expectEqual(@as(c_int, esc_flow_csi), exec.kind);
+    try std.testing.expectEqual(@as(c_int, 0), exec.handle_csi);
+    try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
+    try std.testing.expectEqual(@as(u8, '3'), buf[0]);
 }
 
 test "tescflow routes utf8 state" {

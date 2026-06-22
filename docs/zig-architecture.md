@@ -41,6 +41,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 已迁移 Zig 模块的核心逻辑已按领域 `struct` 或内部值类型组织；`export fn` 主要保留为 C ABI adapter。
 - `st_line.zig`、`st_attr.zig`、`st_setchar.zig` 等 C 入口较多的文件仍允许保留 adapter helper，但新领域逻辑应继续下沉到内部类型方法。
 - `st_zig.h` 与 Zig `export fn st_*` 符号集合已核对一致；C 侧只依赖公开的 `ST_ZIG_*` 常量和 extern struct 布局。
+- `ST_ZIG_*` 只暴露 C executor 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
 
 ## 完成定义
 
@@ -52,8 +53,8 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 ## 验证基线
 
 - 结构化迁移完成后已运行 `zig fmt` 覆盖修改过的 Zig 文件。
-- 当前基线验证命令为 `zig build test` 和 `zig build`。
-- ABI 审查命令用于核对 Zig export 与 C 头文件符号集合：`comm -3 <(rg -o '^export fn st_[A-Za-z0-9_]+' --glob '*.zig' | sed 's/.*export fn //' | sort) <(rg -o 'st_[A-Za-z0-9_]+\(' st_zig.h | sed 's/(//' | sort)`。
+- 当前基线验证命令为 `zig build abi-check`、`zig build test` 和 `zig build`。
+- `zig build abi-check` 用于核对 Zig export 与 C 头文件符号集合，避免手写 `st_zig.h` 漏同步。
 - 发布或提交前仍建议按迁移规则补跑 `timeout 5 ./zig-out/bin/st` 做最小启动冒烟验证。
 
 ## 迁移规则
