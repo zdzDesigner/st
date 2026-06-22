@@ -92,6 +92,15 @@ pub const Jump = struct {
     }
 };
 
+pub const History = struct {
+    head: i32,
+    size: i32,
+
+    pub fn index(self: History, scroll: i32) i32 {
+        return @mod(self.head - scroll + self.size + 1, self.size);
+    }
+};
+
 pub const Input = struct {
     active: bool,
     len: usize,
@@ -237,6 +246,10 @@ pub fn jumpScroll(current_valid: bool, term_scr: i32, match_scr: i32) i32 {
     return (Jump{ .current_valid = current_valid, .term_scr = term_scr, .match_scr = match_scr }).scroll();
 }
 
+pub fn historyIndex(head: i32, scroll: i32, size: i32) i32 {
+    return (History{ .head = head, .size = size }).index(scroll);
+}
+
 pub fn step(active: bool, nmatches: i32, current: i32, direction: i32) StepPlan {
     return (Matches{ .active = active, .current = current, .count = nmatches }).step(direction);
 }
@@ -369,6 +382,11 @@ test "search current and step plans handle bounds" {
     try std.testing.expectEqual(@as(i32, 0), step(true, 3, 2, 1).current);
     try std.testing.expectEqual(@as(i32, 2), step(true, 3, 0, -1).current);
     try std.testing.expect(!step(false, 3, 1, 1).run);
+}
+
+test "search history index wraps ring buffer" {
+    try std.testing.expectEqual(@as(i32, 6), historyIndex(7, 2, 10));
+    try std.testing.expectEqual(@as(i32, 9), historyIndex(0, 2, 10));
 }
 
 test "search utf8 cursor and delete word plans" {

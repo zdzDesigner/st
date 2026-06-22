@@ -580,6 +580,7 @@ int st_searchhit(int, int, int, int, int, int, int, int);
 int st_searchlinematch(const ZigGlyph *, int, int, const uint32_t *, int, int);
 int st_searchnextcurrent(int, int);
 int st_searchjumpscr(int, int, int);
+int st_searchhistindex(int, int, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
 size_t st_searchprevchar(const unsigned char *, size_t);
 size_t st_searchnextchar(const unsigned char *, size_t, size_t);

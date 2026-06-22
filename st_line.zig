@@ -262,6 +262,10 @@ export fn st_searchjumpscr(current_valid: c_int, term_scr: c_int, match_scr: c_i
     return search.jumpScroll(current_valid != 0, term_scr, match_scr);
 }
 
+export fn st_searchhistindex(histi: c_int, scr: c_int, histsize: c_int) c_int {
+    return search.historyIndex(histi, scr, histsize);
+}
+
 export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
     const plan = search.step(active != 0, nmatches, current, direction);
     return .{
@@ -646,6 +650,11 @@ test "search next current preserves valid old current" {
 test "search jump changes scroll only for valid different target" {
     try std.testing.expectEqual(@as(c_int, 3), st_searchjumpscr(1, 0, 3));
     try std.testing.expectEqual(@as(c_int, 0), st_searchjumpscr(0, 0, 3));
+}
+
+test "search history index wraps around current history head" {
+    try std.testing.expectEqual(@as(c_int, 6), st_searchhistindex(7, 2, 10));
+    try std.testing.expectEqual(@as(c_int, 9), st_searchhistindex(0, 2, 10));
 }
 
 test "search step wraps in both directions" {

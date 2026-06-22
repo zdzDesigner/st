@@ -34,7 +34,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`EscFlow` 承载字符写入、STR 收集和 ESC flow adapter，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
-- `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit 和 line match 纯逻辑。
+- `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit、line match 和历史环形索引纯逻辑。
 - `st_line.zig` 作为 line、selection、search 相关 C ABI adapter，并集中处理 C 标量到 Zig enum/bool/value object 的薄转换。
 
 ## 当前状态

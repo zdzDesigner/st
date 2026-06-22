@@ -790,7 +790,7 @@ searchscanline(Line line, int scr, int y)
 Line
 searchhistline(int scr)
 {
-	return term.hist[(term.histi - scr + HISTSIZE + 1) % HISTSIZE];
+	return term.hist[st_searchhistindex(term.histi, scr, HISTSIZE)];
 }
 
 void
