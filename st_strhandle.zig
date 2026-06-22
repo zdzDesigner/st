@@ -5,6 +5,7 @@
 //! [定位]: 收薄 `tstrsequence(...)` / `strhandle(...)` 的分支判断，但保留 C 对外部 UI 状态的控制。
 
 const std = @import("std");
+const control_esc = @import("st_control_esc.zig");
 
 pub const ZigStrHandlePlan = extern struct {
     kind: c_int,
@@ -25,7 +26,8 @@ pub const str_plan_unknown = 6;
 pub const str_plan_osc_4 = 7;
 pub const str_plan_osc_104 = 8;
 
-const esc_str = 4;
+// STR 启动复用共享 ESC 状态位，避免与 `st_setchar.zig` 的字符串收集状态漂移。
+const esc_str = control_esc.esc_str;
 
 const StringSequence = struct {
     control: u8,

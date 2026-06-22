@@ -147,6 +147,13 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
+    const control_esc_module = b.createModule(.{
+        .root_source_file = b.path("st_control_esc.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const line_module = b.createModule(.{
         .root_source_file = b.path("st_line.zig"),
         .target = target,
@@ -330,6 +337,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "st_strparse_test", .module = strparse_module },
         .{ .name = "st_strhandle_test", .module = strhandle_module },
         .{ .name = "st_putc_decode_test", .module = putc_decode_module },
+        .{ .name = "st_control_esc_test", .module = control_esc_module },
         .{ .name = "st_setchar_test", .module = setchar_module },
         .{ .name = "st_line_test", .module = line_module },
     });

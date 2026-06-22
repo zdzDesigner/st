@@ -153,14 +153,14 @@ pub fn scrollPlan(origin_x: i32, origin_y: i32, extent_y: i32, bounds: Bounds, s
 
 pub fn extendPlan(old_point: model.Point, old_type: SelectionType, old_bounds: Bounds, new_point: model.Point, new_type: SelectionType, new_bounds: Bounds, old_mode: SelectionMode, done: bool) ExtendPlan {
     const dirty = old_point.y != new_point.y or old_point.x != new_point.x or old_type != new_type or old_mode == .empty;
-    const old_top = minInt(old_bounds.start.y, old_bounds.end.y);
-    const old_bot = maxInt(old_bounds.start.y, old_bounds.end.y);
-    const new_top = minInt(new_bounds.start.y, new_bounds.end.y);
-    const new_bot = maxInt(new_bounds.start.y, new_bounds.end.y);
+    const old_top = @min(old_bounds.start.y, old_bounds.end.y);
+    const old_bot = @max(old_bounds.start.y, old_bounds.end.y);
+    const new_top = @min(new_bounds.start.y, new_bounds.end.y);
+    const new_bot = @max(new_bounds.start.y, new_bounds.end.y);
     return .{
         .dirty = dirty,
-        .top = minInt(new_top, old_top),
-        .bot = maxInt(new_bot, old_bot),
+        .top = @min(new_top, old_top),
+        .bot = @max(new_bot, old_bot),
         .mode = if (done) .idle else .ready,
     };
 }
@@ -168,13 +168,13 @@ pub fn extendPlan(old_point: model.Point, old_type: SelectionType, old_bounds: B
 pub fn normalize(selection_type: SelectionType, origin: model.Point, extent: model.Point) Bounds {
     if (selection_type == .regular and origin.y != extent.y) {
         return .{
-            .start = .{ .x = if (origin.y < extent.y) origin.x else extent.x, .y = minInt(origin.y, extent.y) },
-            .end = .{ .x = if (origin.y < extent.y) extent.x else origin.x, .y = maxInt(origin.y, extent.y) },
+            .start = .{ .x = if (origin.y < extent.y) origin.x else extent.x, .y = @min(origin.y, extent.y) },
+            .end = .{ .x = if (origin.y < extent.y) extent.x else origin.x, .y = @max(origin.y, extent.y) },
         };
     }
     return .{
-        .start = .{ .x = minInt(origin.x, extent.x), .y = minInt(origin.y, extent.y) },
-        .end = .{ .x = maxInt(origin.x, extent.x), .y = maxInt(origin.y, extent.y) },
+        .start = .{ .x = @min(origin.x, extent.x), .y = @min(origin.y, extent.y) },
+        .end = .{ .x = @max(origin.x, extent.x), .y = @max(origin.y, extent.y) },
     };
 }
 
@@ -191,7 +191,7 @@ pub fn getBufferSize(cols: i32, bounds: Bounds, utf_size: i32) i32 {
 }
 
 pub fn getLastX(last_x: i32, linelen: i32) i32 {
-    return minInt(last_x, linelen - 1);
+    return @min(last_x, linelen - 1);
 }
 
 pub fn needsNewline(y: i32, bounds: Bounds, last_x: i32, linelen: i32, last_mode: u16, selection_type: SelectionType) bool {
@@ -242,14 +242,6 @@ pub fn snapWordStep(point: model.Point, linelen: i32, mode: u16, delim: i32, pre
 
 fn between(value: i32, lower: i32, upper: i32) bool {
     return lower <= value and value <= upper;
-}
-
-fn minInt(a: i32, b: i32) i32 {
-    return if (a < b) a else b;
-}
-
-fn maxInt(a: i32, b: i32) i32 {
-    return if (a > b) a else b;
 }
 
 test "snap word plan handles wrapping" {

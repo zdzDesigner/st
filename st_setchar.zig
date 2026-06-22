@@ -5,6 +5,7 @@
 //! [定位]: 这是 `tsetchar(...)` 与 `tputc(...)` 逐步迁移的汇聚点，目标是在不扩大 C/Zig 全局状态耦合的前提下持续压薄 `st.c`。
 
 const std = @import("std");
+const control_esc = @import("st_control_esc.zig");
 
 pub const ZigGlyph = extern struct {
     u: u32,
@@ -43,26 +44,11 @@ pub const ZigEscFlowAfter = extern struct {
     stop: c_int,
 };
 
-pub const ZigEscPlan = extern struct {
-    kind: c_int,
-    value: c_int,
-    ret: c_int,
-};
+pub const ZigEscPlan = control_esc.ZigEscPlan;
 
-pub const ZigEscExec = extern struct {
-    action: c_int,
-    ret: c_int,
-};
+pub const ZigEscExec = control_esc.ZigEscExec;
 
-pub const ZigControlExec = extern struct {
-    action: c_int,
-    clear_str: c_int,
-};
-
-const ZigControlPlan = extern struct {
-    kind: c_int,
-    value: c_int,
-};
+pub const ZigControlExec = control_esc.ZigControlExec;
 
 const cs_graphic0 = 0;
 const attr_wide: c_ushort = 1 << 9;
@@ -74,76 +60,27 @@ const str_collect_append = 0;
 const str_collect_finish = 1;
 const str_collect_grow = 2;
 const str_collect_abort = 3;
-const esc_start: c_int = 1;
-const esc_csi: c_int = 2;
-const esc_altcharset: c_int = 8;
-const esc_test: c_int = 32;
-const esc_utf8: c_int = 64;
-const esc_str: c_int = 4;
-const esc_str_end: c_int = 16;
+const esc_start = control_esc.esc_start;
+const esc_csi = control_esc.esc_csi;
+const esc_altcharset = control_esc.esc_altcharset;
+const esc_test = control_esc.esc_test;
+const esc_utf8 = control_esc.esc_utf8;
+const esc_str = control_esc.esc_str;
+const esc_str_end = control_esc.esc_str_end;
+// `esc_flow_*` 是 `EscFlow` 返回给 C executor 的本地流程分类，不属于共享 ESC 状态位。
 const esc_flow_none = 0;
 const esc_flow_csi = 1;
 const esc_flow_utf8 = 2;
 const esc_flow_altcharset = 3;
 const esc_flow_test = 4;
 const esc_flow_esc = 5;
-const esc_unknown = 0;
-const esc_set_csi = 1;
-const esc_set_test = 2;
-const esc_set_utf8 = 3;
-const esc_start_str = 4;
-const esc_lock_shift = 5;
-const esc_set_altcharset = 6;
-const esc_ind = 7;
-const esc_nel = 8;
-const esc_hts = 9;
-const esc_ri = 10;
-const esc_decid = 11;
-const esc_ris = 12;
-const esc_keypad_app = 13;
-const esc_keypad_normal = 14;
-const esc_cursor_save = 15;
-const esc_cursor_load = 16;
-const esc_st = 17;
-const esc_action_none = 0;
-const esc_action_start_str = 1;
-const esc_action_ind = 2;
-const esc_action_nel = 3;
-const esc_action_ri = 4;
-const esc_action_decid = 5;
-const esc_action_ris = 6;
-const esc_action_keypad_app = 7;
-const esc_action_keypad_normal = 8;
-const esc_action_cursor_save = 9;
-const esc_action_cursor_load = 10;
-const esc_action_st = 11;
-const esc_action_unknown = 12;
-const ctl_none = 0;
-const ctl_tab = 1;
-const ctl_backspace = 2;
-const ctl_carriage_return = 3;
-const ctl_linefeed = 4;
-const ctl_bell = 5;
-const ctl_escape = 6;
-const ctl_lock_shift = 7;
-const ctl_substitute = 8;
-const ctl_cancel = 9;
-const ctl_next_line = 10;
-const ctl_set_tab_stop = 11;
-const ctl_decid = 12;
-const ctl_start_str = 13;
-const ctl_action_none = 0;
-const ctl_action_tab = 1;
-const ctl_action_backspace = 2;
-const ctl_action_carriage_return = 3;
-const ctl_action_linefeed = 4;
-const ctl_action_bell = 5;
-const ctl_action_escape = 6;
-const ctl_action_substitute = 7;
-const ctl_action_cancel = 8;
-const ctl_action_next_line = 9;
-const ctl_action_decid = 10;
-const ctl_action_start_str = 11;
+const esc_set_csi = control_esc.esc_set_csi;
+const esc_start_str = control_esc.esc_start_str;
+const esc_set_altcharset = control_esc.esc_set_altcharset;
+const esc_action_none = control_esc.esc_action_none;
+const esc_action_ind = control_esc.esc_action_ind;
+const ctl_action_none = control_esc.ctl_action_none;
+const ctl_action_escape = control_esc.ctl_action_escape;
 
 const graphic0_map = [_]u32{
     0x2191, 0x2193, 0x2192, 0x2190, 0x2588, 0x259A, 0x2603,
@@ -346,144 +283,6 @@ const EscFlow = struct {
     }
 };
 
-const EscSequence = struct {
-    ascii: u8,
-
-    fn plan(self: EscSequence) ZigEscPlan {
-        return switch (self.ascii) {
-            '[' => .{ .kind = esc_set_csi, .value = 0, .ret = 0 },
-            '#' => .{ .kind = esc_set_test, .value = 0, .ret = 0 },
-            '%' => .{ .kind = esc_set_utf8, .value = 0, .ret = 0 },
-            'P', '_', '^', ']', 'k' => .{ .kind = esc_start_str, .value = self.ascii, .ret = 0 },
-            'n', 'o' => .{ .kind = esc_lock_shift, .value = 2 + @as(c_int, self.ascii - 'n'), .ret = 1 },
-            '(', ')', '*', '+' => .{ .kind = esc_set_altcharset, .value = @as(c_int, self.ascii - '('), .ret = 0 },
-            'D' => .{ .kind = esc_ind, .value = 0, .ret = 1 },
-            'E' => .{ .kind = esc_nel, .value = 0, .ret = 1 },
-            'H' => .{ .kind = esc_hts, .value = 0, .ret = 1 },
-            'M' => .{ .kind = esc_ri, .value = 0, .ret = 1 },
-            'Z' => .{ .kind = esc_decid, .value = 0, .ret = 1 },
-            'c' => .{ .kind = esc_ris, .value = 0, .ret = 1 },
-            '=' => .{ .kind = esc_keypad_app, .value = 0, .ret = 1 },
-            '>' => .{ .kind = esc_keypad_normal, .value = 0, .ret = 1 },
-            '7' => .{ .kind = esc_cursor_save, .value = 0, .ret = 1 },
-            '8' => .{ .kind = esc_cursor_load, .value = 0, .ret = 1 },
-            '\\' => .{ .kind = esc_st, .value = 0, .ret = 1 },
-            else => .{ .kind = esc_unknown, .value = 0, .ret = 1 },
-        };
-    }
-
-    fn exec(self: EscSequence, esc: *c_int, charset: *c_int, icharset: *c_int, tabs: [*]c_int, x: c_int) ZigEscExec {
-        const result = self.plan();
-
-        switch (result.kind) {
-            esc_set_csi => esc.* |= esc_csi,
-            esc_set_test => esc.* |= esc_test,
-            esc_set_utf8 => esc.* |= esc_utf8,
-            esc_lock_shift => charset.* = result.value,
-            esc_set_altcharset => {
-                icharset.* = result.value;
-                esc.* |= esc_altcharset;
-            },
-            esc_hts => tabs[@intCast(x)] = 1,
-            else => {},
-        }
-
-        return .{
-            .action = action(result.kind),
-            .ret = result.ret,
-        };
-    }
-
-    fn action(kind: c_int) c_int {
-        return switch (kind) {
-            esc_start_str => esc_action_start_str,
-            esc_ind => esc_action_ind,
-            esc_nel => esc_action_nel,
-            esc_ri => esc_action_ri,
-            esc_decid => esc_action_decid,
-            esc_ris => esc_action_ris,
-            esc_keypad_app => esc_action_keypad_app,
-            esc_keypad_normal => esc_action_keypad_normal,
-            esc_cursor_save => esc_action_cursor_save,
-            esc_cursor_load => esc_action_cursor_load,
-            esc_st => esc_action_st,
-            esc_unknown => esc_action_unknown,
-            else => esc_action_none,
-        };
-    }
-};
-
-const ControlSequence = struct {
-    ascii: u8,
-
-    fn plan(self: ControlSequence) ZigControlPlan {
-        return switch (self.ascii) {
-            '\t' => .{ .kind = ctl_tab, .value = 0 },
-            0x08 => .{ .kind = ctl_backspace, .value = 0 },
-            '\r' => .{ .kind = ctl_carriage_return, .value = 0 },
-            0x0c, 0x0b, '\n' => .{ .kind = ctl_linefeed, .value = 0 },
-            0x07 => .{ .kind = ctl_bell, .value = 0 },
-            '\x1b' => .{ .kind = ctl_escape, .value = 0 },
-            '\x0e', '\x0f' => .{ .kind = ctl_lock_shift, .value = 1 - @as(c_int, self.ascii - '\x0e') },
-            '\x1a' => .{ .kind = ctl_substitute, .value = 0 },
-            '\x18' => .{ .kind = ctl_cancel, .value = 0 },
-            '\x05', '\x00', '\x11', '\x13', 0x7f => .{ .kind = ctl_none, .value = 0 },
-            0x80, 0x81, 0x82, 0x83, 0x84 => .{ .kind = ctl_none, .value = 0 },
-            0x85 => .{ .kind = ctl_next_line, .value = 1 },
-            0x86, 0x87 => .{ .kind = ctl_none, .value = 0 },
-            0x88 => .{ .kind = ctl_set_tab_stop, .value = 0 },
-            0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99 => .{ .kind = ctl_none, .value = 0 },
-            0x9a => .{ .kind = ctl_decid, .value = 0 },
-            0x9b, 0x9c => .{ .kind = ctl_none, .value = 0 },
-            0x90, 0x9d, 0x9e, 0x9f => .{ .kind = ctl_start_str, .value = self.ascii },
-            else => .{ .kind = ctl_none, .value = 0 },
-        };
-    }
-
-    fn exec(self: ControlSequence, esc: *c_int, charset: *c_int, tabs: [*]c_int, x: c_int) ZigControlExec {
-        const result = self.plan();
-
-        switch (result.kind) {
-            ctl_escape => {
-                esc.* &= ~(esc_csi | esc_altcharset | esc_test);
-                esc.* |= esc_start;
-            },
-            ctl_lock_shift => charset.* = result.value,
-            ctl_set_tab_stop => tabs[@intCast(x)] = 1,
-            else => {},
-        }
-
-        return .{
-            .action = action(result.kind),
-            .clear_str = if (ControlSequence.clearsString(result.kind)) 1 else 0,
-        };
-    }
-
-    fn action(kind: c_int) c_int {
-        return switch (kind) {
-            ctl_tab => ctl_action_tab,
-            ctl_backspace => ctl_action_backspace,
-            ctl_carriage_return => ctl_action_carriage_return,
-            ctl_linefeed => ctl_action_linefeed,
-            ctl_bell => ctl_action_bell,
-            ctl_escape => ctl_action_escape,
-            ctl_substitute => ctl_action_substitute,
-            ctl_cancel => ctl_action_cancel,
-            ctl_next_line => ctl_action_next_line,
-            ctl_decid => ctl_action_decid,
-            ctl_start_str => ctl_action_start_str,
-            else => ctl_action_none,
-        };
-    }
-
-    fn clearsString(kind: c_int) bool {
-        return switch (kind) {
-            ctl_bell, ctl_substitute, ctl_cancel, ctl_next_line, ctl_set_tab_stop, ctl_decid => true,
-            else => false,
-        };
-    }
-};
-
 export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int) void {
     (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).setChar(rune, attr, dirty, x);
 }
@@ -522,31 +321,27 @@ export fn st_tescflowafter(kind: c_int, action_done: c_int) ZigEscFlowAfter {
 }
 
 fn planEsc(ascii: u8) ZigEscPlan {
-    return (EscSequence{ .ascii = ascii }).plan();
+    return (control_esc.EscSequence{ .ascii = ascii }).plan();
 }
 
 export fn st_tescexec(ascii: u8, esc: *c_int, charset: *c_int, icharset: *c_int, tabs: [*]c_int, x: c_int) ZigEscExec {
-    return (EscSequence{ .ascii = ascii }).exec(esc, charset, icharset, tabs, x);
+    return (control_esc.EscSequence{ .ascii = ascii }).exec(esc, charset, icharset, tabs, x);
 }
 
 export fn st_tcontrolexec(ascii: u8, esc: *c_int, charset: *c_int, tabs: [*]c_int, x: c_int) ZigControlExec {
-    return (ControlSequence{ .ascii = ascii }).exec(esc, charset, tabs, x);
-}
-
-fn planControl(ascii: u8) ZigControlPlan {
-    return (ControlSequence{ .ascii = ascii }).plan();
+    return (control_esc.ControlSequence{ .ascii = ascii }).exec(esc, charset, tabs, x);
 }
 
 fn controlAction(kind: c_int) c_int {
-    return ControlSequence.action(kind);
+    return control_esc.ControlSequence.action(kind);
 }
 
 fn clearsString(kind: c_int) bool {
-    return ControlSequence.clearsString(kind);
+    return control_esc.ControlSequence.clearsString(kind);
 }
 
 fn escAction(kind: c_int) c_int {
-    return EscSequence.action(kind);
+    return control_esc.EscSequence.action(kind);
 }
 
 fn translateRune(rune: u32, trantbl: c_int) u32 {

@@ -30,7 +30,8 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_strhandle.zig` 通过 `StringSequence`、`StringAction`、`StringArgs` 承载字符串序列启动和 OSC/DCS action 分类。
 - `st_strparse.zig` 通过 `StringParser` 承载 OSC/DCS 参数边界扫描。
 - `st_putc_decode.zig` 通过 `RuneInput`、`ControlWriter` 承载 rune 解码和控制字符显示规划。
-- `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`EscFlow`、`EscSequence`、`ControlSequence` 承载字符写入、STR 收集、ESC/control 状态执行规划。
+- `st_control_esc.zig` 通过 `EscSequence`、`ControlSequence` 承载 ESC/control 字节到执行计划的纯决策逻辑。
+- `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`EscFlow` 承载字符写入、STR 收集和 ESC flow adapter，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
 - `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit 和 line match 纯逻辑。
