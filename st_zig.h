@@ -178,6 +178,26 @@ typedef struct {
 } ZigResizeClearPlan;
 
 typedef struct {
+	int grow;
+	int clear_start;
+	int clear_count;
+	int tab_start;
+} ZigResizeTabPlan;
+
+typedef struct {
+	int run;
+	int start;
+	int end;
+} ZigResizeFillPlan;
+
+typedef struct {
+	int resize_start;
+	int resize_end;
+	int alloc_start;
+	int alloc_end;
+} ZigResizeRowPlan;
+
+typedef struct {
 	int kind;
 	int value;
 	int extra;
@@ -337,6 +357,11 @@ typedef struct {
 } ZigSelSnapWordStep;
 
 typedef struct {
+	int action;
+	int y;
+} ZigSelSnapLineStep;
+
+typedef struct {
 	int start_x;
 	int last_x;
 } ZigGetSelLinePlan;
@@ -448,6 +473,11 @@ enum {
 enum {
 	ST_ZIG_SEL_SNAP_WORD_BREAK = 0,
 	ST_ZIG_SEL_SNAP_WORD_ACCEPT = 1,
+};
+
+enum {
+	ST_ZIG_SEL_SNAP_LINE_STOP = 0,
+	ST_ZIG_SEL_SNAP_LINE_MOVE = 1,
 };
 
 enum {
@@ -595,7 +625,9 @@ ZigLightPlan st_planlight(char, const int *, int, int, int);
 ZigStatePlan st_planstate(char, int, const int *, int, int);
 ZigScrollRegion st_tsetscroll(int, int, int);
 ZigResizePlan st_tresizeplan(int, int, int, int, int, int);
-int st_tresizetabstart(const int *, int, int);
+ZigResizeTabPlan st_tresizetabplan(const int *, int, int, int);
+ZigResizeFillPlan st_tresizefillplan(int, int);
+ZigResizeRowPlan st_tresizerowplan(int, int, int);
 ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
 ZigResizeClearPlan st_tresizeclearplan(int, int, int, int);
@@ -635,10 +667,9 @@ ZigSelExtendPlan st_selextendplan(int, int, int, int, int, int, int, int, int, i
 int st_selclearplan(int);
 ZigSelStartPlan st_selstartplan(int, int, int, int);
 int st_selsnaplinex(int, int);
+ZigSelSnapLineStep st_selsnaplinestep(int, int, int, int);
 ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
-int st_selsnapwordbreak(unsigned short, int, int, uint32_t, uint32_t);
-int st_selsnapwordpastline(int, int);
-ZigSelSnapWordStep st_selsnapwordstep(int, int, int, unsigned short, int, int, uint32_t, uint32_t);
+ZigSelSnapWordStep st_selsnapwordloopstep(int, int, int, int, int, int, int, int, unsigned short, int, int, uint32_t, uint32_t);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchcurrentvalid(int, int, int);
 int st_searchhit(int, int, int, int, int, int, int, int);
@@ -666,19 +697,9 @@ ZigSearchCursorEditPlan st_searchendedit(int, size_t);
 ZigSearchStateEditPlan st_searchclearinputedit(int);
 ZigSearchStateEditPlan st_searchcommitedit(int, size_t);
 ZigSearchStateEditPlan st_searchcanceledit(int);
-size_t st_searchinputcap(size_t, size_t, size_t);
-int st_searchinputgrow(size_t, size_t, size_t);
-int st_searchinputplan(int, size_t);
 ZigSearchInsertPlan st_searchinsertplan(int, size_t, size_t, size_t, size_t);
-int st_searchbackspaceplan(int, size_t, size_t);
-int st_searchdeleteforwardplan(int, size_t, size_t);
-int st_searchdeletewordplan(int, size_t);
-int st_searchcursorplan(int);
 int st_searchscanplan(int, int);
 ZigSearchDeletePlan st_searchdeleteplan(size_t, size_t, size_t);
-int st_searchcommitplan(int, size_t);
-int st_searchcancelplan(int);
-int st_searchclearinputplan(int);
 int st_searchbaractive(int, int);
 int st_searchinputactiveplan(int);
 ZigExternalPipeLinePlan st_externalpipelinelen(int, int);

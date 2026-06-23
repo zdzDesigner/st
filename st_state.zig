@@ -56,6 +56,26 @@ pub const ZigResizeClearPlan = extern struct {
     rects: [2]ZigClearRect,
 };
 
+pub const ZigResizeTabPlan = extern struct {
+    grow: c_int,
+    clear_start: c_int,
+    clear_count: c_int,
+    tab_start: c_int,
+};
+
+pub const ZigResizeFillPlan = extern struct {
+    run: c_int,
+    start: c_int,
+    end: c_int,
+};
+
+pub const ZigResizeRowPlan = extern struct {
+    resize_start: c_int,
+    resize_end: c_int,
+    alloc_start: c_int,
+    alloc_end: c_int,
+};
+
 pub const state_unknown = 0;
 pub const state_set_scroll = 1;
 pub const state_save_cursor = 2;
@@ -140,6 +160,7 @@ const ResizeRequest = struct {
 const ResizeTabs = struct {
     tabs: []const c_int,
     old_col: c_int,
+    new_col: c_int,
     tabspaces: c_int,
 
     fn start(self: ResizeTabs) c_int {
@@ -150,6 +171,43 @@ const ResizeTabs = struct {
             index -= 1;
         }
         return index + self.tabspaces;
+    }
+
+    fn plan(self: ResizeTabs) ZigResizeTabPlan {
+        if (self.new_col <= self.old_col) {
+            return .{ .grow = 0, .clear_start = self.old_col, .clear_count = 0, .tab_start = self.old_col };
+        }
+        return .{
+            .grow = 1,
+            .clear_start = self.old_col,
+            .clear_count = self.new_col - self.old_col,
+            .tab_start = self.start(),
+        };
+    }
+};
+
+const ResizeFill = struct {
+    start: c_int,
+    end: c_int,
+
+    fn plan(self: ResizeFill) ZigResizeFillPlan {
+        if (self.start >= self.end) return .{ .run = 0, .start = self.start, .end = self.end };
+        return .{ .run = 1, .start = self.start, .end = self.end };
+    }
+};
+
+const ResizeRows = struct {
+    resize_end: c_int,
+    alloc_start: c_int,
+    alloc_end: c_int,
+
+    fn plan(self: ResizeRows) ZigResizeRowPlan {
+        return .{
+            .resize_start = 0,
+            .resize_end = self.resize_end,
+            .alloc_start = self.alloc_start,
+            .alloc_end = self.alloc_end,
+        };
     }
 };
 
@@ -220,9 +278,17 @@ export fn st_tresizeplan(requested_col: c_int, requested_row: c_int, current_col
     return (ResizeRequest{ .requested_col = requested_col, .requested_row = requested_row, .current_col = current_col, .current_row = current_row, .current_maxcol = current_maxcol, .cursor_y = cursor_y }).plan();
 }
 
-export fn st_tresizetabstart(tabs: [*]const c_int, old_col: c_int, tabspaces: c_int) c_int {
+export fn st_tresizetabplan(tabs: [*]const c_int, old_col: c_int, new_col: c_int, tabspaces: c_int) ZigResizeTabPlan {
     const tab_count = if (old_col > 0) old_col else 0;
-    return (ResizeTabs{ .tabs = tabs[0..@intCast(tab_count)], .old_col = old_col, .tabspaces = tabspaces }).start();
+    return (ResizeTabs{ .tabs = tabs[0..@intCast(tab_count)], .old_col = old_col, .new_col = new_col, .tabspaces = tabspaces }).plan();
+}
+
+export fn st_tresizefillplan(start: c_int, end: c_int) ZigResizeFillPlan {
+    return (ResizeFill{ .start = start, .end = end }).plan();
+}
+
+export fn st_tresizerowplan(resize_end: c_int, alloc_start: c_int, alloc_end: c_int) ZigResizeRowPlan {
+    return (ResizeRows{ .resize_end = resize_end, .alloc_start = alloc_start, .alloc_end = alloc_end }).plan();
 }
 
 export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPlan {
@@ -325,22 +391,57 @@ test "tresize plan computes slide and tail free bounds" {
     try std.testing.expectEqual(@as(c_int, 26), plan.tail_start);
 }
 
-test "tresize tab start continues after previous tab" {
+test "tresize tab plan continues after previous tab" {
     const tabs = [_]c_int{ 0, 0, 0, 0, 1, 0, 0, 0 };
 
-    try std.testing.expectEqual(@as(c_int, 8), st_tresizetabstart(&tabs, tabs.len, 4));
+    try std.testing.expectEqual(@as(c_int, 8), st_tresizetabplan(&tabs, tabs.len, 12, 4).tab_start);
 }
 
-test "tresize tab start falls back from no previous tab" {
+test "tresize tab plan falls back from no previous tab" {
     const tabs = [_]c_int{ 0, 0, 0, 0 };
 
-    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabstart(&tabs, tabs.len, 4));
+    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabplan(&tabs, tabs.len, 8, 4).tab_start);
 }
 
-test "tresize tab start handles empty old columns" {
+test "tresize tab plan handles empty old columns" {
     const tabs = [_]c_int{};
 
-    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabstart(&tabs, 0, 4));
+    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabplan(&tabs, 0, 8, 4).tab_start);
+}
+
+test "tresize tab plan describes growth range" {
+    const tabs = [_]c_int{ 0, 0, 0, 0, 1, 0, 0, 0 };
+    const plan = st_tresizetabplan(&tabs, tabs.len, 12, 4);
+
+    try std.testing.expectEqual(@as(c_int, 1), plan.grow);
+    try std.testing.expectEqual(@as(c_int, 8), plan.clear_start);
+    try std.testing.expectEqual(@as(c_int, 4), plan.clear_count);
+    try std.testing.expectEqual(@as(c_int, 8), plan.tab_start);
+
+    const unchanged = st_tresizetabplan(&tabs, tabs.len, 6, 4);
+    try std.testing.expectEqual(@as(c_int, 0), unchanged.grow);
+    try std.testing.expectEqual(@as(c_int, 0), unchanged.clear_count);
+}
+
+test "tresize fill plan skips empty ranges" {
+    const grow = st_tresizefillplan(5, 10);
+    try std.testing.expectEqual(@as(c_int, 1), grow.run);
+    try std.testing.expectEqual(@as(c_int, 5), grow.start);
+    try std.testing.expectEqual(@as(c_int, 10), grow.end);
+
+    const same = st_tresizefillplan(10, 10);
+    try std.testing.expectEqual(@as(c_int, 0), same.run);
+
+    const inverted = st_tresizefillplan(12, 10);
+    try std.testing.expectEqual(@as(c_int, 0), inverted.run);
+}
+
+test "tresize row plan exposes resize and alloc ranges" {
+    const plan = st_tresizerowplan(20, 20, 24);
+    try std.testing.expectEqual(@as(c_int, 0), plan.resize_start);
+    try std.testing.expectEqual(@as(c_int, 20), plan.resize_end);
+    try std.testing.expectEqual(@as(c_int, 20), plan.alloc_start);
+    try std.testing.expectEqual(@as(c_int, 24), plan.alloc_end);
 }
 
 test "treset plan sets default terminal state" {

@@ -108,7 +108,25 @@ pub const SnapWordAction = enum(i32) {
     accept = 1,
 };
 
+pub const SnapLineAction = enum(i32) {
+    stop = 0,
+    move = 1,
+};
+
+pub const SnapLineStep = union(SnapLineAction) {
+    stop: i32,
+    move: i32,
+};
+
 pub const SnapWordStep = union(enum) {
+    stop: SnapPrev,
+    accept: struct {
+        point: model.Point,
+        prev: SnapPrev,
+    },
+};
+
+pub const SnapWordLoopStep = union(SnapWordAction) {
     stop: SnapPrev,
     accept: struct {
         point: model.Point,
@@ -118,6 +136,18 @@ pub const SnapWordStep = union(enum) {
 
 pub fn snapLineX(direction: i32, col: i32) i32 {
     return if (direction < 0) 0 else col - 1;
+}
+
+pub fn snapLineStep(y: i32, direction: i32, rows: i32, wrapped: bool) SnapLineStep {
+    if (direction < 0) {
+        if (y <= 0 or !wrapped) return .{ .stop = y };
+        return .{ .move = y + direction };
+    }
+    if (direction > 0) {
+        if (y >= rows - 1 or !wrapped) return .{ .stop = y };
+        return .{ .move = y + direction };
+    }
+    return .{ .stop = y };
 }
 
 pub fn shouldClear(origin_x: i32) bool {
@@ -240,6 +270,14 @@ pub fn snapWordStep(point: model.Point, linelen: i32, mode: u16, delim: i32, pre
     return .{ .accept = .{ .point = point, .prev = .{ .delim = delim, .rune = rune } } };
 }
 
+pub fn snapWordLoopStep(plan: SnapWordPlan, wrap_allowed: bool, linelen: i32, mode: u16, delim: i32, prev: SnapPrev, rune: model.Rune) SnapWordLoopStep {
+    if (!plan.in_bounds or (plan.wrapped and !wrap_allowed)) return .{ .stop = prev };
+    return switch (snapWordStep(plan.point, linelen, mode, delim, prev, rune)) {
+        .stop => |stopped| .{ .stop = stopped },
+        .accept => |accepted| .{ .accept = .{ .point = accepted.point, .prev = accepted.prev } },
+    };
+}
+
 fn between(value: i32, lower: i32, upper: i32) bool {
     return lower <= value and value <= upper;
 }
@@ -267,6 +305,15 @@ test "selection clear and start plans describe state" {
     try std.testing.expectEqual(@as(i32, 1), plan.snap);
     try std.testing.expectEqual(model.Point{ .x = 3, .y = 4 }, plan.point);
     try std.testing.expectEqual(SelectionMode.ready, plan.final_mode);
+}
+
+test "snap line step moves while wrapped" {
+    try std.testing.expectEqual(@as(i32, 0), snapLineX(-1, 10));
+    try std.testing.expectEqual(@as(i32, 9), snapLineX(1, 10));
+    try std.testing.expectEqual(@as(i32, 2), snapLineStep(3, -1, 5, true).move);
+    try std.testing.expectEqual(@as(i32, 3), snapLineStep(3, -1, 5, false).stop);
+    try std.testing.expectEqual(@as(i32, 4), snapLineStep(3, 1, 5, true).move);
+    try std.testing.expectEqual(@as(i32, 4), snapLineStep(4, 1, 5, true).stop);
 }
 
 test "selection scroll plan clears or normalizes affected selection" {
@@ -369,6 +416,28 @@ test "snap word step accepts and stops" {
 
     const stopped = snapWordStep(.{ .x = 6, .y = 2 }, 6, 0, 0, prev, 'b');
     try std.testing.expectEqual(SnapWordAction.stop, switch (stopped) {
+        .accept => SnapWordAction.accept,
+        .stop => SnapWordAction.stop,
+    });
+}
+
+test "snap word loop step stops on bounds and wrap" {
+    const prev = SnapPrev{ .delim = 0, .rune = 'a' };
+    const plan = SnapWordPlan{ .point = .{ .x = 3, .y = 2 }, .wrap_point = .{ .x = 2, .y = 2 }, .wrapped = false, .in_bounds = true };
+    const accepted = snapWordLoopStep(plan, true, 6, 0, 0, prev, 'b');
+    try std.testing.expectEqual(SnapWordAction.accept, switch (accepted) {
+        .accept => SnapWordAction.accept,
+        .stop => SnapWordAction.stop,
+    });
+
+    const out = SnapWordPlan{ .point = .{ .x = 0, .y = -1 }, .wrap_point = .{ .x = 0, .y = -1 }, .wrapped = true, .in_bounds = false };
+    try std.testing.expectEqual(SnapWordAction.stop, switch (snapWordLoopStep(out, true, 6, 0, 0, prev, 'b')) {
+        .accept => SnapWordAction.accept,
+        .stop => SnapWordAction.stop,
+    });
+
+    const wrapped = SnapWordPlan{ .point = .{ .x = 0, .y = 3 }, .wrap_point = .{ .x = 9, .y = 2 }, .wrapped = true, .in_bounds = true };
+    try std.testing.expectEqual(SnapWordAction.stop, switch (snapWordLoopStep(wrapped, false, 6, 0, 0, prev, 'b')) {
         .accept => SnapWordAction.accept,
         .stop => SnapWordAction.stop,
     });

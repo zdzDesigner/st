@@ -191,16 +191,15 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A[Search 已完成较多] --> B[清理旧 search adapter]
-    B --> C[Selection snap union 化]
+    A[Search 旧 adapter 已清理] --> C[Selection snap step 已 union 化]
     C --> D[Resize 循环范围 plan 化]
     D --> E[Draw/dirty range plan 收敛]
     E --> F[删除无用 ABI 符号]
     F --> G[补启动冒烟验证]
 ```
 
-- **Search 清理**：确认新 `CursorEdit`、`StateEdit`、`MatchAppend` 覆盖旧 `st_searchbackspaceplan`、`st_searchdeleteforwardplan`、`st_searchcursorplan` 等调用后，再删除未使用 export。
-- **Selection 提升**：把 word/line snap 的多分支动作改成 tagged union，C 保留 `TLINE` 访问和 delimiter 判断。
-- **Resize 提升**：把 `tresize` 中 hist resize、line resize、新行分配、tab 初始化范围做成 Zig plan，C 继续执行 `xrealloc/free`。
+- **Search 清理**：旧 `st_search*plan` 兼容入口已删除，C 侧保留 `CursorEdit`、`StateEdit`、`MatchAppend` 和实际仍调用的 plan 入口。
+- **Selection 提升**：line snap step 和 word snap loop step 已改成 tagged union，旧 word snap 辅助 ABI 已清理；C 保留 `TLINE` 访问和 delimiter 判断。
+- **Resize 提升**：tab 初始化、history 新列填充、line resize 和新行分配范围已迁移为 Zig plan；C 继续执行 `xrealloc/free`。
 - **Draw 收敛**：继续把 draw region 的范围、dirty line 决策聚合，C 继续调用 `xdrawline/xdrawcursor/xximspot`。
 - **验证要求**：每批迁移后执行 `zig fmt`、`zig build abi-check`、`zig build test`、`zig build`；提交或发布前补 `timeout 5 ./zig-out/bin/st`。

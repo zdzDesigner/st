@@ -813,11 +813,12 @@ void
 selsnap(int *x, int *y, int direction)
 {
 	int newx, newy;
-	int delim, prevdelim;
-	Rune prevrune;
+	int delim, prevdelim, linelen, wrap_allowed;
+	Rune rune, prevrune;
 	Glyph *gp;
 	ZigSelSnapWordPlan word_plan;
 	ZigSelSnapWordStep word_step;
+	ZigSelSnapLineStep line_step;
 
 	switch (sel.snap) {
 	case SNAP_WORD:
@@ -832,16 +833,24 @@ selsnap(int *x, int *y, int direction)
 				term.col, term.row);
 			newx = word_plan.x;
 			newy = word_plan.y;
-			if (!word_plan.in_bounds)
-				break;
-			if (word_plan.wrapped &&
-			    !(TLINE(word_plan.wrap_y)[word_plan.wrap_x].mode & ATTR_WRAP))
-				break;
-
-			gp = &TLINE(newy)[newx];
-			delim = ISDELIM(gp->u);
-			word_step = st_selsnapwordstep(newx, newy, tlinelen(newy),
-				gp->mode, delim, prevdelim, gp->u, prevrune);
+			wrap_allowed = !word_plan.wrapped ||
+				(word_plan.in_bounds &&
+				(TLINE(word_plan.wrap_y)[word_plan.wrap_x].mode & ATTR_WRAP));
+			if (word_plan.in_bounds) {
+				gp = &TLINE(newy)[newx];
+				delim = ISDELIM(gp->u);
+				linelen = tlinelen(newy);
+				rune = gp->u;
+			} else {
+				delim = prevdelim;
+				linelen = 0;
+				rune = prevrune;
+			}
+			word_step = st_selsnapwordloopstep(newx, newy,
+				word_plan.wrap_x, word_plan.wrap_y, word_plan.wrapped,
+				word_plan.in_bounds, wrap_allowed, linelen,
+				word_plan.in_bounds ? gp->mode : 0, delim, prevdelim,
+				rune, prevrune);
 			if (word_step.action == ST_ZIG_SEL_SNAP_WORD_BREAK)
 				break;
 
@@ -859,18 +868,22 @@ selsnap(int *x, int *y, int direction)
 		 */
 		*x = st_selsnaplinex(direction, term.col);
 		if (direction < 0) {
-			for (; *y > 0; *y += direction) {
-				if (!(TLINE(*y-1)[term.col-1].mode
-						& ATTR_WRAP)) {
+			for (;;) {
+				line_step = st_selsnaplinestep(*y, direction,
+					term.row, *y > 0 &&
+					(TLINE(*y-1)[term.col-1].mode & ATTR_WRAP));
+				if (line_step.action == ST_ZIG_SEL_SNAP_LINE_STOP)
 					break;
-				}
+				*y = line_step.y;
 			}
 		} else if (direction > 0) {
-			for (; *y < term.row-1; *y += direction) {
-				if (!(TLINE(*y)[term.col-1].mode
-						& ATTR_WRAP)) {
+			for (;;) {
+				line_step = st_selsnaplinestep(*y, direction,
+					term.row, *y < term.row-1 &&
+					(TLINE(*y)[term.col-1].mode & ATTR_WRAP));
+				if (line_step.action == ST_ZIG_SEL_SNAP_LINE_STOP)
 					break;
-				}
+				*y = line_step.y;
 			}
 		}
 		break;
@@ -2591,6 +2604,9 @@ tresize(int col, int row)
 	int *bp;
 	TCursor c;
 	ZigResizePlan plan;
+	ZigResizeTabPlan tab_plan;
+	ZigResizeFillPlan fill_plan;
+	ZigResizeRowPlan row_plan;
 	ZigResizeClearPlan clear_plan;
 
 	plan = st_tresizeplan(col, row, term.col, term.row, term.maxcol, term.c.y);
@@ -2630,30 +2646,33 @@ tresize(int col, int row)
 	term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
 	term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
 
+	fill_plan = st_tresizefillplan(mincol, col);
 	for (i = 0; i < HISTSIZE; i++) {
 		term.hist[i] = xrealloc(term.hist[i], col * sizeof(Glyph));
-		for (j = mincol; j < col; j++) {
+		for (j = fill_plan.start; fill_plan.run && j < fill_plan.end; j++) {
 			term.hist[i][j] = term.c.attr;
 			term.hist[i][j].u = ' ';
 		}
 	}
 
 	/* resize each row to new width, zero-pad if needed */
-	for (i = 0; i < plan.resize_rows; i++) {
+	row_plan = st_tresizerowplan(plan.resize_rows, plan.new_row_start, row);
+	for (i = row_plan.resize_start; i < row_plan.resize_end; i++) {
 		term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
 		term.alt[i]  = xrealloc(term.alt[i],  col * sizeof(Glyph));
 	}
 
 	/* allocate any new rows */
-	for (i = plan.new_row_start; i < row; i++) {
+	for (i = row_plan.alloc_start; i < row_plan.alloc_end; i++) {
 		term.line[i] = xmalloc(col * sizeof(Glyph));
 		term.alt[i] = xmalloc(col * sizeof(Glyph));
 	}
-	if (col > term.maxcol) {
-		bp = term.tabs + term.maxcol;
+	tab_plan = st_tresizetabplan(term.tabs, term.maxcol, col, tabspaces);
+	if (tab_plan.grow) {
+		bp = term.tabs + tab_plan.clear_start;
 
-		memset(bp, 0, sizeof(*term.tabs) * (col - term.maxcol));
-		for (i = st_tresizetabstart(term.tabs, term.maxcol, tabspaces);
+		memset(bp, 0, sizeof(*term.tabs) * tab_plan.clear_count);
+		for (i = tab_plan.tab_start;
 				i < col; i += tabspaces)
 			term.tabs[i] = 1;
 	}

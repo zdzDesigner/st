@@ -534,36 +534,8 @@ pub fn cursorEdit(input: []const u8, inputmode: bool, inputlen: usize, cursor: u
     };
 }
 
-pub fn inputCap(inputlen: usize, add_len: usize, inputcap: usize) usize {
-    return (Input{ .active = true, .len = inputlen, .cursor = 0, .cap = inputcap }).nextCap(add_len);
-}
-
-pub fn inputGrow(inputlen: usize, add_len: usize, inputcap: usize) bool {
-    return (Input{ .active = true, .len = inputlen, .cursor = 0, .cap = inputcap }).needsGrow(add_len);
-}
-
-pub fn inputPlan(inputmode: bool, len: usize) bool {
-    return (Input{ .active = inputmode, .len = len, .cursor = 0, .cap = 0 }).insertable();
-}
-
 pub fn insertPlan(inputmode: bool, inputlen: usize, cursor: usize, inputcap: usize, add_len: usize) InsertPlan {
     return (Input{ .active = inputmode, .len = inputlen, .cursor = cursor, .cap = inputcap }).insertPlan(add_len);
-}
-
-pub fn backspacePlan(inputmode: bool, inputlen: usize, cursor: usize) bool {
-    return (Input{ .active = inputmode, .len = inputlen, .cursor = cursor, .cap = 0 }).canBackspace();
-}
-
-pub fn deleteForwardPlan(inputmode: bool, cursor: usize, inputlen: usize) bool {
-    return (Input{ .active = inputmode, .len = inputlen, .cursor = cursor, .cap = 0 }).canDeleteForward();
-}
-
-pub fn deleteWordPlan(inputmode: bool, cursor: usize) bool {
-    return (Input{ .active = inputmode, .len = 0, .cursor = cursor, .cap = 0 }).canDeleteWord();
-}
-
-pub fn cursorPlan(inputmode: bool) bool {
-    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).showsCursor();
 }
 
 pub fn scanPlan(active: bool, qlen: i32) bool {
@@ -572,18 +544,6 @@ pub fn scanPlan(active: bool, qlen: i32) bool {
 
 pub fn deletePlan(start: usize, end: usize, inputlen: usize) DeletePlan {
     return (Input{ .active = true, .len = inputlen, .cursor = 0, .cap = 0 }).deleteRange(start, end);
-}
-
-pub fn commitPlan(inputmode: bool, inputlen: usize) Action {
-    return (Input{ .active = inputmode, .len = inputlen, .cursor = 0, .cap = 0 }).commit();
-}
-
-pub fn cancelPlan(inputmode: bool) Action {
-    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).cancel();
-}
-
-pub fn clearInputPlan(inputmode: bool) bool {
-    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).clearable();
 }
 
 pub fn clearInputEdit(inputmode: bool) StateEdit {
@@ -600,6 +560,10 @@ pub fn cancelEdit(inputmode: bool) StateEdit {
 
 pub fn barActive(inputmode: bool, active: bool) bool {
     return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).barActive(active);
+}
+
+pub fn inputActive(inputmode: bool) bool {
+    return (Input{ .active = inputmode, .len = 0, .cursor = 0, .cap = 0 }).showsCursor();
 }
 
 pub fn promptPlan(has_input: bool, inputcap: usize) PromptPlan {
@@ -717,19 +681,12 @@ test "search utf8 cursor and delete word plans" {
 }
 
 test "search input edit plans guard inactive states" {
-    try std.testing.expectEqual(@as(usize, 64), inputCap(0, 3, 0));
-    try std.testing.expectEqual(@as(usize, 128), inputCap(63, 2, 64));
-    try std.testing.expect(!inputGrow(3, 2, 8));
-    try std.testing.expect(inputGrow(7, 2, 8));
-    try std.testing.expect(!inputPlan(false, 3));
-    try std.testing.expect(inputPlan(true, 0));
-    try std.testing.expect(inputPlan(true, 3));
-    try std.testing.expect(!backspacePlan(true, 3, 0));
-    try std.testing.expect(backspacePlan(true, 3, 2));
-    try std.testing.expect(!deleteForwardPlan(true, 3, 3));
-    try std.testing.expect(deleteForwardPlan(true, 2, 3));
-    try std.testing.expect(!deleteWordPlan(true, 0));
-    try std.testing.expect(cursorPlan(true));
+    try std.testing.expect(!insertPlan(false, 3, 1, 8, 2).run);
+    try std.testing.expect(insertPlan(true, 0, 0, 8, 2).run);
+    try std.testing.expectEqual(CursorEdit.none, cursorEdit("abc", true, 3, 0, .backspace));
+    try std.testing.expectEqual(CursorEdit.none, cursorEdit("abc", true, 3, 3, .delete_forward));
+    try std.testing.expectEqual(CursorEdit.none, cursorEdit("abc", true, 3, 0, .delete_word));
+    try std.testing.expectEqual(@as(usize, 0), cursorEdit("abc", true, 3, 2, .home).move);
     try std.testing.expect(scanPlan(true, 2));
 }
 
@@ -800,12 +757,6 @@ test "search commit prompt and match capacity plans" {
     try std.testing.expect(deletePlan(2, 5, 9).run);
     try std.testing.expectEqual(@as(usize, 6), deletePlan(2, 5, 9).new_len);
     try std.testing.expect(!deletePlan(5, 2, 9).run);
-    try std.testing.expectEqual(Action.none, commitPlan(false, 1));
-    try std.testing.expectEqual(Action.clear, commitPlan(true, 0));
-    try std.testing.expectEqual(Action.set, commitPlan(true, 3));
-    try std.testing.expectEqual(Action.redraw, cancelPlan(true));
-    try std.testing.expect(clearInputPlan(true));
-    try std.testing.expect(!clearInputPlan(false));
     try std.testing.expect(barActive(true, false));
     try std.testing.expect(barActive(false, true));
     try std.testing.expect(!barActive(false, false));

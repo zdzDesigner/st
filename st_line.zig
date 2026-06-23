@@ -74,6 +74,11 @@ const ZigSelSnapWordStep = extern struct {
     prevrune: u32,
 };
 
+const ZigSelSnapLineStep = extern struct {
+    action: c_int,
+    y: c_int,
+};
+
 const ZigGetSelLinePlan = extern struct {
     start_x: c_int,
     last_x: c_int,
@@ -156,6 +161,8 @@ const sel_scroll_clear = @intFromEnum(selection.ScrollAction.clear);
 const sel_scroll_normalize = @intFromEnum(selection.ScrollAction.normalize);
 const sel_snap_word_break = @intFromEnum(selection.SnapWordAction.stop);
 const sel_snap_word_accept = @intFromEnum(selection.SnapWordAction.accept);
+const sel_snap_line_stop = @intFromEnum(selection.SnapLineAction.stop);
+const sel_snap_line_move = @intFromEnum(selection.SnapLineAction.move);
 const search_action_none = @intFromEnum(search.Action.none);
 const search_action_clear = @intFromEnum(search.Action.clear);
 const search_action_set = @intFromEnum(search.Action.set);
@@ -244,6 +251,14 @@ export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
     return selection.snapLineX(direction, col);
 }
 
+export fn st_selsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int) ZigSelSnapLineStep {
+    const step = selection.snapLineStep(y, direction, row, wrapped != 0);
+    return switch (step) {
+        .stop => |next_y| .{ .action = sel_snap_line_stop, .y = next_y },
+        .move => |next_y| .{ .action = sel_snap_line_move, .y = next_y },
+    };
+}
+
 export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int) ZigSelSnapWordPlan {
     const plan = selection.snapWordPlan(.{ .x = x, .y = y }, direction, .{ .cols = col, .rows = row });
     return .{
@@ -256,21 +271,25 @@ export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, r
     };
 }
 
-export fn st_selsnapwordbreak(mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) c_int {
-    const prev = selection.SnapPrev{ .delim = prevdelim, .rune = prevrune };
-    return boolInt(selection.snapWordBreak(mode, delim, prev, rune));
-}
-
-export fn st_selsnapwordpastline(x: c_int, linelen: c_int) c_int {
-    return boolInt(selection.snapWordPastLine(x, linelen));
-}
-
-export fn st_selsnapwordstep(x: c_int, y: c_int, linelen: c_int, mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) ZigSelSnapWordStep {
-    const step = selection.snapWordStep(.{ .x = x, .y = y }, linelen, mode, delim, .{ .delim = prevdelim, .rune = prevrune }, rune);
-    switch (step) {
-        .stop => |prev| return .{ .action = sel_snap_word_break, .x = x, .y = y, .prevdelim = prev.delim, .prevrune = prev.rune },
-        .accept => |accepted| return .{ .action = sel_snap_word_accept, .x = accepted.point.x, .y = accepted.point.y, .prevdelim = accepted.prev.delim, .prevrune = accepted.prev.rune },
-    }
+export fn st_selsnapwordloopstep(x: c_int, y: c_int, wrap_x: c_int, wrap_y: c_int, wrapped: c_int, in_bounds: c_int, wrap_allowed: c_int, linelen: c_int, mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) ZigSelSnapWordStep {
+    const step = selection.snapWordLoopStep(
+        .{
+            .point = .{ .x = x, .y = y },
+            .wrap_point = .{ .x = wrap_x, .y = wrap_y },
+            .wrapped = wrapped != 0,
+            .in_bounds = in_bounds != 0,
+        },
+        wrap_allowed != 0,
+        linelen,
+        mode,
+        delim,
+        .{ .delim = prevdelim, .rune = prevrune },
+        rune,
+    );
+    return switch (step) {
+        .stop => |prev| .{ .action = sel_snap_word_break, .x = x, .y = y, .prevdelim = prev.delim, .prevrune = prev.rune },
+        .accept => |accepted| .{ .action = sel_snap_word_accept, .x = accepted.point.x, .y = accepted.point.y, .prevdelim = accepted.prev.delim, .prevrune = accepted.prev.rune },
+    };
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
@@ -416,18 +435,6 @@ export fn st_searchcanceledit(inputmode: c_int) ZigSearchStateEditPlan {
     return searchStateEditPlan(search.cancelEdit(inputmode != 0));
 }
 
-export fn st_searchinputcap(inputlen: usize, add_len: usize, inputcap: usize) usize {
-    return search.inputCap(inputlen, add_len, inputcap);
-}
-
-export fn st_searchinputgrow(inputlen: usize, add_len: usize, inputcap: usize) c_int {
-    return boolInt(search.inputGrow(inputlen, add_len, inputcap));
-}
-
-export fn st_searchinputplan(inputmode: c_int, len: usize) c_int {
-    return boolInt(search.inputPlan(inputmode != 0, len));
-}
-
 export fn st_searchinsertplan(inputmode: c_int, inputlen: usize, cursor: usize, inputcap: usize, add_len: usize) ZigSearchInsertPlan {
     const plan = search.insertPlan(inputmode != 0, inputlen, cursor, inputcap, add_len);
     return .{
@@ -443,22 +450,6 @@ export fn st_searchinsertplan(inputmode: c_int, inputlen: usize, cursor: usize, 
     };
 }
 
-export fn st_searchbackspaceplan(inputmode: c_int, inputlen: usize, cursor: usize) c_int {
-    return boolInt(search.backspacePlan(inputmode != 0, inputlen, cursor));
-}
-
-export fn st_searchdeleteforwardplan(inputmode: c_int, cursor: usize, inputlen: usize) c_int {
-    return boolInt(search.deleteForwardPlan(inputmode != 0, cursor, inputlen));
-}
-
-export fn st_searchdeletewordplan(inputmode: c_int, cursor: usize) c_int {
-    return boolInt(search.deleteWordPlan(inputmode != 0, cursor));
-}
-
-export fn st_searchcursorplan(inputmode: c_int) c_int {
-    return boolInt(search.cursorPlan(inputmode != 0));
-}
-
 export fn st_searchscanplan(active: c_int, qlen: c_int) c_int {
     return boolInt(search.scanPlan(active != 0, qlen));
 }
@@ -468,24 +459,12 @@ export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSear
     return .{ .run = boolInt(plan.run), .new_len = plan.new_len };
 }
 
-export fn st_searchcommitplan(inputmode: c_int, inputlen: usize) c_int {
-    return @intFromEnum(search.commitPlan(inputmode != 0, inputlen));
-}
-
-export fn st_searchcancelplan(inputmode: c_int) c_int {
-    return @intFromEnum(search.cancelPlan(inputmode != 0));
-}
-
-export fn st_searchclearinputplan(inputmode: c_int) c_int {
-    return boolInt(search.clearInputPlan(inputmode != 0));
-}
-
 export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
     return boolInt(search.barActive(inputmode != 0, active != 0));
 }
 
 export fn st_searchinputactiveplan(inputmode: c_int) c_int {
-    return boolInt(search.cursorPlan(inputmode != 0));
+    return boolInt(search.inputActive(inputmode != 0));
 }
 
 export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
@@ -724,6 +703,9 @@ test "selection start plan initializes regular selection" {
 test "selection line snap x chooses edge by direction" {
     try std.testing.expectEqual(@as(c_int, 0), st_selsnaplinex(-1, 10));
     try std.testing.expectEqual(@as(c_int, 9), st_selsnaplinex(1, 10));
+    try std.testing.expectEqual(@as(c_int, sel_snap_line_move), st_selsnaplinestep(3, -1, 5, 1).action);
+    try std.testing.expectEqual(@as(c_int, 2), st_selsnaplinestep(3, -1, 5, 1).y);
+    try std.testing.expectEqual(@as(c_int, sel_snap_line_stop), st_selsnaplinestep(3, 1, 5, 0).action);
 }
 
 test "selection word snap plans wrapped coordinates" {
@@ -749,16 +731,17 @@ test "selection word snap reports row overflow" {
 }
 
 test "selection word snap break follows delimiter state" {
-    try std.testing.expectEqual(@as(c_int, 1), st_selsnapwordbreak(0, 1, 0, ',', 'a'));
-    try std.testing.expectEqual(@as(c_int, 1), st_selsnapwordbreak(0, 1, 1, '.', ','));
-    try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordbreak(attr_wdummy, 1, 0, ',', 'a'));
-    try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordbreak(0, 0, 0, 'b', 'a'));
-    try std.testing.expectEqual(@as(c_int, 1), st_selsnapwordpastline(5, 5));
-    try std.testing.expectEqual(@as(c_int, 0), st_selsnapwordpastline(4, 5));
+    const prev = selection.SnapPrev{ .delim = 0, .rune = 'a' };
+    try std.testing.expect(selection.snapWordBreak(0, 1, prev, ','));
+    try std.testing.expect(selection.snapWordBreak(0, 1, .{ .delim = 1, .rune = ',' }, '.'));
+    try std.testing.expect(!selection.snapWordBreak(attr_wdummy, 1, prev, ','));
+    try std.testing.expect(!selection.snapWordBreak(0, 0, prev, 'b'));
+    try std.testing.expect(selection.snapWordPastLine(5, 5));
+    try std.testing.expect(!selection.snapWordPastLine(4, 5));
 }
 
 test "selection word snap step accepts and updates previous glyph" {
-    const step = st_selsnapwordstep(3, 2, 6, 0, 0, 0, 'b', 'a');
+    const step = st_selsnapwordloopstep(3, 2, 2, 2, 0, 1, 1, 6, 0, 0, 0, 'b', 'a');
     try std.testing.expectEqual(@as(c_int, sel_snap_word_accept), step.action);
     try std.testing.expectEqual(@as(c_int, 3), step.x);
     try std.testing.expectEqual(@as(c_int, 2), step.y);
@@ -767,8 +750,10 @@ test "selection word snap step accepts and updates previous glyph" {
 }
 
 test "selection word snap step breaks on line end or delimiter" {
-    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordstep(6, 2, 6, 0, 0, 0, 'b', 'a').action);
-    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordstep(3, 2, 6, 0, 1, 0, ',', 'a').action);
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(6, 2, 2, 2, 0, 1, 1, 6, 0, 0, 0, 'b', 'a').action);
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(3, 2, 2, 2, 0, 1, 1, 6, 0, 1, 0, ',', 'a').action);
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(0, -1, 0, -1, 1, 0, 1, 0, 0, 0, 0, 'a', 'a').action);
+    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(0, 3, 9, 2, 1, 1, 0, 6, 0, 0, 0, 'b', 'a').action);
 }
 
 test "search hit requires active matching row and x range" {
@@ -870,13 +855,6 @@ test "search delete word skips spaces then word" {
     try std.testing.expectEqual(@as(usize, 5), st_searchdeletewordstart(input, input.len));
 }
 
-test "search input cap doubles until required fits" {
-    try std.testing.expectEqual(@as(usize, 64), st_searchinputcap(0, 3, 0));
-    try std.testing.expectEqual(@as(usize, 128), st_searchinputcap(63, 2, 64));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchinputgrow(3, 2, 8));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchinputgrow(7, 2, 8));
-}
-
 test "search insert plan describes buffer edit" {
     const empty = st_searchinsertplan(1, 0, 0, 8, 2);
     const plan = st_searchinsertplan(1, 3, 1, 8, 2);
@@ -932,15 +910,12 @@ test "search state edit adapters expose tagged actions" {
 }
 
 test "search input edit plans guard inactive and empty cases" {
-    try std.testing.expectEqual(@as(c_int, 0), st_searchinputplan(0, 3));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchinputplan(1, 0));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchinputplan(1, 3));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchbackspaceplan(1, 3, 0));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchbackspaceplan(1, 3, 2));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchdeleteforwardplan(1, 3, 3));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchdeleteforwardplan(1, 2, 3));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchdeletewordplan(1, 0));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchcursorplan(1));
+    try std.testing.expectEqual(@as(c_int, 0), st_searchbackspaceedit("abc", 1, 3, 0).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), st_searchbackspaceedit("abc", 1, 3, 2).kind);
+    try std.testing.expectEqual(@as(c_int, 0), st_searchdeleteforwardedit("abc", 1, 3, 3).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), st_searchdeleteforwardedit("abc", 1, 3, 2).kind);
+    try std.testing.expectEqual(@as(c_int, 0), st_searchdeletewordedit("abc", 1, 3, 0).kind);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchinputactiveplan(1));
     try std.testing.expectEqual(@as(c_int, 1), st_searchscanplan(1, 2));
 }
 
@@ -951,12 +926,12 @@ test "search delete plan validates range and updates length" {
 }
 
 test "search commit and cancel plans report actions" {
-    try std.testing.expectEqual(@as(c_int, search_action_none), st_searchcommitplan(0, 1));
-    try std.testing.expectEqual(@as(c_int, search_action_clear), st_searchcommitplan(1, 0));
-    try std.testing.expectEqual(@as(c_int, search_action_set), st_searchcommitplan(1, 3));
-    try std.testing.expectEqual(@as(c_int, search_action_redraw), st_searchcancelplan(1));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchclearinputplan(1));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchclearinputplan(0));
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), st_searchcommitedit(0, 1).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_clear)), st_searchcommitedit(1, 0).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_set)), st_searchcommitedit(1, 3).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.cancel)), st_searchcanceledit(1).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.clear_input)), st_searchclearinputedit(1).kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), st_searchclearinputedit(0).kind);
     try std.testing.expectEqual(@as(c_int, 1), st_searchbaractive(1, 0));
     try std.testing.expectEqual(@as(c_int, 1), st_searchbaractive(0, 1));
     try std.testing.expectEqual(@as(c_int, 0), st_searchbaractive(0, 0));
