@@ -76,6 +76,14 @@ pub const ZigResizeRowPlan = extern struct {
     alloc_end: c_int,
 };
 
+pub const ZigResizeExecPlan = extern struct {
+    base: ZigResizePlan,
+    hist_fill: ZigResizeFillPlan,
+    rows: ZigResizeRowPlan,
+    tabs: ZigResizeTabPlan,
+    clear: ZigResizeClearPlan,
+};
+
 pub const state_unknown = 0;
 pub const state_set_scroll = 1;
 pub const state_save_cursor = 2;
@@ -211,6 +219,23 @@ const ResizeRows = struct {
     }
 };
 
+const ResizeExec = struct {
+    request: ResizeRequest,
+    tabs: []const c_int,
+    tabspaces: c_int,
+
+    fn plan(self: ResizeExec) ZigResizeExecPlan {
+        const base = self.request.plan();
+        return .{
+            .base = base,
+            .hist_fill = (ResizeFill{ .start = base.mincol, .end = base.alloc_col }).plan(),
+            .rows = (ResizeRows{ .resize_end = base.resize_rows, .alloc_start = base.new_row_start, .alloc_end = self.request.requested_row }).plan(),
+            .tabs = (ResizeTabs{ .tabs = self.tabs, .old_col = base.base_maxcol, .new_col = base.alloc_col, .tabspaces = self.tabspaces }).plan(),
+            .clear = (ResizeClear{ .mincol = base.mincol, .col = base.alloc_col, .minrow = base.minrow, .row = self.request.requested_row }).plan(),
+        };
+    }
+};
+
 const ResetRequest = struct {
     default_fg: u32,
     default_bg: u32,
@@ -265,7 +290,7 @@ const ResizeClear = struct {
     }
 };
 
-export fn st_planstate(mode: c_char, priv: c_int, arg: [*]const c_int, len: c_int, row: c_int) ZigStatePlan {
+fn planState(mode: c_char, priv: c_int, arg: [*]const c_int, len: c_int, row: c_int) ZigStatePlan {
     const args = arg[0..@intCast(len)];
     return (CsiCommand{ .mode = mode, .private = priv != 0, .args = args, .row = row }).plan();
 }
@@ -274,21 +299,11 @@ export fn st_tsetscroll(t: c_int, b: c_int, row: c_int) ZigScrollRegion {
     return (ScrollBounds{ .top = t, .bottom = b, .row = row }).region();
 }
 
-export fn st_tresizeplan(requested_col: c_int, requested_row: c_int, current_col: c_int, current_row: c_int, current_maxcol: c_int, cursor_y: c_int) ZigResizePlan {
-    return (ResizeRequest{ .requested_col = requested_col, .requested_row = requested_row, .current_col = current_col, .current_row = current_row, .current_maxcol = current_maxcol, .cursor_y = cursor_y }).plan();
-}
-
-export fn st_tresizetabplan(tabs: [*]const c_int, old_col: c_int, new_col: c_int, tabspaces: c_int) ZigResizeTabPlan {
-    const tab_count = if (old_col > 0) old_col else 0;
-    return (ResizeTabs{ .tabs = tabs[0..@intCast(tab_count)], .old_col = old_col, .new_col = new_col, .tabspaces = tabspaces }).plan();
-}
-
-export fn st_tresizefillplan(start: c_int, end: c_int) ZigResizeFillPlan {
-    return (ResizeFill{ .start = start, .end = end }).plan();
-}
-
-export fn st_tresizerowplan(resize_end: c_int, alloc_start: c_int, alloc_end: c_int) ZigResizeRowPlan {
-    return (ResizeRows{ .resize_end = resize_end, .alloc_start = alloc_start, .alloc_end = alloc_end }).plan();
+export fn st_tresizeexecplan(tabs: [*]const c_int, requested_col: c_int, requested_row: c_int, current_col: c_int, current_row: c_int, current_maxcol: c_int, cursor_y: c_int, tabspaces: c_int) ZigResizeExecPlan {
+    const request = ResizeRequest{ .requested_col = requested_col, .requested_row = requested_row, .current_col = current_col, .current_row = current_row, .current_maxcol = current_maxcol, .cursor_y = cursor_y };
+    const base_maxcol = if (current_maxcol == 0) current_col else current_maxcol;
+    const tab_count = if (base_maxcol > 0) base_maxcol else 0;
+    return (ResizeExec{ .request = request, .tabs = tabs[0..@intCast(tab_count)], .tabspaces = tabspaces }).plan();
 }
 
 export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPlan {
@@ -297,10 +312,6 @@ export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPl
 
 export fn st_tresettabs(tabs: [*]c_int, col: c_int, tabspaces: c_uint) void {
     (TabReset{ .tabs = tabs[0..@intCast(col)], .col = col, .tabspaces = tabspaces }).apply();
-}
-
-export fn st_tresizeclearplan(mincol: c_int, col: c_int, minrow: c_int, row: c_int) ZigResizeClearPlan {
-    return (ResizeClear{ .mincol = mincol, .col = col, .minrow = minrow, .row = row }).plan();
 }
 
 fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
@@ -329,31 +340,31 @@ fn addResizeRect(plan: *ZigResizeClearPlan, x1: c_int, y1: c_int, x2: c_int, y2:
 }
 
 test "plan r defaults to full screen scroll region" {
-    const plan = st_planstate('r', 0, &[_]c_int{ 0, 0 }, 2, 24);
+    const plan = planState('r', 0, &[_]c_int{ 0, 0 }, 2, 24);
     try std.testing.expectEqual(@as(c_int, state_set_scroll), plan.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.top);
     try std.testing.expectEqual(@as(c_int, 23), plan.bottom);
 }
 
 test "plan r uses explicit bounds" {
-    const plan = st_planstate('r', 0, &[_]c_int{ 2, 10 }, 2, 24);
+    const plan = planState('r', 0, &[_]c_int{ 2, 10 }, 2, 24);
     try std.testing.expectEqual(@as(c_int, state_set_scroll), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.top);
     try std.testing.expectEqual(@as(c_int, 9), plan.bottom);
 }
 
 test "plan r with private marker is unknown" {
-    const plan = st_planstate('r', 1, &[_]c_int{ 2, 10 }, 2, 24);
+    const plan = planState('r', 1, &[_]c_int{ 2, 10 }, 2, 24);
     try std.testing.expectEqual(@as(c_int, state_unknown), plan.kind);
 }
 
 test "plan s saves cursor" {
-    const plan = st_planstate('s', 0, &[_]c_int{}, 0, 24);
+    const plan = planState('s', 0, &[_]c_int{}, 0, 24);
     try std.testing.expectEqual(@as(c_int, state_save_cursor), plan.kind);
 }
 
 test "plan u loads cursor" {
-    const plan = st_planstate('u', 0, &[_]c_int{}, 0, 24);
+    const plan = planState('u', 0, &[_]c_int{}, 0, 24);
     try std.testing.expectEqual(@as(c_int, state_load_cursor), plan.kind);
 }
 
@@ -372,7 +383,8 @@ test "tsetscroll sorts inverted bounds after clamp" {
 }
 
 test "tresize plan preserves requested and alloc columns" {
-    const plan = st_tresizeplan(80, 24, 100, 30, 0, 10);
+    const tabs = [_]c_int{0} ** 100;
+    const plan = st_tresizeexecplan(&tabs, 80, 24, 100, 30, 0, 10, 8).base;
 
     try std.testing.expectEqual(@as(c_int, 0), plan.invalid);
     try std.testing.expectEqual(@as(c_int, 80), plan.requested_col);
@@ -385,59 +397,72 @@ test "tresize plan preserves requested and alloc columns" {
 }
 
 test "tresize plan computes slide and tail free bounds" {
-    const plan = st_tresizeplan(120, 20, 100, 30, 100, 25);
+    const tabs = [_]c_int{0} ** 100;
+    const plan = st_tresizeexecplan(&tabs, 120, 20, 100, 30, 100, 25, 8).base;
 
     try std.testing.expectEqual(@as(c_int, 6), plan.slide_count);
     try std.testing.expectEqual(@as(c_int, 26), plan.tail_start);
 }
 
+test "tresize exec plan groups dependent ranges" {
+    const tabs = [_]c_int{0} ** 100;
+    const plan = st_tresizeexecplan(&tabs, 120, 20, 100, 30, 100, 25, 8);
+
+    try std.testing.expectEqual(@as(c_int, 100), plan.hist_fill.start);
+    try std.testing.expectEqual(@as(c_int, 120), plan.hist_fill.end);
+    try std.testing.expectEqual(@as(c_int, 20), plan.rows.resize_end);
+    try std.testing.expectEqual(@as(c_int, 20), plan.rows.alloc_start);
+    try std.testing.expectEqual(@as(c_int, 20), plan.rows.alloc_end);
+    try std.testing.expectEqual(@as(c_int, 1), plan.clear.count);
+}
+
 test "tresize tab plan continues after previous tab" {
     const tabs = [_]c_int{ 0, 0, 0, 0, 1, 0, 0, 0 };
 
-    try std.testing.expectEqual(@as(c_int, 8), st_tresizetabplan(&tabs, tabs.len, 12, 4).tab_start);
+    try std.testing.expectEqual(@as(c_int, 8), st_tresizeexecplan(&tabs, 12, 24, tabs.len, 24, tabs.len, 0, 4).tabs.tab_start);
 }
 
 test "tresize tab plan falls back from no previous tab" {
     const tabs = [_]c_int{ 0, 0, 0, 0 };
 
-    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabplan(&tabs, tabs.len, 8, 4).tab_start);
+    try std.testing.expectEqual(@as(c_int, 4), st_tresizeexecplan(&tabs, 8, 24, tabs.len, 24, tabs.len, 0, 4).tabs.tab_start);
 }
 
 test "tresize tab plan handles empty old columns" {
     const tabs = [_]c_int{};
 
-    try std.testing.expectEqual(@as(c_int, 4), st_tresizetabplan(&tabs, 0, 8, 4).tab_start);
+    try std.testing.expectEqual(@as(c_int, 4), st_tresizeexecplan(&tabs, 8, 24, 0, 24, 0, 0, 4).tabs.tab_start);
 }
 
 test "tresize tab plan describes growth range" {
     const tabs = [_]c_int{ 0, 0, 0, 0, 1, 0, 0, 0 };
-    const plan = st_tresizetabplan(&tabs, tabs.len, 12, 4);
+    const plan = st_tresizeexecplan(&tabs, 12, 24, tabs.len, 24, tabs.len, 0, 4).tabs;
 
     try std.testing.expectEqual(@as(c_int, 1), plan.grow);
     try std.testing.expectEqual(@as(c_int, 8), plan.clear_start);
     try std.testing.expectEqual(@as(c_int, 4), plan.clear_count);
     try std.testing.expectEqual(@as(c_int, 8), plan.tab_start);
 
-    const unchanged = st_tresizetabplan(&tabs, tabs.len, 6, 4);
+    const unchanged = st_tresizeexecplan(&tabs, 6, 24, tabs.len, 24, tabs.len, 0, 4).tabs;
     try std.testing.expectEqual(@as(c_int, 0), unchanged.grow);
     try std.testing.expectEqual(@as(c_int, 0), unchanged.clear_count);
 }
 
 test "tresize fill plan skips empty ranges" {
-    const grow = st_tresizefillplan(5, 10);
+    const grow = (ResizeFill{ .start = 5, .end = 10 }).plan();
     try std.testing.expectEqual(@as(c_int, 1), grow.run);
     try std.testing.expectEqual(@as(c_int, 5), grow.start);
     try std.testing.expectEqual(@as(c_int, 10), grow.end);
 
-    const same = st_tresizefillplan(10, 10);
+    const same = (ResizeFill{ .start = 10, .end = 10 }).plan();
     try std.testing.expectEqual(@as(c_int, 0), same.run);
 
-    const inverted = st_tresizefillplan(12, 10);
+    const inverted = (ResizeFill{ .start = 12, .end = 10 }).plan();
     try std.testing.expectEqual(@as(c_int, 0), inverted.run);
 }
 
 test "tresize row plan exposes resize and alloc ranges" {
-    const plan = st_tresizerowplan(20, 20, 24);
+    const plan = (ResizeRows{ .resize_end = 20, .alloc_start = 20, .alloc_end = 24 }).plan();
     try std.testing.expectEqual(@as(c_int, 0), plan.resize_start);
     try std.testing.expectEqual(@as(c_int, 20), plan.resize_end);
     try std.testing.expectEqual(@as(c_int, 20), plan.alloc_start);
@@ -465,7 +490,7 @@ test "treset tabs marks configured stops" {
 }
 
 test "tresize clear plan emits width and height regions" {
-    const plan = st_tresizeclearplan(5, 10, 3, 6);
+    const plan = (ResizeClear{ .mincol = 5, .col = 10, .minrow = 3, .row = 6 }).plan();
 
     try std.testing.expectEqual(@as(c_int, 2), plan.count);
     try std.testing.expectEqual(ZigClearRect{ .x1 = 5, .y1 = 0, .x2 = 9, .y2 = 2 }, plan.rects[0]);

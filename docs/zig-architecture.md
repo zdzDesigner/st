@@ -18,7 +18,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_color_core.zig` 通过 `ColorParams`、`ColorParse` 承载 SGR truecolor/indexed color 参数解析纯逻辑。
 - `st_attr.zig` 通过 `SgrParams`、`AttrUpdate` 承载 SGR 属性更新规划，是 `tsetattr(...)` 的 Zig 迁移主体。
 - `st_base64.zig` 通过 `Base64Input`、`Base64Decoder` 承载 OSC 等路径复用的 base64 解码入口。
-- `st_csi.zig` 通过 `CsiParser`、`CsiArgParser` 承载 CSI 原始字节解析和 private marker 分类。
+- `st_csi.zig` 通过 `CsiParser`、`CsiArgParser` 和 `CsiExecPlan` 承载 CSI 原始字节解析、private marker 分类和 `csihandle` 顶层 command plan。
 - `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`ExternalPipe`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
 - `st_state.zig` 通过 `CsiCommand`、`ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 CSI 状态、scroll region、resize、reset、tab 和 clear rect 规划。
 - `st_edit.zig` 通过 `EditCommand`、`TextSpan`、`LineRegion`、`KeyboardScroll` 承载 CSI edit、行内搬移、区域滚动、历史环形指针和键盘滚动规划。
@@ -43,6 +43,10 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_line.zig`、`st_attr.zig`、`st_setchar.zig` 等 C 入口较多的文件仍允许保留 adapter helper，但新领域逻辑应继续下沉到内部类型方法。
 - `st_zig.h` 与 Zig `export fn st_*` 符号集合已核对一致；C 侧只依赖公开的 `ST_ZIG_*` 常量和 extern struct 布局。
 - `ST_ZIG_*` 只暴露 C executor 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
+- Search 和 Selection 主流程已完成迁移定版；后续只做局部优化、无用 ABI 删除或更大粒度 command plan 聚合。
+- Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C executor 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
+- CSI 已完成首批大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI 已删除。
+- ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 
 ## 完成定义
 
@@ -62,5 +66,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 
 - 新增领域逻辑优先放入内部模块，再从 adapter 调用。
 - 如果逻辑需要访问 C 全局状态或执行副作用，保留在 C 或 executor 层。
+- 优先减少 ABI 数量；C 未调用、只服务 Zig adapter 测试的 `export fn` 应删除，测试改为覆盖内部领域函数。
+- 不新增小 helper 迁移碎片；CSI/ESC、Line/ExternalPipe 等后续迁移应优先产出更大粒度 exec/frame/command plan。
 - 每批迁移保持单一主题，运行 `zig fmt`、`zig build test`、`zig build` 和 `timeout 5 ./zig-out/bin/st` 后再提交。
 - 不为缺失配置或异常状态添加静默默认值；错误信息必须保留上下文。

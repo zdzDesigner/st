@@ -61,7 +61,7 @@ const TtyWrite = struct {
     }
 };
 
-export fn st_planmisc(mode0: c_char, mode1: c_char, arg: [*]const c_int, len: c_int) ZigMiscPlan {
+fn planMisc(mode0: c_char, mode1: c_char, arg: [*]const c_int, len: c_int) ZigMiscPlan {
     const args = arg[0..@intCast(len)];
     return (MiscCommand{ .mode0 = mode0, .mode1 = mode1, .args = args }).plan();
 }
@@ -101,34 +101,34 @@ fn countArg(args: []const c_int) c_int {
 }
 
 test "plan media copy 0 dumps all" {
-    const plan = st_planmisc('i', 0, &[_]c_int{0}, 1);
+    const plan = planMisc('i', 0, &[_]c_int{0}, 1);
     try std.testing.expectEqual(@as(c_int, misc_media_dump), plan.kind);
 }
 
 test "plan media copy 5 enables print mode" {
-    const plan = st_planmisc('i', 0, &[_]c_int{5}, 1);
+    const plan = planMisc('i', 0, &[_]c_int{5}, 1);
     try std.testing.expectEqual(@as(c_int, misc_media_print_on), plan.kind);
 }
 
 test "plan repeat defaults to one" {
-    const plan = st_planmisc('b', 0, &[_]c_int{0}, 1);
+    const plan = planMisc('b', 0, &[_]c_int{0}, 1);
     try std.testing.expectEqual(@as(c_int, misc_repeat_last), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.value);
 }
 
 test "plan cursor style uses q suffix" {
-    const plan = st_planmisc(' ', 'q', &[_]c_int{3}, 1);
+    const plan = planMisc(' ', 'q', &[_]c_int{3}, 1);
     try std.testing.expectEqual(@as(c_int, misc_set_cursor_style), plan.kind);
     try std.testing.expectEqual(@as(c_int, 3), plan.value);
 }
 
 test "plan space with unsupported suffix is unknown" {
-    const plan = st_planmisc(' ', 'x', &[_]c_int{3}, 1);
+    const plan = planMisc(' ', 'x', &[_]c_int{3}, 1);
     try std.testing.expectEqual(@as(c_int, misc_unknown), plan.kind);
 }
 
 test "plan media copy unsupported arg is none" {
-    const plan = st_planmisc('i', 0, &[_]c_int{9}, 1);
+    const plan = planMisc('i', 0, &[_]c_int{9}, 1);
     try std.testing.expectEqual(@as(c_int, misc_none), plan.kind);
 }
 

@@ -39,6 +39,21 @@ pub const ZigDrawCursorPlan = extern struct {
     ocy: c_int,
 };
 
+pub const ZigDrawRegionPlan = extern struct {
+    draw: c_int,
+    y: c_int,
+    next_y: c_int,
+};
+
+pub const ZigDrawFramePlan = extern struct {
+    search_scan: c_int,
+    cx: c_int,
+    ocx: c_int,
+    ocy: c_int,
+    cursor_active: c_int,
+    imspot_active: c_int,
+};
+
 pub const ZigCursorStorePlan = extern struct {
     action: c_int,
     slot: c_int,
@@ -183,7 +198,23 @@ const CursorStore = struct {
     }
 };
 
-export fn st_plancursor(mode: c_char, x: c_int, y: c_int, arg: [*]const c_int, len: c_int) ZigCursorPlan {
+const DrawRegion = struct {
+    dirty: []const c_int,
+    start_y: c_int,
+    end_y: c_int,
+
+    fn plan(self: DrawRegion) ZigDrawRegionPlan {
+        var y = self.start_y;
+        while (y < self.end_y) : (y += 1) {
+            if (self.dirty[@intCast(y)] != 0) {
+                return .{ .draw = 1, .y = y, .next_y = y + 1 };
+            }
+        }
+        return .{ .draw = 0, .y = self.end_y, .next_y = self.end_y };
+    }
+};
+
+fn planCursor(mode: c_char, x: c_int, y: c_int, arg: [*]const c_int, len: c_int) ZigCursorPlan {
     const args = arg[0..@intCast(len)];
     return (CursorCommand{ .mode = mode, .x = x, .y = y, .args = args }).plan();
 }
@@ -204,24 +235,20 @@ export fn st_tmoveato_y(y: c_int, state: c_int, top: c_int) c_int {
     return (CursorOrigin{ .state = state, .top = top }).absoluteY(y);
 }
 
-export fn st_drawcursorplan(cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawCursorPlan {
-    return (DrawCursor(ZigGlyph){ .cx = cx, .current_y = current_y, .ocx = ocx, .ocy = ocy, .col = col, .row = row, .lines = lines[0..@intCast(row)] }).plan();
+export fn st_drawframeplan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
+    const cursor = (DrawCursor(ZigGlyph){ .cx = cx, .current_y = current_y, .ocx = ocx, .ocy = ocy, .col = col, .row = row, .lines = lines[0..@intCast(row)] }).plan();
+    return .{
+        .search_scan = if (search_active != 0) 1 else 0,
+        .cx = cursor.cx,
+        .ocx = cursor.ocx,
+        .ocy = cursor.ocy,
+        .cursor_active = if (scr == 0) 1 else 0,
+        .imspot_active = if (ocx != cursor.cx or ocy != current_y) 1 else 0,
+    };
 }
 
-export fn st_drawregionline(dirty: c_int) c_int {
-    return if (dirty != 0) 1 else 0;
-}
-
-export fn st_drawsearchscan(active: c_int) c_int {
-    return if (active != 0) 1 else 0;
-}
-
-export fn st_drawcursoractive(scr: c_int) c_int {
-    return if (scr == 0) 1 else 0;
-}
-
-export fn st_drawimspotactive(old_x: c_int, old_y: c_int, new_x: c_int, new_y: c_int) c_int {
-    return if (old_x != new_x or old_y != new_y) 1 else 0;
+export fn st_drawregionplan(dirty: [*]const c_int, y: c_int, y2: c_int) ZigDrawRegionPlan {
+    return (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y, .end_y = y2 }).plan();
 }
 
 export fn st_tcursorplan(mode: c_int, alt: c_int) ZigCursorStorePlan {
@@ -244,35 +271,35 @@ fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
 }
 
 test "plan A defaults to one line up" {
-    const plan = st_plancursor('A', 7, 9, &[_]c_int{0}, 1);
+    const plan = planCursor('A', 7, 9, &[_]c_int{0}, 1);
     try std.testing.expectEqual(@as(c_int, cursor_move_to), plan.kind);
     try std.testing.expectEqual(@as(c_int, 7), plan.x);
     try std.testing.expectEqual(@as(c_int, 8), plan.y);
 }
 
 test "plan C moves right by explicit count" {
-    const plan = st_plancursor('C', 7, 9, &[_]c_int{3}, 1);
+    const plan = planCursor('C', 7, 9, &[_]c_int{3}, 1);
     try std.testing.expectEqual(@as(c_int, cursor_move_to), plan.kind);
     try std.testing.expectEqual(@as(c_int, 10), plan.x);
     try std.testing.expectEqual(@as(c_int, 9), plan.y);
 }
 
 test "plan H uses absolute row and col" {
-    const plan = st_plancursor('H', 7, 9, &[_]c_int{ 4, 6 }, 2);
+    const plan = planCursor('H', 7, 9, &[_]c_int{ 4, 6 }, 2);
     try std.testing.expectEqual(@as(c_int, cursor_move_to_abs), plan.kind);
     try std.testing.expectEqual(@as(c_int, 5), plan.x);
     try std.testing.expectEqual(@as(c_int, 3), plan.y);
 }
 
 test "plan d keeps column for vertical absolute move" {
-    const plan = st_plancursor('d', 7, 9, &[_]c_int{2}, 1);
+    const plan = planCursor('d', 7, 9, &[_]c_int{2}, 1);
     try std.testing.expectEqual(@as(c_int, cursor_move_to_abs), plan.kind);
     try std.testing.expectEqual(@as(c_int, 7), plan.x);
     try std.testing.expectEqual(@as(c_int, 1), plan.y);
 }
 
 test "plan unknown mode reports unknown" {
-    const plan = st_plancursor('?', 7, 9, &[_]c_int{}, 0);
+    const plan = planCursor('?', 7, 9, &[_]c_int{}, 0);
     try std.testing.expectEqual(@as(c_int, cursor_unknown), plan.kind);
 }
 
@@ -334,25 +361,36 @@ test "draw cursor plan clamps old cursor and adjusts dummy cells" {
         .{ .u = '试', .mode = attr_wdummy, .fg = 0, .bg = 0 },
     };
     const lines = [_][*]const ZigGlyph{ &row0, &row1 };
-    const plan = st_drawcursorplan(1, 1, 9, 0, 2, 2, &lines);
+    const plan = st_drawframeplan(1, 0, 1, 1, 9, 0, 2, 2, &lines);
 
+    try std.testing.expectEqual(@as(c_int, 1), plan.search_scan);
     try std.testing.expectEqual(@as(c_int, 0), plan.cx);
     try std.testing.expectEqual(@as(c_int, 0), plan.ocx);
     try std.testing.expectEqual(@as(c_int, 0), plan.ocy);
+    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_active);
+    try std.testing.expectEqual(@as(c_int, 1), plan.imspot_active);
 }
 
-test "draw region line follows dirty flag" {
-    try std.testing.expectEqual(@as(c_int, 0), st_drawregionline(0));
-    try std.testing.expectEqual(@as(c_int, 1), st_drawregionline(2));
+test "draw region plan finds next dirty line" {
+    const dirty = [_]c_int{ 0, 0, 3, 0 };
+    const found = st_drawregionplan(&dirty, 0, dirty.len);
+    const empty = st_drawregionplan(&dirty, 3, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 1), found.draw);
+    try std.testing.expectEqual(@as(c_int, 2), found.y);
+    try std.testing.expectEqual(@as(c_int, 3), found.next_y);
+    try std.testing.expectEqual(@as(c_int, 0), empty.draw);
+    try std.testing.expectEqual(@as(c_int, 4), empty.next_y);
 }
 
 test "draw plans gate search scan and cursor" {
-    try std.testing.expectEqual(@as(c_int, 1), st_drawsearchscan(1));
-    try std.testing.expectEqual(@as(c_int, 0), st_drawsearchscan(0));
-    try std.testing.expectEqual(@as(c_int, 1), st_drawcursoractive(0));
-    try std.testing.expectEqual(@as(c_int, 0), st_drawcursoractive(2));
-    try std.testing.expectEqual(@as(c_int, 1), st_drawimspotactive(0, 0, 1, 0));
-    try std.testing.expectEqual(@as(c_int, 0), st_drawimspotactive(1, 2, 1, 2));
+    var row0 = [_]ZigGlyph{.{ .u = 'a', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const inactive = st_drawframeplan(0, 2, 0, 0, 0, 0, 1, 1, &lines);
+
+    try std.testing.expectEqual(@as(c_int, 0), inactive.search_scan);
+    try std.testing.expectEqual(@as(c_int, 0), inactive.cursor_active);
+    try std.testing.expectEqual(@as(c_int, 0), inactive.imspot_active);
 }
 
 test "tcursor plan maps mode and alt slot" {

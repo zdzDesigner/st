@@ -2,7 +2,7 @@
 //! [输入]: C 侧传入只读 glyph 行、终端列数、tab stops，以及 selection 的值拷贝字段。
 //! [输出]: 行有效长度、dump 输出范围、tab 跳转目标列，或指定坐标是否落在当前 selection 内。
 //! [副作用边界]: 不访问全局 `term` / `sel`，不修改 glyph、dirty、selection，也不做 IO/分配/X11 调用。
-//! [定位]: 替代 `tlinelen(...)`、`tlinehistlen(...)`、`tputtab(...)` 的扫描主体、`selected(...)` 的纯判断主体，以及 `selnormalize(...)` 的 bounds 计算主体。
+//! [定位]: 替代 `tlinelen(...)`、`tputtab(...)`、`externalpipe(...)` 行输出计划、`selected(...)` 的纯判断主体，以及 `selnormalize(...)` 的 bounds 计算主体。
 
 const std = @import("std");
 const line_core = @import("st_line_core.zig");
@@ -141,9 +141,10 @@ const ZigSearchPromptPlan = extern struct {
     inputcap: usize,
 };
 
-const ZigExternalPipeLinePlan = extern struct {
+const ZigExternalPipePlan = extern struct {
     kind: c_int,
     lastpos: c_int,
+    newline: c_int,
 };
 
 const ZigHistoryLinePlan = extern struct {
@@ -303,10 +304,6 @@ export fn st_searchcurrentvalid(active: c_int, current: c_int, nmatches: c_int) 
     return boolInt(search.currentValid(active != 0, current, nmatches));
 }
 
-export fn st_searchhit(active: c_int, match_scr: c_int, term_scr: c_int, match_y: c_int, y: c_int, x: c_int, match_x: c_int, match_len: c_int) c_int {
-    return boolInt(search.hit(active != 0, match_scr, term_scr, match_y, y, x, match_x, match_len));
-}
-
 export fn st_searchmatchlist(matches: ?[*]const ZigSearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
     const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
     const items = if (count == 0) &[_]ZigSearchMatch{} else (matches orelse return 0)[0..count];
@@ -371,10 +368,6 @@ export fn st_searchprevchar(input: [*]const u8, cursor: usize) usize {
 
 export fn st_searchnextchar(input: [*]const u8, cursor: usize, inputlen: usize) usize {
     return search.nextChar(input[0..inputlen], cursor);
-}
-
-export fn st_searchdeletewordstart(input: [*]const u8, cursor: usize) usize {
-    return search.deleteWordStart(input[0..cursor], cursor);
 }
 
 fn searchCursorEditPlan(edit: search.CursorEdit) ZigSearchCursorEditPlan {
@@ -467,17 +460,15 @@ export fn st_searchinputactiveplan(inputmode: c_int) c_int {
     return boolInt(search.inputActive(inputmode != 0));
 }
 
-export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
+export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPipePlan {
+    const glyphs = line[0..@intCast(col)];
+    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
     const plan = (line_core.VisualLine{ .len = linelen, .cols = col }).externalPipe();
-    return .{ .kind = @intFromEnum(plan.kind), .lastpos = plan.lastpos };
-}
-
-export fn st_externalpipewrap(mode: c_ushort) c_int {
-    return boolInt(line_core.externalPipeWrap(mode));
-}
-
-export fn st_externalpipelimit(histsize: c_int) c_int {
-    return line_core.externalPipeLimit(histsize);
+    return .{
+        .kind = @intFromEnum(plan.kind),
+        .lastpos = plan.lastpos,
+        .newline = if (plan.kind == .write and line_core.externalPipeWrap(glyphs[@intCast(plan.lastpos)].mode)) 1 else 0,
+    };
 }
 
 export fn st_searchpromptplan(has_input: c_int, inputcap: usize) ZigSearchPromptPlan {
@@ -498,10 +489,6 @@ export fn st_searchsetplan(query_len: usize, qlen: c_int) ZigSearchSetPlan {
         .active = boolInt(plan.active),
         .current = plan.current,
     };
-}
-
-export fn st_searchmatchcap(nmatches: c_int, cap: c_int) c_int {
-    return search.matchCap(nmatches, cap);
 }
 
 export fn st_getsellineplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int) ZigGetSelLinePlan {
@@ -756,11 +743,6 @@ test "selection word snap step breaks on line end or delimiter" {
     try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(0, 3, 9, 2, 1, 1, 0, 6, 0, 0, 0, 'b', 'a').action);
 }
 
-test "search hit requires active matching row and x range" {
-    try std.testing.expectEqual(@as(c_int, 1), st_searchhit(1, 2, 2, 4, 4, 7, 5, 3));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchhit(1, 2, 2, 4, 4, 9, 5, 3));
-}
-
 test "search line match skips dummy cells" {
     const line = [_]ZigGlyph{
         .{ .u = '你', .mode = 0, .fg = 0, .bg = 0 },
@@ -849,12 +831,6 @@ test "search char movement skips utf8 continuation bytes" {
     try std.testing.expectEqual(@as(usize, 4), st_searchnextchar(input, 1, input.len));
 }
 
-test "search delete word skips spaces then word" {
-    const input = "abc  你好";
-
-    try std.testing.expectEqual(@as(usize, 5), st_searchdeletewordstart(input, input.len));
-}
-
 test "search insert plan describes buffer edit" {
     const empty = st_searchinsertplan(1, 0, 0, 8, 2);
     const plan = st_searchinsertplan(1, 3, 1, 8, 2);
@@ -940,13 +916,14 @@ test "search commit and cancel plans report actions" {
 }
 
 test "external pipe line plan handles break skip and write" {
-    try std.testing.expectEqual(@as(c_int, externalpipe_break), st_externalpipelinelen(-1, 10).kind);
-    try std.testing.expectEqual(@as(c_int, externalpipe_skip), st_externalpipelinelen(0, 10).kind);
-    try std.testing.expectEqual(@as(c_int, externalpipe_write), st_externalpipelinelen(3, 10).kind);
-    try std.testing.expectEqual(@as(c_int, 3), st_externalpipelinelen(3, 10).lastpos);
-    try std.testing.expectEqual(@as(c_int, 1), st_externalpipewrap(attr_wrap));
-    try std.testing.expectEqual(@as(c_int, 0), st_externalpipewrap(0));
-    try std.testing.expectEqual(@as(c_int, 13), st_externalpipelimit(10));
+    const blank = [_]ZigGlyph{ .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 } };
+    const plain = [_]ZigGlyph{ .{ .u = '你', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = '好', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 } };
+    const wrapped = [_]ZigGlyph{ .{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = '文', .mode = attr_wrap, .fg = 0, .bg = 0 } };
+
+    try std.testing.expectEqual(@as(c_int, externalpipe_skip), st_externalpipeplan(&blank, blank.len).kind);
+    try std.testing.expectEqual(@as(c_int, externalpipe_write), st_externalpipeplan(&plain, plain.len).kind);
+    try std.testing.expectEqual(@as(c_int, 2), st_externalpipeplan(&plain, plain.len).lastpos);
+    try std.testing.expectEqual(@as(c_int, 1), st_externalpipeplan(&wrapped, wrapped.len).newline);
 }
 
 test "search set plan keeps allocation nonzero and resets current" {
@@ -968,12 +945,6 @@ test "search prompt plan allocates missing input buffer" {
     try std.testing.expectEqual(@as(usize, 64), missing.inputcap);
     try std.testing.expectEqual(@as(c_int, 0), existing.alloc);
     try std.testing.expectEqual(@as(usize, 128), existing.inputcap);
-}
-
-test "search match cap grows only when full" {
-    try std.testing.expectEqual(@as(c_int, 16), st_searchmatchcap(0, 0));
-    try std.testing.expectEqual(@as(c_int, 32), st_searchmatchcap(16, 16));
-    try std.testing.expectEqual(@as(c_int, 16), st_searchmatchcap(3, 16));
 }
 
 test "get selection line plan handles regular multiline" {

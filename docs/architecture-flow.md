@@ -92,25 +92,18 @@ flowchart TD
 ```mermaid
 flowchart TD
     Raw[ESC/CSI bytes] --> Parse[st_csi.zig CsiParser]
-    Parse --> Handle[st.c csihandle]
-    Handle --> Cursor[st_cursor.zig CursorCommand]
-    Handle --> Edit[st_edit.zig EditCommand / LineRegion]
-    Handle --> Erase[st_erase.zig EraseCommand]
-    Handle --> Mode[st_mode.zig ModeParam]
-    Handle --> State[st_state.zig CsiCommand / Resize / Reset]
-    Handle --> Attr[st_attr.zig SgrParams / AttrUpdate]
-    Handle --> Misc[st_misc.zig MiscCommand]
-    Cursor --> CExec[st.c executor]
-    Edit --> CExec
-    Erase --> CExec
-    Mode --> CExec
-    State --> CExec
-    Attr --> CExec
-    Misc --> CExec
+    Parse --> Plan[st_csi.zig CsiExecPlan]
+    Plan --> Handle[st.c csihandle]
+    Plan --> Cursor[cursor/edit/erase/state/light/misc 子 plan]
+    Handle --> CExec[st.c executor]
     CExec --> Effects[tmoveto / tclearregion / xsetmode / ttywrite / redraw]
 ```
 
+当前状态：`csihandle()` 已收敛为单一 `st_csiexecplan()` 顶层 command plan；C 侧只按 command kind 执行 `tapply*`、`tsetmode`、`tsetattr` 和 `xsetcursor` 等副作用。旧 `st_plancursor`、`st_planedit`、`st_planerase`、`st_planlight`、`st_planstate`、`st_planmisc` ABI 已删除。
+
 ## Search 子系统流程
+
+当前状态：主流程完成，后续只做局部优化或无用 ABI 删除。C 侧保留搜索扫描所需的 `TLINE(...)` 读取、匹配数组写入、输入缓冲区内存移动和 redraw/free 等副作用；Zig 侧负责输入编辑、扫描范围、match append、current/jump 和状态动作计划。
 
 ```mermaid
 flowchart TD
@@ -149,6 +142,8 @@ flowchart TD
 
 ## Selection 子系统流程
 
+当前状态：主流程完成，后续只做局部优化或无用 ABI 删除。C 侧保留 selection 全局状态写回、`TLINE(...)` glyph 读取、delimiter 判断、clipboard 文本分配和 UTF-8 编码；Zig 侧负责 normalize、extend、scroll、snap step、选中判断和 getsel 行范围计划。
+
 ```mermaid
 flowchart TD
     Start[selstart] --> StartPlan[st_selection.zig startPlan]
@@ -170,22 +165,35 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Resize[tresize] --> ResizePlan[st_state.zig ResizeRequest]
-    ResizePlan --> CResize[st.c realloc/free line/alt/hist/tabs]
-    CResize --> ClearPlan[st_state.zig ResizeClear]
-    ClearPlan --> CClear[st.c tclearregion]
+    Resize[tresize] --> ResizePlan[st_state.zig ResizeExecPlan]
+    ResizePlan --> SlideFree[st.c slide/free]
+    SlideFree --> Realloc[st.c realloc containers]
+    Realloc --> Hist[st.c hist resize/fill]
+    Hist --> Rows[st.c line resize/alloc]
+    Rows --> Tabs[st.c tabs]
+    Tabs --> Clear[st.c tclearregion]
 
-    Draw[draw] --> SearchScanGate[st_cursor.zig draw search gate]
-    SearchScanGate --> SearchScan[searchscan]
-    Draw --> CursorPlan[st_cursor.zig DrawCursor]
-    CursorPlan --> DrawRegion[drawregion]
-    DrawRegion --> DirtyGate[st_cursor.zig draw region dirty gate]
+    Draw[draw] --> Frame[st_cursor.zig DrawFramePlan]
+    Frame --> SearchScan[searchscan]
+    Frame --> Region[drawregion]
+    Region --> DirtyGate[st_cursor.zig DrawRegionPlan]
     DirtyGate --> XDraw[xdrawline]
-    Draw --> CursorActive[st_cursor.zig cursor active gate]
-    CursorActive --> XCursor[xdrawcursor]
-    Draw --> ImeSpot[st_cursor.zig IME spot update gate]
+    Frame --> XCursor[xdrawcursor]
+    Frame --> ImeSpot[xximspot]
     ImeSpot --> XXim[xximspot]
 ```
+
+## Line/ExternalPipe 流程
+
+```mermaid
+flowchart TD
+    Pipe[externalpipe] --> CLine[st.c tlinehist]
+    CLine --> Plan[st_line.zig ExternalPipePlan]
+    Plan --> CWrite[st.c utf8encode / xwrite]
+    Plan --> Newline[st.c final newline]
+```
+
+当前状态：`externalpipe()` 已合并为单一 `st_externalpipeplan()`，Zig 同时规划行长度、输出范围和 wrap newline；C 侧保留历史/当前行指针获取、UTF-8 编码、pipe/fork/exec/xwrite 和 signal 处理。
 
 ## 后续迁移路线图
 
@@ -198,8 +206,11 @@ flowchart LR
     F --> G[补启动冒烟验证]
 ```
 
-- **Search 清理**：旧 `st_search*plan` 兼容入口已删除，C 侧保留 `CursorEdit`、`StateEdit`、`MatchAppend` 和实际仍调用的 plan 入口。
-- **Selection 提升**：line snap step 和 word snap loop step 已改成 tagged union，旧 word snap 辅助 ABI 已清理；C 保留 `TLINE` 访问和 delimiter 判断。
-- **Resize 提升**：tab 初始化、history 新列填充、line resize 和新行分配范围已迁移为 Zig plan；C 继续执行 `xrealloc/free`。
-- **Draw 收敛**：继续把 draw region 的范围、dirty line 决策聚合，C 继续调用 `xdrawline/xdrawcursor/xximspot`。
+- **Search 定版**：主流程完成，旧 `st_search*plan` 兼容入口和测试专用 ABI 已删除；C 侧只保留扫描所需 `TLINE(...)`、匹配数组写入、输入缓冲区移动和 redraw/free 等副作用。
+- **Selection 定版**：主流程完成，line snap step 和 word snap loop step 已 plan 化；C 侧只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
+- **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
+- **Draw 收口**：draw frame gate、cursor 调整和 draw region dirty 扫描已迁移为 Zig plan；C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链。
+- **CSI 聚合**：`csihandle` 已改为 `ZigCsiExecPlan` 顶层分发，六个旧 `st_plan*` 小 ABI 已删除；C 继续执行真实副作用。
+- **ExternalPipe 聚合**：行长度、write/skip、lastpos 和 wrap newline 已合并为 `st_externalpipeplan`；C 继续负责 `tlinehist`、`utf8encode` 和 `xwrite`。
+- **ABI 瘦身**：`st_zig.h` 只保留 C executor 实际调用入口；仅 Zig 测试引用的 export 应删除，测试改测内部领域函数。
 - **验证要求**：每批迁移后执行 `zig fmt`、`zig build abi-check`、`zig build test`、`zig build`；提交或发布前补 `timeout 5 ./zig-out/bin/st`。

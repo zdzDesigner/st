@@ -141,7 +141,7 @@ const KeyboardScroll = struct {
     }
 };
 
-export fn st_planedit(mode: c_char, arg: [*]const c_int, len: c_int, x: c_int, y: c_int) ZigEditPlan {
+fn planEdit(mode: c_char, arg: [*]const c_int, len: c_int, x: c_int, y: c_int) ZigEditPlan {
     const args = arg[0..@intCast(len)];
     return (EditCommand{ .mode = mode, .args = args, .x = x, .y = y }).plan();
 }
@@ -194,32 +194,32 @@ fn minInt(a: c_int, b: c_int) c_int {
 }
 
 test "plan insert blank defaults to one" {
-    const plan = st_planedit('@', &[_]c_int{0}, 1, 3, 4);
+    const plan = planEdit('@', &[_]c_int{0}, 1, 3, 4);
     try std.testing.expectEqual(@as(c_int, edit_insert_blank), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.count);
 }
 
 test "plan scroll up keeps explicit count" {
-    const plan = st_planedit('S', &[_]c_int{3}, 1, 3, 4);
+    const plan = planEdit('S', &[_]c_int{3}, 1, 3, 4);
     try std.testing.expectEqual(@as(c_int, edit_scroll_up), plan.kind);
     try std.testing.expectEqual(@as(c_int, 3), plan.count);
 }
 
 test "plan erase char computes clear region" {
-    const plan = st_planedit('X', &[_]c_int{4}, 1, 5, 6);
+    const plan = planEdit('X', &[_]c_int{4}, 1, 5, 6);
     try std.testing.expectEqual(@as(c_int, edit_clear_region), plan.kind);
     try std.testing.expectEqual(@as(c_int, 4), plan.count);
     try std.testing.expectEqual(ZigClearRect{ .x1 = 5, .y1 = 6, .x2 = 8, .y2 = 6 }, plan.rect);
 }
 
 test "plan delete char defaults to one" {
-    const plan = st_planedit('P', &[_]c_int{}, 0, 5, 6);
+    const plan = planEdit('P', &[_]c_int{}, 0, 5, 6);
     try std.testing.expectEqual(@as(c_int, edit_delete_char), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.count);
 }
 
 test "plan unknown mode reports unknown" {
-    const plan = st_planedit('?', &[_]c_int{}, 0, 0, 0);
+    const plan = planEdit('?', &[_]c_int{}, 0, 0, 0);
     try std.testing.expectEqual(@as(c_int, edit_unknown), plan.kind);
 }
 

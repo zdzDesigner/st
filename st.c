@@ -346,12 +346,6 @@ tlinelen(int y)
 	return st_tlinelen((const ZigGlyph *)TLINE(y), term.col);
 }
 
-int
-tlinehistlen(int y)
-{
-	return st_tlinelen((const ZigGlyph *)tlinehist(y), term.col);
-}
-
 Line
 tlinehist(int y)
 {
@@ -1873,97 +1867,48 @@ void
 csihandle(void)
 {
 	char buf[40];
-	ZigEditPlan edit;
 	int len;
-	ZigCursorPlan cursor;
-	ZigErasePlan erase;
-	ZigLightPlan light;
-	ZigStatePlan state;
-	ZigMiscPlan misc;
+	ZigCsiExecPlan plan;
 
-	switch (csiescseq.mode[0]) {
-	default:
-	unknown:
+	plan = st_csiexecplan(csiescseq.mode[0], csiescseq.mode[1],
+		csiescseq.priv, csiescseq.arg, csiescseq.narg,
+		term.c.x, term.c.y, term.col, term.row);
+
+	switch (plan.kind) {
+	case ST_ZIG_CSI_EXEC_UNKNOWN:
 		fprintf(stderr, "erresc: unknown csi ");
 		csidump();
 		/* die(""); */
 		break;
-	case '@': /* ICH -- Insert <n> blank char */
-	case 'S': /* SU -- Scroll <n> line up */
-	case 'T': /* SD -- Scroll <n> line down */
-	case 'L': /* IL -- Insert <n> blank lines */
-	case 'M': /* DL -- Delete <n> lines */
-	case 'X': /* ECH -- Erase <n> char */
-	case 'P': /* DCH -- Delete <n> char */
-		edit = st_planedit(csiescseq.mode[0], csiescseq.arg,
-			csiescseq.narg, term.c.x, term.c.y);
-		tapplyedit(&edit);
+	case ST_ZIG_CSI_EXEC_EDIT:
+		tapplyedit(&plan.edit);
 		break;
-	case 'A': /* CUU -- Cursor <n> Up */
-	case 'B': /* CUD -- Cursor <n> Down */
-	case 'e': /* VPR --Cursor <n> Down */
-	case 'C': /* CUF -- Cursor <n> Forward */
-	case 'a': /* HPR -- Cursor <n> Forward */
-	case 'D': /* CUB -- Cursor <n> Backward */
-	case 'E': /* CNL -- Cursor <n> Down and first col */
-	case 'F': /* CPL -- Cursor <n> Up and first col */
-	case 'G': /* CHA -- Move to <col> */
-	case '`': /* HPA */
-	case 'H': /* CUP -- Move to <row> <col> */
-	case 'f': /* HVP */
-	case 'd': /* VPA -- Move to <row> */
-		cursor = st_plancursor(csiescseq.mode[0], term.c.x, term.c.y,
-			csiescseq.arg, csiescseq.narg);
-		tapplycursor(&cursor);
+	case ST_ZIG_CSI_EXEC_CURSOR:
+		tapplycursor(&plan.cursor);
 		break;
-	case 'i': /* MC -- Media Copy */
-	case 'b': /* REP -- if last char is printable print it <n> more times */
-	case ' ':
-		misc = st_planmisc(csiescseq.mode[0], csiescseq.mode[1],
-			csiescseq.arg, csiescseq.narg);
-		if (misc.kind == ST_ZIG_MISC_UNKNOWN)
-			goto unknown;
-		if (misc.kind == ST_ZIG_MISC_SET_CURSOR_STYLE && xsetcursor(misc.value))
-			goto unknown;
-		tapplymisc(&misc);
+	case ST_ZIG_CSI_EXEC_MISC:
+		if (plan.misc.kind == ST_ZIG_MISC_SET_CURSOR_STYLE && xsetcursor(plan.misc.value)) {
+			fprintf(stderr, "erresc: unknown csi ");
+			csidump();
+			break;
+		}
+		tapplymisc(&plan.misc);
 		break;
-	case 'c': /* DA -- Device Attributes */
-	case 'g': /* TBC -- Tabulation clear */
-	case 'I': /* CHT -- Cursor Forward Tabulation <n> tab stops */
-	case 'Z': /* CBT -- Cursor Backward Tabulation <n> tab stops */
-	case 'n': /* DSR - Device Status Report (cursor position) */
-		light = st_planlight(csiescseq.mode[0], csiescseq.arg,
-			csiescseq.narg, term.c.x, term.c.y);
-		if (light.kind == ST_ZIG_LIGHT_UNKNOWN)
-			goto unknown;
-		tapplylight(&light, buf, &len);
+	case ST_ZIG_CSI_EXEC_LIGHT:
+		tapplylight(&plan.light, buf, &len);
 		break;
-	case 'J': /* ED -- Clear screen */
-	case 'K': /* EL -- Clear line */
-		erase = st_planerase(csiescseq.mode[0], csiescseq.arg[0],
-			term.c.x, term.c.y,
-			term.col, term.row);
-		if (erase.kind != ST_ZIG_ERASE_OK)
-			goto unknown;
-		tapplyerase(&erase);
+	case ST_ZIG_CSI_EXEC_ERASE:
+		tapplyerase(&plan.erase);
 		break;
-	case 'l': /* RM -- Reset Mode */
-	case 'h': /* SM -- Set terminal mode */
-		tsetmode(csiescseq.priv, csiescseq.mode[0] == 'h',
+	case ST_ZIG_CSI_EXEC_MODE:
+		tsetmode(csiescseq.priv, plan.mode_set,
 			csiescseq.arg, csiescseq.narg);
 		break;
-	case 'm': /* SGR -- Terminal attribute (color) */
+	case ST_ZIG_CSI_EXEC_ATTR:
 		tsetattr(csiescseq.arg, csiescseq.narg);
 		break;
-	case 'r': /* DECSTBM -- Set Scrolling Region */
-	case 's': /* DECSC -- Save cursor position (ANSI.SYS) */
-	case 'u': /* DECRC -- Restore cursor position (ANSI.SYS) */
-		state = st_planstate(csiescseq.mode[0], csiescseq.priv,
-			csiescseq.arg, csiescseq.narg, term.row);
-		if (state.kind == ST_ZIG_STATE_UNKNOWN) {
-			goto unknown;
-		}
-		tapplystate(&state);
+	case ST_ZIG_CSI_EXEC_STATE:
+		tapplystate(&plan.state);
 		break;
 	}
 }
@@ -2105,7 +2050,7 @@ externalpipe(const Arg *arg)
 	void (*oldsigpipe)(int);
 	Glyph *bp, *end;
 	int lastpos, n, newline;
-	ZigExternalPipeLinePlan line_plan;
+	ZigExternalPipePlan line_plan;
 
 	if (pipe(to) == -1)
 		return;
@@ -2129,9 +2074,9 @@ externalpipe(const Arg *arg)
 	/* ignore sigpipe for now, in case child exists early */
 	oldsigpipe = signal(SIGPIPE, SIG_IGN);
 	newline = 0;
-	for (n = 0; n < st_externalpipelimit(HISTSIZE); n++) {
+	for (n = 0; n < HISTSIZE + 3; n++) {
 		bp = tlinehist(n);
-		line_plan = st_externalpipelinelen(tlinehistlen(n), term.col);
+		line_plan = st_externalpipeplan((const ZigGlyph *)bp, term.col);
 		if (line_plan.kind == ST_ZIG_EXTERNALPIPE_BREAK)
 			break;
 		if (line_plan.kind == ST_ZIG_EXTERNALPIPE_SKIP)
@@ -2141,7 +2086,7 @@ externalpipe(const Arg *arg)
 		for (; bp < end; ++bp)
 			if (xwrite(to[1], buf, utf8encode(bp->u, buf)) < 0)
 				break;
-		if ((newline = st_externalpipewrap(tlinehist(n)[lastpos].mode)))
+		if ((newline = line_plan.newline))
 			continue;
 		if (xwrite(to[1], "\n", 1) < 0)
 			break;
@@ -2600,101 +2545,81 @@ void
 tresize(int col, int row)
 {
 	int i, j;
-	int minrow, mincol;
-	int *bp;
-	TCursor c;
-	ZigResizePlan plan;
-	ZigResizeTabPlan tab_plan;
-	ZigResizeFillPlan fill_plan;
-	ZigResizeRowPlan row_plan;
-	ZigResizeClearPlan clear_plan;
+	TCursor cursor;
+	ZigResizeExecPlan exec_plan;
+	ZigResizePlan base;
 
-	plan = st_tresizeplan(col, row, term.col, term.row, term.maxcol, term.c.y);
-	term.maxcol = plan.base_maxcol;
-	col = plan.alloc_col;
-	minrow = plan.minrow;
-	mincol = plan.mincol;
+	exec_plan = st_tresizeexecplan(term.tabs, col, row, term.col, term.row,
+		term.maxcol, term.c.y, tabspaces);
+	base = exec_plan.base;
+	term.maxcol = base.base_maxcol;
+	col = base.alloc_col;
 
-	if (plan.invalid) {
+	if (base.invalid) {
 		fprintf(stderr,
 		        "tresize: error resizing to %dx%d\n", col, row);
 		return;
 	}
 
-	/*
-	 * slide screen to keep cursor where we expect it -
-	 * tscrollup would work here, but we can optimize to
-	 * memmove because we're freeing the earlier lines
-	 */
-	for (i = 0; i < plan.slide_count; i++) {
+	for (i = 0; i < base.slide_count; i++) {
 		free(term.line[i]);
 		free(term.alt[i]);
 	}
-	/* ensure that both src and dst are not NULL */
 	if (i > 0) {
 		memmove(term.line, term.line + i, row * sizeof(Line));
 		memmove(term.alt, term.alt + i, row * sizeof(Line));
 	}
-	for (i = plan.tail_start; i < term.row; i++) {
+	for (i = base.tail_start; i < term.row; i++) {
 		free(term.line[i]);
 		free(term.alt[i]);
 	}
 
-	/* resize to new height */
 	term.line = xrealloc(term.line, row * sizeof(Line));
 	term.alt  = xrealloc(term.alt,  row * sizeof(Line));
 	term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
 	term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
 
-	fill_plan = st_tresizefillplan(mincol, col);
 	for (i = 0; i < HISTSIZE; i++) {
 		term.hist[i] = xrealloc(term.hist[i], col * sizeof(Glyph));
-		for (j = fill_plan.start; fill_plan.run && j < fill_plan.end; j++) {
+		for (j = exec_plan.hist_fill.start;
+				exec_plan.hist_fill.run && j < exec_plan.hist_fill.end; j++) {
 			term.hist[i][j] = term.c.attr;
 			term.hist[i][j].u = ' ';
 		}
 	}
 
-	/* resize each row to new width, zero-pad if needed */
-	row_plan = st_tresizerowplan(plan.resize_rows, plan.new_row_start, row);
-	for (i = row_plan.resize_start; i < row_plan.resize_end; i++) {
+	for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++) {
 		term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
 		term.alt[i]  = xrealloc(term.alt[i],  col * sizeof(Glyph));
 	}
 
-	/* allocate any new rows */
-	for (i = row_plan.alloc_start; i < row_plan.alloc_end; i++) {
+	for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++) {
 		term.line[i] = xmalloc(col * sizeof(Glyph));
 		term.alt[i] = xmalloc(col * sizeof(Glyph));
 	}
-	tab_plan = st_tresizetabplan(term.tabs, term.maxcol, col, tabspaces);
-	if (tab_plan.grow) {
-		bp = term.tabs + tab_plan.clear_start;
 
-		memset(bp, 0, sizeof(*term.tabs) * tab_plan.clear_count);
-		for (i = tab_plan.tab_start;
+	if (exec_plan.tabs.grow) {
+		memset(term.tabs + exec_plan.tabs.clear_start, 0,
+		       sizeof(*term.tabs) * exec_plan.tabs.clear_count);
+		for (i = exec_plan.tabs.tab_start;
 				i < col; i += tabspaces)
 			term.tabs[i] = 1;
 	}
-	/* update terminal size */
-	term.col = plan.requested_col;
+
+	term.col = base.requested_col;
 	term.maxcol = col;
 	term.row = row;
-	/* reset scrolling region */
 	tsetscroll(0, row-1);
-	/* make use of the LIMIT in tmoveto */
 	tmoveto(term.c.x, term.c.y);
-	/* Clearing both screens (it makes dirty all lines) */
-	c = term.c;
+	cursor = term.c;
 	for (i = 0; i < 2; i++) {
-		clear_plan = st_tresizeclearplan(mincol, col, minrow, row);
-		for (j = 0; j < clear_plan.count; j++)
-			tclearregion(clear_plan.rects[j].x1, clear_plan.rects[j].y1,
-				clear_plan.rects[j].x2, clear_plan.rects[j].y2);
+		for (j = 0; j < exec_plan.clear.count; j++)
+			tclearregion(exec_plan.clear.rects[j].x1, exec_plan.clear.rects[j].y1,
+				exec_plan.clear.rects[j].x2, exec_plan.clear.rects[j].y2);
 		tswapscreen();
 		tcursor(CURSOR_LOAD);
 	}
-	term.c = c;
+	term.c = cursor;
 }
 
 void
@@ -2706,47 +2631,47 @@ resettitle(void)
 void
 drawregion(int x1, int y1, int x2, int y2)
 {
-	int y;
+	int y = y1;
+	ZigDrawRegionPlan region;
 
-	for (y = y1; y < y2; y++) {
-		if (!st_drawregionline(term.dirty[y]))
-			continue;
-
+	for (;;) {
+		region = st_drawregionplan(term.dirty, y, y2);
+		if (!region.draw)
+			break;
+		y = region.y;
 		term.dirty[y] = 0;
 		xdrawline(TLINE(y), x1, y, x2);
+		y = region.next_y;
 	}
 }
 
 void
 draw(void)
 {
-	int cx = term.c.x, ocx = term.ocx, ocy = term.ocy;
-	ZigDrawCursorPlan cursor;
+	int cursor_x = term.c.x;
+	ZigDrawFramePlan frame;
 
 	if (!xstartdraw())
 		return;
-	if (st_drawsearchscan(search.active))
+	frame = st_drawframeplan(search.active, term.scr, cursor_x, term.c.y,
+		term.ocx, term.ocy, term.col, term.row,
+		(const ZigGlyph * const *)term.line);
+	if (frame.search_scan)
 		searchscan();
 
-	/* adjust cursor position */
-	cursor = st_drawcursorplan(cx, term.c.y, term.ocx, term.ocy,
-		term.col, term.row, (const ZigGlyph * const *)term.line);
-	cx = cursor.cx;
-	term.ocx = cursor.ocx;
-	term.ocy = cursor.ocy;
+	cursor_x = frame.cx;
+	term.ocx = frame.ocx;
+	term.ocy = frame.ocy;
 
 	drawregion(0, 0, term.col, term.row);
-	if (st_drawcursoractive(term.scr))
-		xdrawcursor(cx, term.c.y, term.line[term.c.y][cx],
+	if (frame.cursor_active)
+		xdrawcursor(cursor_x, term.c.y, term.line[term.c.y][cursor_x],
 				term.ocx, term.ocy, term.line[term.ocy][term.ocx],
 				term.line[term.ocy], term.col);
-	/* xdrawcursor(cx, term.c.y, term.line[term.c.y][cx], */
-	/* 		term.ocx, term.ocy, term.line[term.ocy][term.ocx], */
-	/* 		term.line[term.ocy], term.col); */
-	term.ocx = cx;
+	term.ocx = cursor_x;
 	term.ocy = term.c.y;
 	xfinishdraw();
-	if (st_drawimspotactive(ocx, ocy, term.ocx, term.ocy))
+	if (frame.imspot_active)
 		xximspot(term.ocx, term.ocy);
 }
 
