@@ -20,13 +20,12 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_base64.zig` 通过 `Base64Input`、`Base64Decoder` 承载 OSC 等路径复用的 base64 解码入口。
 - `st_csi.zig` 通过 `CsiParser`、`CsiArgParser` 和 `CsiExecPlan` 承载 CSI 原始字节解析、private marker 分类和 `csihandle` 顶层 command plan。
 - `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`ExternalPipe`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
-- `st_state.zig` 通过 `CsiCommand`、`ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 CSI 状态、scroll region、resize、reset、tab 和 clear rect 规划。
-- `st_edit.zig` 通过 `EditCommand`、`TextSpan`、`LineRegion`、`KeyboardScroll` 承载 CSI edit、行内搬移、区域滚动、历史环形指针和键盘滚动规划。
-- `st_cursor.zig` 通过 `CursorCommand`、`CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载 CSI 光标、移动 clamp、换行、draw cursor、IME spot 更新判断和保存/恢复规划。
-- `st_erase.zig` 通过 `EraseCommand`、`ClearRect` 承载 ED/EL 清理计划和清理矩形归一化。
+- `st_state.zig` 通过 `ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 scroll region、resize、reset、tab 和 clear rect 规划。
+- `st_edit.zig` 通过 `TextSpan`、`LineRegion`、`KeyboardScroll` 承载行内搬移、区域滚动、历史环形指针和键盘滚动规划。
+- `st_cursor.zig` 通过 `CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载移动 clamp、换行、draw cursor、IME spot 更新判断和保存/恢复规划。
+- `st_erase.zig` 通过 `ClearRect` 承载清理矩形归一化。
 - `st_mode.zig` 通过 `ModeParam`、`Utf8Selector`、`CharsetSelector`、`AltScreen` 承载 mode、UTF-8、charset 和 alternate screen 参数分类。
-- `st_light.zig` 通过 `LightCommand` 承载轻量 CSI 动作分类。
-- `st_misc.zig` 通过 `MiscCommand`、`TtyWrite` 承载杂项 CSI plan 和 tty write chunk 规划。
+- `st_misc.zig` 通过 `TtyWrite` 承载 tty write chunk、printer、stty 和 DEC test 辅助规划。
 - `st_strhandle.zig` 通过 `StringSequence`、`StringAction`、`StringArgs` 承载字符串序列启动和 OSC/DCS action 分类。
 - `st_strparse.zig` 通过 `StringParser` 承载 OSC/DCS 参数边界扫描。
 - `st_putc_decode.zig` 通过 `RuneInput`、`ControlWriter` 承载 rune 解码和控制字符显示规划。
@@ -45,7 +44,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `ST_ZIG_*` 只暴露 C executor 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
 - Search 和 Selection 主流程已完成迁移定版；后续只做局部优化、无用 ABI 删除或更大粒度 command plan 聚合。
 - Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C executor 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
-- CSI 已完成首批大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI 已删除。
+- CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 
 ## 完成定义

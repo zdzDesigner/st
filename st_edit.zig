@@ -1,8 +1,8 @@
-//! st_edit.zig 负责 CSI 编辑类动作的纯规划。
-//! [输入]: CSI mode、参数数组、当前光标位置、终端列数和 scroll region。
-//! [输出]: `ZigEditPlan` / `ZigEditMove`，描述插空白、删字符、滚动、插删行、清局部区域或行内搬移范围。
+//! st_edit.zig 负责行内搬移、scroll region 和键盘滚动的纯规划。
+//! [输入]: 当前光标位置、终端列数、scroll region、历史游标和键盘滚动参数。
+//! [输出]: `ZigEditMove`、`ZigScrollPlan` 和 `ZigKScrollPlan`。
 //! [副作用边界]: 不执行 memmove、scroll、clear；`tapplyedit(...)` 在 C 侧调用对应副作用函数。
-//! [定位]: 收敛 `csihandle(...)` 中 `@/S/T/L/M/X/P` 等 edit 分支。
+//! [定位]: 支撑 C executor 的编辑副作用边界；CSI edit 顶层分类已收敛到 `st_csi.zig`。
 
 const std = @import("std");
 
@@ -47,28 +47,6 @@ pub const edit_delete_line = 4;
 pub const edit_clear_region = 5;
 pub const edit_delete_char = 6;
 pub const edit_unknown = 7;
-
-const EditCommand = struct {
-    mode: c_char,
-    args: []const c_int,
-    x: c_int,
-    y: c_int,
-
-    fn plan(self: EditCommand) ZigEditPlan {
-        const count = defaultArg(self.args, 0, 1);
-
-        return switch (self.mode) {
-            '@' => .{ .kind = edit_insert_blank, .count = count, .rect = zeroRect() },
-            'S' => .{ .kind = edit_scroll_up, .count = count, .rect = zeroRect() },
-            'T' => .{ .kind = edit_scroll_down, .count = count, .rect = zeroRect() },
-            'L' => .{ .kind = edit_insert_blank_line, .count = count, .rect = zeroRect() },
-            'M' => .{ .kind = edit_delete_line, .count = count, .rect = zeroRect() },
-            'P' => .{ .kind = edit_delete_char, .count = count, .rect = zeroRect() },
-            'X' => .{ .kind = edit_clear_region, .count = count, .rect = .{ .x1 = self.x, .y1 = self.y, .x2 = self.x + count - 1, .y2 = self.y } },
-            else => .{ .kind = edit_unknown, .count = count, .rect = zeroRect() },
-        };
-    }
-};
 
 const TextSpan = struct {
     x: c_int,
@@ -141,11 +119,6 @@ const KeyboardScroll = struct {
     }
 };
 
-fn planEdit(mode: c_char, arg: [*]const c_int, len: c_int, x: c_int, y: c_int) ZigEditPlan {
-    const args = arg[0..@intCast(len)];
-    return (EditCommand{ .mode = mode, .args = args, .x = x, .y = y }).plan();
-}
-
 export fn st_tdeletechar(n: c_int, x: c_int, col: c_int) ZigEditMove {
     return (TextSpan{ .x = x, .col = col }).deleteChars(n);
 }
@@ -174,15 +147,6 @@ export fn st_kscrollupplan(n: c_int, row: c_int, scr: c_int, histsize: c_int) Zi
     return (KeyboardScroll{ .n = n, .row = row, .scr = scr, .histsize = histsize }).up();
 }
 
-fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
-    if (index >= args.len) return fallback;
-    return if (args[index] == 0) fallback else args[index];
-}
-
-fn zeroRect() ZigClearRect {
-    return .{ .x1 = 0, .y1 = 0, .x2 = 0, .y2 = 0 };
-}
-
 fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
     if (value < lower) return lower;
     if (value > upper) return upper;
@@ -191,36 +155,6 @@ fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
 
 fn minInt(a: c_int, b: c_int) c_int {
     return if (a < b) a else b;
-}
-
-test "plan insert blank defaults to one" {
-    const plan = planEdit('@', &[_]c_int{0}, 1, 3, 4);
-    try std.testing.expectEqual(@as(c_int, edit_insert_blank), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 1), plan.count);
-}
-
-test "plan scroll up keeps explicit count" {
-    const plan = planEdit('S', &[_]c_int{3}, 1, 3, 4);
-    try std.testing.expectEqual(@as(c_int, edit_scroll_up), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 3), plan.count);
-}
-
-test "plan erase char computes clear region" {
-    const plan = planEdit('X', &[_]c_int{4}, 1, 5, 6);
-    try std.testing.expectEqual(@as(c_int, edit_clear_region), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 4), plan.count);
-    try std.testing.expectEqual(ZigClearRect{ .x1 = 5, .y1 = 6, .x2 = 8, .y2 = 6 }, plan.rect);
-}
-
-test "plan delete char defaults to one" {
-    const plan = planEdit('P', &[_]c_int{}, 0, 5, 6);
-    try std.testing.expectEqual(@as(c_int, edit_delete_char), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 1), plan.count);
-}
-
-test "plan unknown mode reports unknown" {
-    const plan = planEdit('?', &[_]c_int{}, 0, 0, 0);
-    try std.testing.expectEqual(@as(c_int, edit_unknown), plan.kind);
 }
 
 test "delete char move clamps count" {

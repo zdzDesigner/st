@@ -91,13 +91,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
-    const light_module = b.createModule(.{
-        .root_source_file = b.path("st_light.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-
     const state_module = b.createModule(.{
         .root_source_file = b.path("st_state.zig"),
         .target = target,
@@ -196,11 +189,6 @@ pub fn build(b: *std.Build) void {
         .root_module = edit_module,
     });
 
-    const light_obj = b.addObject(.{
-        .name = "st_light",
-        .root_module = light_module,
-    });
-
     const state_obj = b.addObject(.{
         .name = "st_state",
         .root_module = state_module,
@@ -253,7 +241,6 @@ pub fn build(b: *std.Build) void {
     root_module.addObject(erase_obj);
     root_module.addObject(cursor_obj);
     root_module.addObject(edit_obj);
-    root_module.addObject(light_obj);
     root_module.addObject(state_obj);
     root_module.addObject(misc_obj);
     root_module.addObject(mode_obj);
@@ -330,7 +317,6 @@ pub fn build(b: *std.Build) void {
         .{ .name = "st_erase_test", .module = erase_module },
         .{ .name = "st_cursor_test", .module = cursor_module },
         .{ .name = "st_edit_test", .module = edit_module },
-        .{ .name = "st_light_test", .module = light_module },
         .{ .name = "st_state_test", .module = state_module },
         .{ .name = "st_misc_test", .module = misc_module },
         .{ .name = "st_mode_test", .module = mode_module },

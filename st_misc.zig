@@ -1,8 +1,8 @@
-//! st_misc.zig 负责 CSI 杂项序列的纯规划。
-//! [输入]: CSI 主 mode、第二 mode 字节、参数数组和 DEC 测试 selector。
-//! [输出]: `ZigMiscPlan` 或是否执行 DEC alignment test。
-//! [副作用边界]: 不调用 `tdump(...)`、`tputc(...)`、`xsetcursor(...)`；C 侧根据 plan 执行真实动作。
-//! [定位]: 收敛 `csihandle(...)` 中 `i/b/space` 分支。
+//! st_misc.zig 负责 tty/printer 辅助规划和 DEC 测试 selector。
+//! [输入]: tty 写入缓冲、长度限制、printer fd 和 DEC 测试字符。
+//! [输出]: 写入 chunk/count、printer 是否可写、stty 长度判断或 DEC 测试判断。
+//! [副作用边界]: 不调用 `tdump(...)`、`tputc(...)`、`xsetcursor(...)`、`write(...)`；C 侧执行真实动作。
+//! [定位]: 支撑 C executor 的杂项 IO 边界；CSI misc 顶层分类已收敛到 `st_csi.zig`。
 
 const std = @import("std");
 
@@ -22,33 +22,6 @@ pub const misc_repeat_last = 6;
 pub const misc_set_cursor_style = 7;
 pub const misc_unknown = 8;
 
-const MiscCommand = struct {
-    mode0: c_char,
-    mode1: c_char,
-    args: []const c_int,
-
-    fn plan(self: MiscCommand) ZigMiscPlan {
-        const arg0 = defaultArg(self.args, 0, 0);
-
-        return switch (self.mode0) {
-            'i' => switch (arg0) {
-                0 => .{ .kind = misc_media_dump, .value = 0, .extra = 0 },
-                1 => .{ .kind = misc_media_dump_line, .value = 0, .extra = 0 },
-                2 => .{ .kind = misc_media_dump_sel, .value = 0, .extra = 0 },
-                4 => .{ .kind = misc_media_print_off, .value = 0, .extra = 0 },
-                5 => .{ .kind = misc_media_print_on, .value = 0, .extra = 0 },
-                else => .{ .kind = misc_none, .value = 0, .extra = 0 },
-            },
-            'b' => .{ .kind = misc_repeat_last, .value = countArg(self.args), .extra = 0 },
-            ' ' => if (self.mode1 == 'q')
-                .{ .kind = misc_set_cursor_style, .value = arg0, .extra = 0 }
-            else
-                .{ .kind = misc_unknown, .value = 0, .extra = 0 },
-            else => .{ .kind = misc_unknown, .value = 0, .extra = 0 },
-        };
-    }
-};
-
 const TtyWrite = struct {
     input: []const u8,
 
@@ -60,11 +33,6 @@ const TtyWrite = struct {
         return index;
     }
 };
-
-fn planMisc(mode0: c_char, mode1: c_char, arg: [*]const c_int, len: c_int) ZigMiscPlan {
-    const args = arg[0..@intCast(len)];
-    return (MiscCommand{ .mode0 = mode0, .mode1 = mode1, .args = args }).plan();
-}
 
 export fn st_tdectest(c: c_char) c_int {
     return if (c == '8') 1 else 0;
@@ -88,48 +56,6 @@ export fn st_sttyfits(len: usize, available: usize) c_int {
 
 export fn st_ttyreadpending(buflen: c_int) c_int {
     return if (buflen > 0) 1 else 0;
-}
-
-fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
-    if (index >= args.len) return fallback;
-    return args[index];
-}
-
-fn countArg(args: []const c_int) c_int {
-    const value = defaultArg(args, 0, 0);
-    return if (value == 0) 1 else value;
-}
-
-test "plan media copy 0 dumps all" {
-    const plan = planMisc('i', 0, &[_]c_int{0}, 1);
-    try std.testing.expectEqual(@as(c_int, misc_media_dump), plan.kind);
-}
-
-test "plan media copy 5 enables print mode" {
-    const plan = planMisc('i', 0, &[_]c_int{5}, 1);
-    try std.testing.expectEqual(@as(c_int, misc_media_print_on), plan.kind);
-}
-
-test "plan repeat defaults to one" {
-    const plan = planMisc('b', 0, &[_]c_int{0}, 1);
-    try std.testing.expectEqual(@as(c_int, misc_repeat_last), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 1), plan.value);
-}
-
-test "plan cursor style uses q suffix" {
-    const plan = planMisc(' ', 'q', &[_]c_int{3}, 1);
-    try std.testing.expectEqual(@as(c_int, misc_set_cursor_style), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 3), plan.value);
-}
-
-test "plan space with unsupported suffix is unknown" {
-    const plan = planMisc(' ', 'x', &[_]c_int{3}, 1);
-    try std.testing.expectEqual(@as(c_int, misc_unknown), plan.kind);
-}
-
-test "plan media copy unsupported arg is none" {
-    const plan = planMisc('i', 0, &[_]c_int{9}, 1);
-    try std.testing.expectEqual(@as(c_int, misc_none), plan.kind);
 }
 
 test "dectest only accepts alignment selector" {

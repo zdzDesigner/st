@@ -1,8 +1,8 @@
-//! st_state.zig 负责 CSI 状态类序列的纯规划。
-//! [输入]: CSI mode、private marker、参数数组、终端行数、scroll region 边界和 resize 尺寸。
-//! [输出]: `ZigStatePlan` / `ZigScrollRegion` / `ZigResizePlan`，描述设置滚动区域、保存光标、恢复光标、最终 scroll region 或 resize 边界。
+//! st_state.zig 负责 scroll region、resize、reset 和 tab reset 的纯规划。
+//! [输入]: scroll region 边界、resize 尺寸、tab stops、默认颜色和终端行数。
+//! [输出]: `ZigScrollRegion`、`ZigResizeExecPlan`、`ZigResetPlan` 或 tab reset 写入。
 //! [副作用边界]: 不调用 `tsetscroll(...)` / `tcursor(...)`，不修改光标或 scroll region；这些保留在 C executor。
-//! [定位]: 收敛 `csihandle(...)` 中 `r/s/u` 分支和 `tsetscroll(...)` 的 clamp 主体，并保持 unknown 路径由 C 处理。
+//! [定位]: 支撑 C executor 的状态变更边界；CSI state 顶层分类已收敛到 `st_csi.zig`。
 
 const std = @import("std");
 
@@ -94,29 +94,6 @@ const cursor_default = 0;
 const mode_wrap = 1 << 0;
 const mode_utf8 = 1 << 6;
 const charset_usa = 3;
-
-const CsiCommand = struct {
-    mode: c_char,
-    private: bool,
-    args: []const c_int,
-    row: c_int,
-
-    fn plan(self: CsiCommand) ZigStatePlan {
-        return switch (self.mode) {
-            'r' => if (self.private)
-                .{ .kind = state_unknown, .top = 0, .bottom = 0 }
-            else
-                .{
-                    .kind = state_set_scroll,
-                    .top = defaultArg(self.args, 0, 1) - 1,
-                    .bottom = defaultArg(self.args, 1, self.row) - 1,
-                },
-            's' => .{ .kind = state_save_cursor, .top = 0, .bottom = 0 },
-            'u' => .{ .kind = state_load_cursor, .top = 0, .bottom = 0 },
-            else => .{ .kind = state_unknown, .top = 0, .bottom = 0 },
-        };
-    }
-};
 
 const ScrollBounds = struct {
     top: c_int,
@@ -290,11 +267,6 @@ const ResizeClear = struct {
     }
 };
 
-fn planState(mode: c_char, priv: c_int, arg: [*]const c_int, len: c_int, row: c_int) ZigStatePlan {
-    const args = arg[0..@intCast(len)];
-    return (CsiCommand{ .mode = mode, .private = priv != 0, .args = args, .row = row }).plan();
-}
-
 export fn st_tsetscroll(t: c_int, b: c_int, row: c_int) ZigScrollRegion {
     return (ScrollBounds{ .top = t, .bottom = b, .row = row }).region();
 }
@@ -312,11 +284,6 @@ export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPl
 
 export fn st_tresettabs(tabs: [*]c_int, col: c_int, tabspaces: c_uint) void {
     (TabReset{ .tabs = tabs[0..@intCast(col)], .col = col, .tabspaces = tabspaces }).apply();
-}
-
-fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
-    if (index >= args.len) return fallback;
-    return if (args[index] == 0) fallback else args[index];
 }
 
 fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
@@ -337,35 +304,6 @@ fn addResizeRect(plan: *ZigResizeClearPlan, x1: c_int, y1: c_int, x2: c_int, y2:
     if (plan.count >= plan.rects.len) return;
     plan.rects[@intCast(plan.count)] = .{ .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2 };
     plan.count += 1;
-}
-
-test "plan r defaults to full screen scroll region" {
-    const plan = planState('r', 0, &[_]c_int{ 0, 0 }, 2, 24);
-    try std.testing.expectEqual(@as(c_int, state_set_scroll), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 0), plan.top);
-    try std.testing.expectEqual(@as(c_int, 23), plan.bottom);
-}
-
-test "plan r uses explicit bounds" {
-    const plan = planState('r', 0, &[_]c_int{ 2, 10 }, 2, 24);
-    try std.testing.expectEqual(@as(c_int, state_set_scroll), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 1), plan.top);
-    try std.testing.expectEqual(@as(c_int, 9), plan.bottom);
-}
-
-test "plan r with private marker is unknown" {
-    const plan = planState('r', 1, &[_]c_int{ 2, 10 }, 2, 24);
-    try std.testing.expectEqual(@as(c_int, state_unknown), plan.kind);
-}
-
-test "plan s saves cursor" {
-    const plan = planState('s', 0, &[_]c_int{}, 0, 24);
-    try std.testing.expectEqual(@as(c_int, state_save_cursor), plan.kind);
-}
-
-test "plan u loads cursor" {
-    const plan = planState('u', 0, &[_]c_int{}, 0, 24);
-    try std.testing.expectEqual(@as(c_int, state_load_cursor), plan.kind);
 }
 
 test "tsetscroll clamps to terminal rows" {

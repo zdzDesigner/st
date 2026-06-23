@@ -425,14 +425,49 @@ test "csi private bool rejects regular sequences" {
 
 test "csi exec groups cursor command" {
     const plan = st_csiexecplan('C', 0, 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
+    const absolute = st_csiexecplan('H', 0, 0, &[_]c_int{ 4, 6 }, 2, 7, 9, 80, 24);
     try std.testing.expectEqual(@as(c_int, csi_exec_cursor), plan.kind);
     try std.testing.expectEqual(@as(c_int, 10), plan.cursor.x);
+    try std.testing.expectEqual(@as(c_int, cursor_move_to_abs), absolute.cursor.kind);
+    try std.testing.expectEqual(@as(c_int, 5), absolute.cursor.x);
+    try std.testing.expectEqual(@as(c_int, 3), absolute.cursor.y);
+}
+
+test "csi exec groups edit command" {
+    const insert = st_csiexecplan('@', 0, 0, &[_]c_int{0}, 1, 3, 4, 80, 24);
+    const clear = st_csiexecplan('X', 0, 0, &[_]c_int{4}, 1, 5, 6, 80, 24);
+
+    try std.testing.expectEqual(@as(c_int, csi_exec_edit), insert.kind);
+    try std.testing.expectEqual(@as(c_int, edit_insert_blank), insert.edit.kind);
+    try std.testing.expectEqual(@as(c_int, 1), insert.edit.count);
+    try std.testing.expectEqual(@as(c_int, edit_clear_region), clear.edit.kind);
+    try std.testing.expectEqual(ZigClearRect{ .x1 = 5, .y1 = 6, .x2 = 8, .y2 = 6 }, clear.edit.rect);
 }
 
 test "csi exec groups erase and rejects invalid erase arg" {
+    const screen = st_csiexecplan('J', 0, 0, &[_]c_int{0}, 1, 3, 4, 10, 8);
     const erase = st_csiexecplan('K', 0, 0, &[_]c_int{2}, 1, 5, 6, 80, 24);
     const invalid = st_csiexecplan('K', 0, 0, &[_]c_int{9}, 1, 5, 6, 80, 24);
+    try std.testing.expectEqual(@as(c_int, 2), screen.erase.count);
+    try std.testing.expectEqual(ZigClearRect{ .x1 = 3, .y1 = 4, .x2 = 9, .y2 = 4 }, screen.erase.rects[0]);
     try std.testing.expectEqual(@as(c_int, csi_exec_erase), erase.kind);
+    try std.testing.expectEqual(@as(c_int, csi_exec_unknown), invalid.kind);
+}
+
+test "csi exec groups light and misc commands" {
+    const light = st_csiexecplan('n', 0, 0, &[_]c_int{6}, 1, 7, 9, 80, 24);
+    const misc = st_csiexecplan('b', 0, 0, &[_]c_int{0}, 1, 7, 9, 80, 24);
+    const cursor_style = st_csiexecplan(' ', 'q', 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
+    const invalid = st_csiexecplan(' ', 'x', 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
+
+    try std.testing.expectEqual(@as(c_int, csi_exec_light), light.kind);
+    try std.testing.expectEqual(@as(c_int, light_write_cursor_position), light.light.kind);
+    try std.testing.expectEqual(@as(c_int, 8), light.light.x);
+    try std.testing.expectEqual(@as(c_int, 10), light.light.y);
+    try std.testing.expectEqual(@as(c_int, csi_exec_misc), misc.kind);
+    try std.testing.expectEqual(@as(c_int, misc_repeat_last), misc.misc.kind);
+    try std.testing.expectEqual(@as(c_int, 1), misc.misc.value);
+    try std.testing.expectEqual(@as(c_int, misc_set_cursor_style), cursor_style.misc.kind);
     try std.testing.expectEqual(@as(c_int, csi_exec_unknown), invalid.kind);
 }
 
@@ -441,6 +476,9 @@ test "csi exec groups mode attr and state" {
     try std.testing.expectEqual(@as(c_int, 1), st_csiexecplan('h', 0, 0, &[_]c_int{25}, 1, 0, 0, 80, 24).mode_set);
     try std.testing.expectEqual(@as(c_int, csi_exec_attr), st_csiexecplan('m', 0, 0, &[_]c_int{0}, 1, 0, 0, 80, 24).kind);
     try std.testing.expectEqual(@as(c_int, csi_exec_state), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).kind);
+    try std.testing.expectEqual(@as(c_int, 1), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).state.top);
+    try std.testing.expectEqual(@as(c_int, 7), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).state.bottom);
+    try std.testing.expectEqual(@as(c_int, csi_exec_unknown), st_csiexecplan('r', 0, '?', &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).kind);
 }
 
 test "csi parse empty arg before mode" {

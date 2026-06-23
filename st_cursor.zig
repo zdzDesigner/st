@@ -1,8 +1,8 @@
-//! st_cursor.zig 负责 CSI 光标移动序列的目标位置规划。
-//! [输入]: CSI mode、当前光标坐标、光标状态、滚动区域和参数数组。
-//! [输出]: `ZigCursorPlan` / `ZigCursorMove`，描述相对移动、绝对移动或最终光标状态。
+//! st_cursor.zig 负责光标移动 clamp、换行、绘制光标和保存恢复规划。
+//! [输入]: 目标坐标、光标状态、滚动区域、dirty/line 指针和保存恢复 mode。
+//! [输出]: `ZigCursorMove`、`ZigNewlinePlan`、draw frame/region plan 和 cursor store plan。
 //! [副作用边界]: 不调用 `tmoveto(...)` / `tmoveato(...)`，不修改 `term.c`；C 侧 executor 负责真实移动。
-//! [定位]: 收敛 `csihandle(...)` 的 CUU/CUD/CUP/HVP 等 cursor 分支，以及 `tmoveto(...)` 的 clamp 主体。
+//! [定位]: 支撑 C executor 的光标副作用边界；CSI 顶层分类已收敛到 `st_csi.zig`。
 
 const std = @import("std");
 const model = @import("term_model.zig");
@@ -71,31 +71,6 @@ const cursor_store_none = 0;
 const cursor_store_save = 1;
 const cursor_store_load = 2;
 const attr_wdummy = model.attr_wdummy;
-
-const CursorCommand = struct {
-    mode: c_char,
-    x: c_int,
-    y: c_int,
-    args: []const c_int,
-
-    fn plan(self: CursorCommand) ZigCursorPlan {
-        const arg0 = defaultArg(self.args, 0, 1);
-        const arg1 = defaultArg(self.args, 1, 1);
-
-        return switch (self.mode) {
-            'A' => .{ .kind = cursor_move_to, .x = self.x, .y = self.y - arg0 },
-            'B', 'e' => .{ .kind = cursor_move_to, .x = self.x, .y = self.y + arg0 },
-            'C', 'a' => .{ .kind = cursor_move_to, .x = self.x + arg0, .y = self.y },
-            'D' => .{ .kind = cursor_move_to, .x = self.x - arg0, .y = self.y },
-            'E' => .{ .kind = cursor_move_to, .x = 0, .y = self.y + arg0 },
-            'F' => .{ .kind = cursor_move_to, .x = 0, .y = self.y - arg0 },
-            'G', '`' => .{ .kind = cursor_move_to, .x = arg0 - 1, .y = self.y },
-            'H', 'f' => .{ .kind = cursor_move_to_abs, .x = arg1 - 1, .y = arg0 - 1 },
-            'd' => .{ .kind = cursor_move_to_abs, .x = self.x, .y = arg0 - 1 },
-            else => .{ .kind = cursor_unknown, .x = self.x, .y = self.y },
-        };
-    }
-};
 
 const CursorMove = struct {
     x: c_int,
@@ -214,11 +189,6 @@ const DrawRegion = struct {
     }
 };
 
-fn planCursor(mode: c_char, x: c_int, y: c_int, arg: [*]const c_int, len: c_int) ZigCursorPlan {
-    const args = arg[0..@intCast(len)];
-    return (CursorCommand{ .mode = mode, .x = x, .y = y, .args = args }).plan();
-}
-
 export fn st_tmoveto(x: c_int, y: c_int, state: c_int, col: c_int, row: c_int, top: c_int, bot: c_int) ZigCursorMove {
     return (CursorMove{ .x = x, .y = y, .state = state, .col = col, .row = row, .top = top, .bot = bot }).clamp();
 }
@@ -259,48 +229,10 @@ export fn st_tsetmodecursor(set: c_int) c_int {
     return if (set != 0) cursor_save else cursor_load;
 }
 
-fn defaultArg(args: []const c_int, index: usize, fallback: c_int) c_int {
-    if (index >= args.len) return fallback;
-    return if (args[index] == 0) fallback else args[index];
-}
-
 fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
     if (value < lower) return lower;
     if (value > upper) return upper;
     return value;
-}
-
-test "plan A defaults to one line up" {
-    const plan = planCursor('A', 7, 9, &[_]c_int{0}, 1);
-    try std.testing.expectEqual(@as(c_int, cursor_move_to), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 7), plan.x);
-    try std.testing.expectEqual(@as(c_int, 8), plan.y);
-}
-
-test "plan C moves right by explicit count" {
-    const plan = planCursor('C', 7, 9, &[_]c_int{3}, 1);
-    try std.testing.expectEqual(@as(c_int, cursor_move_to), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 10), plan.x);
-    try std.testing.expectEqual(@as(c_int, 9), plan.y);
-}
-
-test "plan H uses absolute row and col" {
-    const plan = planCursor('H', 7, 9, &[_]c_int{ 4, 6 }, 2);
-    try std.testing.expectEqual(@as(c_int, cursor_move_to_abs), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 5), plan.x);
-    try std.testing.expectEqual(@as(c_int, 3), plan.y);
-}
-
-test "plan d keeps column for vertical absolute move" {
-    const plan = planCursor('d', 7, 9, &[_]c_int{2}, 1);
-    try std.testing.expectEqual(@as(c_int, cursor_move_to_abs), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 7), plan.x);
-    try std.testing.expectEqual(@as(c_int, 1), plan.y);
-}
-
-test "plan unknown mode reports unknown" {
-    const plan = planCursor('?', 7, 9, &[_]c_int{}, 0);
-    try std.testing.expectEqual(@as(c_int, cursor_unknown), plan.kind);
 }
 
 test "tmoveto clears wrapnext and clamps to full screen" {
