@@ -878,8 +878,14 @@ test "search input cap doubles until required fits" {
 }
 
 test "search insert plan describes buffer edit" {
+    const empty = st_searchinsertplan(1, 0, 0, 8, 2);
     const plan = st_searchinsertplan(1, 3, 1, 8, 2);
 
+    try std.testing.expectEqual(@as(c_int, 1), empty.run);
+    try std.testing.expectEqual(@as(usize, 0), empty.insert_at);
+    try std.testing.expectEqual(@as(usize, 1), empty.move_len);
+    try std.testing.expectEqual(@as(usize, 2), empty.new_len);
+    try std.testing.expectEqual(@as(usize, 2), empty.new_cursor);
     try std.testing.expectEqual(@as(c_int, 1), plan.run);
     try std.testing.expectEqual(@as(c_int, 0), plan.grow);
     try std.testing.expectEqual(@as(usize, 1), plan.insert_at);
@@ -927,7 +933,7 @@ test "search state edit adapters expose tagged actions" {
 
 test "search input edit plans guard inactive and empty cases" {
     try std.testing.expectEqual(@as(c_int, 0), st_searchinputplan(0, 3));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchinputplan(1, 0));
+    try std.testing.expectEqual(@as(c_int, 1), st_searchinputplan(1, 0));
     try std.testing.expectEqual(@as(c_int, 1), st_searchinputplan(1, 3));
     try std.testing.expectEqual(@as(c_int, 0), st_searchbackspaceplan(1, 3, 0));
     try std.testing.expectEqual(@as(c_int, 1), st_searchbackspaceplan(1, 3, 2));

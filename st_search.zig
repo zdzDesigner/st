@@ -255,7 +255,7 @@ pub const Input = struct {
     }
 
     pub fn insertable(self: Input) bool {
-        return self.active and self.len != 0;
+        return self.active;
     }
 
     pub fn canBackspace(self: Input) bool {
@@ -722,7 +722,7 @@ test "search input edit plans guard inactive states" {
     try std.testing.expect(!inputGrow(3, 2, 8));
     try std.testing.expect(inputGrow(7, 2, 8));
     try std.testing.expect(!inputPlan(false, 3));
-    try std.testing.expect(!inputPlan(true, 0));
+    try std.testing.expect(inputPlan(true, 0));
     try std.testing.expect(inputPlan(true, 3));
     try std.testing.expect(!backspacePlan(true, 3, 0));
     try std.testing.expect(backspacePlan(true, 3, 2));
@@ -735,10 +735,14 @@ test "search input edit plans guard inactive states" {
 
 test "search insert plan computes buffer movement and growth" {
     const inactive = insertPlan(false, 3, 1, 8, 2);
+    const empty = insertPlan(true, 0, 0, 8, 2);
     const in_place = insertPlan(true, 3, 1, 8, 2);
     const grow = insertPlan(true, 7, 3, 8, 2);
 
     try std.testing.expect(!inactive.run);
+    try std.testing.expect(empty.run);
+    try std.testing.expectEqual(@as(usize, 2), empty.new_len);
+    try std.testing.expectEqual(@as(usize, 2), empty.new_cursor);
     try std.testing.expect(in_place.run);
     try std.testing.expect(!in_place.grow);
     try std.testing.expectEqual(@as(usize, 1), in_place.insert_at);
