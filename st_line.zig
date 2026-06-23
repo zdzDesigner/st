@@ -89,6 +89,39 @@ const ZigSearchDeletePlan = extern struct {
     new_len: usize,
 };
 
+const ZigSearchInsertPlan = extern struct {
+    run: c_int,
+    grow: c_int,
+    inputcap: usize,
+    insert_at: usize,
+    move_dst: usize,
+    move_src: usize,
+    move_len: usize,
+    new_len: usize,
+    new_cursor: usize,
+};
+
+const ZigSearchCursorEditPlan = extern struct {
+    kind: c_int,
+    start: usize,
+    end: usize,
+    cursor: usize,
+};
+
+const ZigSearchMatch = search.SearchMatch;
+
+const ZigSearchAppendPlan = extern struct {
+    kind: c_int,
+    cap: c_int,
+    match: ZigSearchMatch,
+};
+
+const ZigSearchStateEditPlan = extern struct {
+    kind: c_int,
+    inputlen: usize,
+    inputcursor: usize,
+};
+
 const ZigSearchSetPlan = extern struct {
     alloc_len: usize,
     active: c_int,
@@ -106,6 +139,11 @@ const ZigSearchPromptPlan = extern struct {
 const ZigExternalPipeLinePlan = extern struct {
     kind: c_int,
     lastpos: c_int,
+};
+
+const ZigHistoryLinePlan = extern struct {
+    hist: c_int,
+    index: c_int,
 };
 
 const attr_wrap = model.attr_wrap;
@@ -250,8 +288,33 @@ export fn st_searchhit(active: c_int, match_scr: c_int, term_scr: c_int, match_y
     return boolInt(search.hit(active != 0, match_scr, term_scr, match_y, y, x, match_x, match_len));
 }
 
+export fn st_searchmatchlist(matches: ?[*]const ZigSearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
+    const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
+    const items = if (count == 0) &[_]ZigSearchMatch{} else (matches orelse return 0)[0..count];
+    return boolInt(search.matchListContains(items, active != 0, current, term_scr, x, y));
+}
+
+export fn st_searchcurrentmatch(matches: ?[*]const ZigSearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
+    const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
+    const items = if (count == 0) &[_]ZigSearchMatch{} else (matches orelse return 0)[0..count];
+    return boolInt(search.matchListCurrent(items, active != 0, current, term_scr, x, y));
+}
+
 export fn st_searchlinematch(line: [*]const ZigGlyph, x: c_int, linelen: c_int, query: [*]const u32, qlen: c_int, col: c_int) c_int {
     return search.lineMatch(ZigGlyph, line[0..@intCast(col)], x, linelen, query[0..@intCast(qlen)], col);
+}
+
+export fn st_searchscanlineend(linelen: c_int, qlen: c_int) c_int {
+    return search.scanLineLastStart(linelen, qlen);
+}
+
+export fn st_searchappendmatch(match_len: c_int, nmatches: c_int, cap: c_int, x: c_int, y: c_int, scr: c_int) ZigSearchAppendPlan {
+    const plan = search.appendMatch(match_len, nmatches, cap, x, y, scr);
+    return switch (plan) {
+        .skip => .{ .kind = @intFromEnum(search.MatchAppendKind.skip), .cap = cap, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } },
+        .append => |match| .{ .kind = @intFromEnum(search.MatchAppendKind.append), .cap = cap, .match = match },
+        .grow_append => |grow| .{ .kind = @intFromEnum(search.MatchAppendKind.grow_append), .cap = grow.cap, .match = grow.match },
+    };
 }
 
 export fn st_searchnextcurrent(oldcurrent: c_int, nmatches: c_int) c_int {
@@ -264,6 +327,15 @@ export fn st_searchjumpscr(current_valid: c_int, term_scr: c_int, match_scr: c_i
 
 export fn st_searchhistindex(histi: c_int, scr: c_int, histsize: c_int) c_int {
     return search.historyIndex(histi, scr, histsize);
+}
+
+export fn st_tlinehistindex(y: c_int, histi: c_int, scr: c_int, histsize: c_int) c_int {
+    return search.visibleHistoryIndex(y, histi, scr, histsize);
+}
+
+export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
+    const plan = search.historyLine(y, histsize, rows);
+    return .{ .hist = boolInt(plan.hist), .index = plan.index };
 }
 
 export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
@@ -286,6 +358,64 @@ export fn st_searchdeletewordstart(input: [*]const u8, cursor: usize) usize {
     return search.deleteWordStart(input[0..cursor], cursor);
 }
 
+fn searchCursorEditPlan(edit: search.CursorEdit) ZigSearchCursorEditPlan {
+    return switch (edit) {
+        .none => .{ .kind = @intFromEnum(search.CursorEditKind.none), .start = 0, .end = 0, .cursor = 0 },
+        .delete => |delete| .{ .kind = @intFromEnum(search.CursorEditKind.delete), .start = delete.start, .end = delete.end, .cursor = delete.cursor },
+        .move => |cursor| .{ .kind = @intFromEnum(search.CursorEditKind.move), .start = 0, .end = 0, .cursor = cursor },
+    };
+}
+
+fn searchStateEditPlan(edit: search.StateEdit) ZigSearchStateEditPlan {
+    return switch (edit) {
+        .none => .{ .kind = @intFromEnum(search.StateEditKind.none), .inputlen = 0, .inputcursor = 0 },
+        .clear_input => |clear| .{ .kind = @intFromEnum(search.StateEditKind.clear_input), .inputlen = clear.len, .inputcursor = clear.cursor },
+        .commit_clear => .{ .kind = @intFromEnum(search.StateEditKind.commit_clear), .inputlen = 0, .inputcursor = 0 },
+        .commit_set => .{ .kind = @intFromEnum(search.StateEditKind.commit_set), .inputlen = 0, .inputcursor = 0 },
+        .cancel => .{ .kind = @intFromEnum(search.StateEditKind.cancel), .inputlen = 0, .inputcursor = 0 },
+    };
+}
+
+export fn st_searchbackspaceedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .backspace));
+}
+
+export fn st_searchdeleteforwardedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .delete_forward));
+}
+
+export fn st_searchdeletewordedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .delete_word));
+}
+
+export fn st_searchmoveleftedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .move_left));
+}
+
+export fn st_searchmoverightedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .move_right));
+}
+
+export fn st_searchhomeedit(inputmode: c_int) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(&.{}, inputmode != 0, 0, 0, .home));
+}
+
+export fn st_searchendedit(inputmode: c_int, inputlen: usize) ZigSearchCursorEditPlan {
+    return searchCursorEditPlan(search.cursorEdit(&.{}, inputmode != 0, inputlen, inputlen, .end));
+}
+
+export fn st_searchclearinputedit(inputmode: c_int) ZigSearchStateEditPlan {
+    return searchStateEditPlan(search.clearInputEdit(inputmode != 0));
+}
+
+export fn st_searchcommitedit(inputmode: c_int, inputlen: usize) ZigSearchStateEditPlan {
+    return searchStateEditPlan(search.commitEdit(inputmode != 0, inputlen));
+}
+
+export fn st_searchcanceledit(inputmode: c_int) ZigSearchStateEditPlan {
+    return searchStateEditPlan(search.cancelEdit(inputmode != 0));
+}
+
 export fn st_searchinputcap(inputlen: usize, add_len: usize, inputcap: usize) usize {
     return search.inputCap(inputlen, add_len, inputcap);
 }
@@ -296,6 +426,21 @@ export fn st_searchinputgrow(inputlen: usize, add_len: usize, inputcap: usize) c
 
 export fn st_searchinputplan(inputmode: c_int, len: usize) c_int {
     return boolInt(search.inputPlan(inputmode != 0, len));
+}
+
+export fn st_searchinsertplan(inputmode: c_int, inputlen: usize, cursor: usize, inputcap: usize, add_len: usize) ZigSearchInsertPlan {
+    const plan = search.insertPlan(inputmode != 0, inputlen, cursor, inputcap, add_len);
+    return .{
+        .run = boolInt(plan.run),
+        .grow = boolInt(plan.grow),
+        .inputcap = plan.inputcap,
+        .insert_at = plan.insert_at,
+        .move_dst = plan.move_dst,
+        .move_src = plan.move_src,
+        .move_len = plan.move_len,
+        .new_len = plan.new_len,
+        .new_cursor = plan.new_cursor,
+    };
 }
 
 export fn st_searchbackspaceplan(inputmode: c_int, inputlen: usize, cursor: usize) c_int {
@@ -339,6 +484,10 @@ export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
     return boolInt(search.barActive(inputmode != 0, active != 0));
 }
 
+export fn st_searchinputactiveplan(inputmode: c_int) c_int {
+    return boolInt(search.cursorPlan(inputmode != 0));
+}
+
 export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLinePlan {
     const plan = (line_core.VisualLine{ .len = linelen, .cols = col }).externalPipe();
     return .{ .kind = @intFromEnum(plan.kind), .lastpos = plan.lastpos };
@@ -346,6 +495,10 @@ export fn st_externalpipelinelen(linelen: c_int, col: c_int) ZigExternalPipeLine
 
 export fn st_externalpipewrap(mode: c_ushort) c_int {
     return boolInt(line_core.externalPipeWrap(mode));
+}
+
+export fn st_externalpipelimit(histsize: c_int) c_int {
+    return line_core.externalPipeLimit(histsize);
 }
 
 export fn st_searchpromptplan(has_input: c_int, inputcap: usize) ZigSearchPromptPlan {
@@ -641,6 +794,35 @@ test "search current valid checks active and bounds" {
     try std.testing.expectEqual(@as(c_int, 0), st_searchcurrentvalid(1, 2, 1));
 }
 
+test "search match list checks all and current matches" {
+    const matches = [_]ZigSearchMatch{
+        .{ .x = 5, .y = 4, .scr = 2, .len = 3 },
+        .{ .x = 1, .y = 0, .scr = 0, .len = 2 },
+    };
+
+    try std.testing.expectEqual(@as(c_int, 1), st_searchmatchlist(&matches, matches.len, 1, -1, 2, 7, 4));
+    try std.testing.expectEqual(@as(c_int, 0), st_searchmatchlist(&matches, matches.len, 1, -1, 2, 9, 4));
+    try std.testing.expectEqual(@as(c_int, 1), st_searchcurrentmatch(&matches, matches.len, 1, 1, 0, 2, 0));
+    try std.testing.expectEqual(@as(c_int, 0), st_searchcurrentmatch(&matches, matches.len, 1, 9, 0, 2, 0));
+    try std.testing.expectEqual(@as(c_int, 0), st_searchmatchlist(null, 0, 1, -1, 0, 0, 0));
+}
+
+test "search scan line and append adapters expose actions" {
+    const skip = st_searchappendmatch(0, 0, 0, 2, 3, 4);
+    const append = st_searchappendmatch(2, 1, 4, 2, 3, 4);
+    const grow = st_searchappendmatch(2, 4, 4, 2, 3, 4);
+
+    try std.testing.expectEqual(@as(c_int, 7), st_searchscanlineend(10, 3));
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.skip)), skip.kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.append)), append.kind);
+    try std.testing.expectEqual(@as(c_int, 2), append.match.x);
+    try std.testing.expectEqual(@as(c_int, 3), append.match.y);
+    try std.testing.expectEqual(@as(c_int, 4), append.match.scr);
+    try std.testing.expectEqual(@as(c_int, 2), append.match.len);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.grow_append)), grow.kind);
+    try std.testing.expectEqual(@as(c_int, 8), grow.cap);
+}
+
 test "search next current preserves valid old current" {
     try std.testing.expectEqual(@as(c_int, -1), st_searchnextcurrent(2, 0));
     try std.testing.expectEqual(@as(c_int, 2), st_searchnextcurrent(2, 5));
@@ -655,6 +837,18 @@ test "search jump changes scroll only for valid different target" {
 test "search history index wraps around current history head" {
     try std.testing.expectEqual(@as(c_int, 6), st_searchhistindex(7, 2, 10));
     try std.testing.expectEqual(@as(c_int, 9), st_searchhistindex(0, 2, 10));
+    try std.testing.expectEqual(@as(c_int, 4), st_tlinehistindex(3, 7, 7, 10));
+    try std.testing.expectEqual(@as(c_int, 9), st_tlinehistindex(0, 0, 2, 10));
+}
+
+test "history line plan maps scrollback and live rows" {
+    const hist_line = st_tlinehistplan(5, 10, 7);
+    const live_line = st_tlinehistplan(6, 10, 7);
+
+    try std.testing.expectEqual(@as(c_int, 1), hist_line.hist);
+    try std.testing.expectEqual(@as(c_int, 5), hist_line.index);
+    try std.testing.expectEqual(@as(c_int, 0), live_line.hist);
+    try std.testing.expectEqual(@as(c_int, 0), live_line.index);
 }
 
 test "search step wraps in both directions" {
@@ -681,6 +875,54 @@ test "search input cap doubles until required fits" {
     try std.testing.expectEqual(@as(usize, 128), st_searchinputcap(63, 2, 64));
     try std.testing.expectEqual(@as(c_int, 0), st_searchinputgrow(3, 2, 8));
     try std.testing.expectEqual(@as(c_int, 1), st_searchinputgrow(7, 2, 8));
+}
+
+test "search insert plan describes buffer edit" {
+    const plan = st_searchinsertplan(1, 3, 1, 8, 2);
+
+    try std.testing.expectEqual(@as(c_int, 1), plan.run);
+    try std.testing.expectEqual(@as(c_int, 0), plan.grow);
+    try std.testing.expectEqual(@as(usize, 1), plan.insert_at);
+    try std.testing.expectEqual(@as(usize, 3), plan.move_dst);
+    try std.testing.expectEqual(@as(usize, 1), plan.move_src);
+    try std.testing.expectEqual(@as(usize, 3), plan.move_len);
+    try std.testing.expectEqual(@as(usize, 5), plan.new_len);
+    try std.testing.expectEqual(@as(usize, 3), plan.new_cursor);
+}
+
+test "search cursor edit adapters expose tagged actions" {
+    const input = "abc  你好";
+    const backspace = st_searchbackspaceedit(input, 1, input.len, input.len);
+    const move_left = st_searchmoveleftedit(input, 1, input.len, input.len);
+    const home_edit = st_searchhomeedit(1);
+    const end_edit = st_searchendedit(1, input.len);
+    const inactive = st_searchbackspaceedit(input, 0, input.len, input.len);
+
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), backspace.kind);
+    try std.testing.expectEqual(@as(usize, 8), backspace.start);
+    try std.testing.expectEqual(@as(usize, input.len), backspace.end);
+    try std.testing.expectEqual(@as(usize, 8), backspace.cursor);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.move)), move_left.kind);
+    try std.testing.expectEqual(@as(usize, 8), move_left.cursor);
+    try std.testing.expectEqual(@as(usize, 0), home_edit.cursor);
+    try std.testing.expectEqual(@as(usize, input.len), end_edit.cursor);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.none)), inactive.kind);
+}
+
+test "search state edit adapters expose tagged actions" {
+    const clear = st_searchclearinputedit(1);
+    const inactive_clear = st_searchclearinputedit(0);
+    const commit_clear = st_searchcommitedit(1, 0);
+    const commit_set = st_searchcommitedit(1, 3);
+    const cancel = st_searchcanceledit(1);
+
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.clear_input)), clear.kind);
+    try std.testing.expectEqual(@as(usize, 0), clear.inputlen);
+    try std.testing.expectEqual(@as(usize, 0), clear.inputcursor);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), inactive_clear.kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_clear)), commit_clear.kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_set)), commit_set.kind);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.cancel)), cancel.kind);
 }
 
 test "search input edit plans guard inactive and empty cases" {
@@ -712,6 +954,8 @@ test "search commit and cancel plans report actions" {
     try std.testing.expectEqual(@as(c_int, 1), st_searchbaractive(1, 0));
     try std.testing.expectEqual(@as(c_int, 1), st_searchbaractive(0, 1));
     try std.testing.expectEqual(@as(c_int, 0), st_searchbaractive(0, 0));
+    try std.testing.expectEqual(@as(c_int, 1), st_searchinputactiveplan(1));
+    try std.testing.expectEqual(@as(c_int, 0), st_searchinputactiveplan(0));
 }
 
 test "external pipe line plan handles break skip and write" {
@@ -721,6 +965,7 @@ test "external pipe line plan handles break skip and write" {
     try std.testing.expectEqual(@as(c_int, 3), st_externalpipelinelen(3, 10).lastpos);
     try std.testing.expectEqual(@as(c_int, 1), st_externalpipewrap(attr_wrap));
     try std.testing.expectEqual(@as(c_int, 0), st_externalpipewrap(0));
+    try std.testing.expectEqual(@as(c_int, 13), st_externalpipelimit(10));
 }
 
 test "search set plan keeps allocation nonzero and resets current" {

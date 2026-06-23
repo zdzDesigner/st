@@ -30,6 +30,7 @@ pub const ZigEditMove = extern struct {
 pub const ZigScrollPlan = extern struct {
     count: c_int,
     new_scr: c_int,
+    new_histi: c_int,
 };
 
 pub const ZigKScrollPlan = extern struct {
@@ -104,13 +105,15 @@ const LineRegion = struct {
         return self.top <= y and y <= self.bot;
     }
 
-    fn scroll(self: LineRegion, n: c_int, scr: c_int, histsize: c_int, scroll_up: bool) ZigScrollPlan {
+    fn scroll(self: LineRegion, n: c_int, scr: c_int, histsize: c_int, scroll_up: bool, copyhist: bool, histi: c_int) ZigScrollPlan {
         const count = limitInt(n, 0, self.bot - self.top + 1);
         const new_scr = if (scroll_up and scr > 0 and scr < histsize)
             minInt(scr + count, histsize - 1)
         else
             scr;
-        return .{ .count = count, .new_scr = new_scr };
+        const delta: c_int = if (scroll_up) 1 else -1;
+        const new_histi = if (copyhist and histsize > 0) @mod(histi + delta, histsize) else histi;
+        return .{ .count = count, .new_scr = new_scr, .new_histi = new_histi };
     }
 };
 
@@ -155,8 +158,8 @@ export fn st_tlineinregion(y: c_int, top: c_int, bot: c_int) c_int {
     return if ((LineRegion{ .top = top, .bot = bot }).contains(y)) 1 else 0;
 }
 
-export fn st_tscrollplan(n: c_int, orig: c_int, bot: c_int, scr: c_int, histsize: c_int, scroll_up: c_int) ZigScrollPlan {
-    return (LineRegion{ .top = orig, .bot = bot }).scroll(n, scr, histsize, scroll_up != 0);
+export fn st_tscrollplan(n: c_int, orig: c_int, bot: c_int, scr: c_int, histsize: c_int, scroll_up: c_int, copyhist: c_int, histi: c_int) ZigScrollPlan {
+    return (LineRegion{ .top = orig, .bot = bot }).scroll(n, scr, histsize, scroll_up != 0, copyhist != 0, histi);
 }
 
 export fn st_tscrollselplan(scr: c_int) c_int {
@@ -237,17 +240,25 @@ test "line region check is inclusive" {
 }
 
 test "scroll plan clamps count to scroll region" {
-    const plan = st_tscrollplan(99, 3, 8, 0, 100, 0);
+    const plan = st_tscrollplan(99, 3, 8, 0, 100, 0, 0, 7);
 
     try std.testing.expectEqual(@as(c_int, 6), plan.count);
     try std.testing.expectEqual(@as(c_int, 0), plan.new_scr);
+    try std.testing.expectEqual(@as(c_int, 7), plan.new_histi);
 }
 
 test "scroll up plan advances scrollback view" {
-    const plan = st_tscrollplan(5, 0, 9, 98, 100, 1);
+    const plan = st_tscrollplan(5, 0, 9, 98, 100, 1, 1, 99);
 
     try std.testing.expectEqual(@as(c_int, 5), plan.count);
     try std.testing.expectEqual(@as(c_int, 99), plan.new_scr);
+    try std.testing.expectEqual(@as(c_int, 0), plan.new_histi);
+}
+
+test "scroll down plan wraps history head backward" {
+    const plan = st_tscrollplan(1, 0, 9, 0, 100, 0, 1, 0);
+
+    try std.testing.expectEqual(@as(c_int, 99), plan.new_histi);
 }
 
 test "scroll selection sync only runs on live screen" {

@@ -44,10 +44,9 @@
 #define ISCONTROLC1(c)		(BETWEEN(c, 0x80, 0x9f))
 #define ISCONTROL(c)		(ISCONTROLC0(c) || ISCONTROLC1(c))
 #define ISDELIM(u)		(u && wcschr(worddelimiters, u))
-#define TLINE(y)		((y) < term.scr ? term.hist[((y) + term.histi - \
-				term.scr + HISTSIZE + 1) % HISTSIZE] : \
+#define TLINE(y)		((y) < term.scr ? term.hist[st_tlinehistindex((y), \
+				term.histi, term.scr, HISTSIZE)] : \
 				term.line[(y) - term.scr])
-#define TLINE_HIST(y)           ((y) <= HISTSIZE-term.row+2 ? term.hist[(y)] : term.line[(y-HISTSIZE+term.row-3)])
 
 enum term_mode {
 	MODE_WRAP        = 1 << 0,
@@ -210,6 +209,7 @@ static void tdeleteline(int);
 static void tinsertblank(int);
 static void tinsertblankline(int);
 static int tlinelen(int);
+static Line tlinehist(int);
 static void tmoveto(int, int);
 static void tmoveato(int, int);
 static void tnewline(int);
@@ -237,6 +237,8 @@ static void searchscan(void);
 static void searchset(const char *);
 static void searchscanline(Line, int, int);
 static Line searchhistline(int);
+static void searchapplyedit(ZigSearchCursorEditPlan, int);
+static void searchapplystateedit(ZigSearchStateEditPlan);
 static void searchjump(void);
 static size_t searchprevchar(size_t);
 static size_t searchnextchar(size_t);
@@ -347,7 +349,16 @@ tlinelen(int y)
 int
 tlinehistlen(int y)
 {
-	return st_tlinelen((const ZigGlyph *)TLINE_HIST(y), term.col);
+	return st_tlinelen((const ZigGlyph *)tlinehist(y), term.col);
+}
+
+Line
+tlinehist(int y)
+{
+	ZigHistoryLinePlan plan;
+
+	plan = st_tlinehistplan(y, HISTSIZE, term.row);
+	return plan.hist ? term.hist[plan.index] : term.line[plan.index];
 }
 
 void
@@ -437,29 +448,15 @@ selected(int x, int y)
 int
 searchmatch(int x, int y)
 {
-	int i;
-
-	for (i = 0; i < search.nmatches; ++i) {
-		if (st_searchhit(search.active, search.matches[i].scr, term.scr,
-				search.matches[i].y, y, x, search.matches[i].x,
-				search.matches[i].len))
-			return 1;
-	}
-
-	return 0;
+	return st_searchmatchlist((const ZigSearchMatch *)search.matches,
+		search.nmatches, search.active, search.current, term.scr, x, y);
 }
 
 int
 searchcurrent(int x, int y)
 {
-	SearchMatch *match;
-
-	if (!st_searchcurrentvalid(search.active, search.current, search.nmatches))
-		return 0;
-
-	match = &search.matches[search.current];
-	return st_searchhit(search.active, match->scr, term.scr, match->y, y,
-		x, match->x, match->len);
+	return st_searchcurrentmatch((const ZigSearchMatch *)search.matches,
+		search.nmatches, search.active, search.current, term.scr, x, y);
 }
 
 void
@@ -477,7 +474,7 @@ searchclear(const Arg *arg)
 int
 searchinputactive(void)
 {
-	return search.inputmode;
+	return st_searchinputactiveplan(search.inputmode);
 }
 
 int
@@ -549,20 +546,23 @@ searchprompt(const Arg *arg)
 void
 searchinput(const char *text, size_t len)
 {
-	if (!st_searchinputplan(search.inputmode, len))
+	ZigSearchInsertPlan plan;
+
+	plan = st_searchinsertplan(search.inputmode, search.inputlen,
+		search.inputcursor, search.inputcap, len);
+	if (!plan.run)
 		return;
 
-	if (st_searchinputgrow(search.inputlen, len, search.inputcap)) {
-		search.inputcap = st_searchinputcap(search.inputlen, len,
-			search.inputcap);
+	if (plan.grow) {
+		search.inputcap = plan.inputcap;
 		search.input = xrealloc(search.input, search.inputcap);
 	}
-	memmove(search.input + search.inputcursor + len,
-		search.input + search.inputcursor,
-		search.inputlen - search.inputcursor + 1);
-	memcpy(search.input + search.inputcursor, text, len);
-	search.inputlen += len;
-	search.inputcursor += len;
+	memmove(search.input + plan.move_dst,
+		search.input + plan.move_src,
+		plan.move_len);
+	memcpy(search.input + plan.insert_at, text, len);
+	search.inputlen = plan.new_len;
+	search.inputcursor = plan.new_cursor;
 	search.input[search.inputlen] = '\0';
 	searchset(search.input);
 }
@@ -570,93 +570,75 @@ searchinput(const char *text, size_t len)
 void
 searchbackspace(void)
 {
-	size_t prev;
-
-	if (!st_searchbackspaceplan(search.inputmode, search.inputlen,
-		search.inputcursor))
-		return;
-
-	prev = searchprevchar(search.inputcursor);
-	searchdelete(prev, search.inputcursor);
-	search.inputcursor = prev;
-	searchset(search.input);
+	searchapplyedit(st_searchbackspaceedit((const unsigned char *)searchinputtext(),
+		search.inputmode, search.inputlen, search.inputcursor), 1);
 }
 
 void
 searchdeleteforward(void)
 {
-	size_t next;
-
-	if (!st_searchdeleteforwardplan(search.inputmode,
-		search.inputcursor, search.inputlen))
-		return;
-	next = searchnextchar(search.inputcursor);
-	searchdelete(search.inputcursor, next);
-	searchset(search.input);
+	searchapplyedit(st_searchdeleteforwardedit((const unsigned char *)searchinputtext(),
+		search.inputmode, search.inputlen, search.inputcursor), 1);
 }
 
 void
 searchdeleteword(void)
 {
-	size_t start;
-
-	if (!st_searchdeletewordplan(search.inputmode, search.inputcursor))
-		return;
-	start = st_searchdeletewordstart((const unsigned char *)search.input,
-		search.inputcursor);
-	searchdelete(start, search.inputcursor);
-	search.inputcursor = start;
-	searchset(search.input);
+	searchapplyedit(st_searchdeletewordedit((const unsigned char *)searchinputtext(),
+		search.inputmode, search.inputlen, search.inputcursor), 1);
 }
 
 void
 searchclearinput(void)
 {
-	if (!st_searchclearinputplan(search.inputmode))
-		return;
-	search.inputlen = 0;
-	search.inputcursor = 0;
-	if (search.input)
-		search.input[0] = '\0';
-	searchset(search.input);
+	searchapplystateedit(st_searchclearinputedit(search.inputmode));
 }
 
 void
 searchmoveleft(void)
 {
-	if (!st_searchbackspaceplan(search.inputmode, search.inputlen,
-		search.inputcursor))
-		return;
-	search.inputcursor = searchprevchar(search.inputcursor);
-	redraw();
+	searchapplyedit(st_searchmoveleftedit((const unsigned char *)searchinputtext(),
+		search.inputmode, search.inputlen, search.inputcursor), 0);
 }
 
 void
 searchmoveright(void)
 {
-	if (!st_searchdeleteforwardplan(search.inputmode,
-		search.inputcursor, search.inputlen))
-		return;
-	search.inputcursor = searchnextchar(search.inputcursor);
-	redraw();
+	searchapplyedit(st_searchmoverightedit((const unsigned char *)searchinputtext(),
+		search.inputmode, search.inputlen, search.inputcursor), 0);
 }
 
 void
 searchhome(void)
 {
-	if (!st_searchcursorplan(search.inputmode))
-		return;
-	search.inputcursor = 0;
-	redraw();
+	searchapplyedit(st_searchhomeedit(search.inputmode), 0);
 }
 
 void
 searchend(void)
 {
-	if (!st_searchcursorplan(search.inputmode))
+	searchapplyedit(st_searchendedit(search.inputmode, search.inputlen), 0);
+}
+
+void
+searchapplyedit(ZigSearchCursorEditPlan plan, int refresh_search)
+{
+	switch (plan.kind) {
+	case ST_ZIG_SEARCH_CURSOR_NONE:
 		return;
-	search.inputcursor = search.inputlen;
-	redraw();
+	case ST_ZIG_SEARCH_CURSOR_DELETE:
+		searchdelete(plan.start, plan.end);
+		search.inputcursor = plan.cursor;
+		break;
+	case ST_ZIG_SEARCH_CURSOR_MOVE:
+		search.inputcursor = plan.cursor;
+		break;
+	}
+
+	if (refresh_search)
+		searchset(search.input);
+	else
+		redraw();
 }
 
 size_t
@@ -687,28 +669,41 @@ searchdelete(size_t start, size_t end)
 void
 searchcommit(void)
 {
-	int action;
-
-	action = st_searchcommitplan(search.inputmode, search.inputlen);
-	if (action == ST_ZIG_SEARCH_ACTION_NONE)
-		return;
-
-	search.inputmode = 0;
-	if (action == ST_ZIG_SEARCH_ACTION_CLEAR) {
-		searchclear(NULL);
-		return;
-	}
-	searchset(search.input);
+	searchapplystateedit(st_searchcommitedit(search.inputmode, search.inputlen));
 }
 
 void
 searchcancel(void)
 {
-	if (st_searchcancelplan(search.inputmode) == ST_ZIG_SEARCH_ACTION_NONE)
-		return;
+	searchapplystateedit(st_searchcanceledit(search.inputmode));
+}
 
-	search.inputmode = 0;
-	redraw();
+void
+searchapplystateedit(ZigSearchStateEditPlan plan)
+{
+	switch (plan.kind) {
+	case ST_ZIG_SEARCH_STATE_NONE:
+		return;
+	case ST_ZIG_SEARCH_STATE_CLEAR_INPUT:
+		search.inputlen = plan.inputlen;
+		search.inputcursor = plan.inputcursor;
+		if (search.input)
+			search.input[0] = '\0';
+		searchset(search.input);
+		break;
+	case ST_ZIG_SEARCH_STATE_COMMIT_CLEAR:
+		search.inputmode = 0;
+		searchclear(NULL);
+		break;
+	case ST_ZIG_SEARCH_STATE_COMMIT_SET:
+		search.inputmode = 0;
+		searchset(search.input);
+		break;
+	case ST_ZIG_SEARCH_STATE_CANCEL:
+		search.inputmode = 0;
+		redraw();
+		break;
+	}
 }
 
 void
@@ -764,26 +759,30 @@ searchscan(void)
 void
 searchscanline(Line line, int scr, int y)
 {
-	int x, linelen, matchlen;
+	int x, linelen, lastx, matchlen;
 	SearchMatch *match;
+	ZigSearchAppendPlan append;
 
 	linelen = st_tlinelen((const ZigGlyph *)line, term.col);
-	for (x = 0; x <= linelen - search.qlen; ++x) {
+	lastx = st_searchscanlineend(linelen, search.qlen);
+	for (x = 0; x <= lastx; ++x) {
 		matchlen = st_searchlinematch((const ZigGlyph *)line, x,
 			linelen, search.query, search.qlen, term.col);
-		if (!matchlen)
+		append = st_searchappendmatch(matchlen, search.nmatches,
+			search.cap, x, y, scr);
+		if (append.kind == ST_ZIG_SEARCH_APPEND_SKIP)
 			continue;
 
-		if (search.nmatches == search.cap) {
-			search.cap = st_searchmatchcap(search.nmatches, search.cap);
+		if (append.kind == ST_ZIG_SEARCH_APPEND_GROW) {
+			search.cap = append.cap;
 			search.matches = xrealloc(search.matches,
 				search.cap * sizeof(*search.matches));
 		}
 		match = &search.matches[search.nmatches++];
-		match->x = x;
-		match->y = y;
-		match->scr = scr;
-		match->len = matchlen;
+		match->x = append.match.x;
+		match->y = append.match.y;
+		match->scr = append.match.scr;
+		match->len = append.match.len;
 	}
 }
 
@@ -1375,11 +1374,12 @@ tscrolldown(int orig, int n, int copyhist)
 	Line temp;
 	ZigScrollPlan plan;
 
-	plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 0);
+	plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 0,
+		copyhist, term.histi);
 	n = plan.count;
 
 	if (copyhist) {
-		term.histi = (term.histi - 1 + HISTSIZE) % HISTSIZE;
+		term.histi = plan.new_histi;
 		temp = term.hist[term.histi];
 		term.hist[term.histi] = term.line[term.bot];
 		term.line[term.bot] = temp;
@@ -1405,11 +1405,12 @@ tscrollup(int orig, int n, int copyhist)
 	Line temp;
 	ZigScrollPlan plan;
 
-	plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 1);
+	plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 1,
+		copyhist, term.histi);
 	n = plan.count;
 
 	if (copyhist) {
-		term.histi = (term.histi + 1) % HISTSIZE;
+		term.histi = plan.new_histi;
 		temp = term.hist[term.histi];
 		term.hist[term.histi] = term.line[orig];
 		term.line[orig] = temp;
@@ -2115,8 +2116,8 @@ externalpipe(const Arg *arg)
 	/* ignore sigpipe for now, in case child exists early */
 	oldsigpipe = signal(SIGPIPE, SIG_IGN);
 	newline = 0;
-	for (n = 0; n <= HISTSIZE + 2; n++) {
-		bp = TLINE_HIST(n);
+	for (n = 0; n < st_externalpipelimit(HISTSIZE); n++) {
+		bp = tlinehist(n);
 		line_plan = st_externalpipelinelen(tlinehistlen(n), term.col);
 		if (line_plan.kind == ST_ZIG_EXTERNALPIPE_BREAK)
 			break;
@@ -2127,7 +2128,7 @@ externalpipe(const Arg *arg)
 		for (; bp < end; ++bp)
 			if (xwrite(to[1], buf, utf8encode(bp->u, buf)) < 0)
 				break;
-		if ((newline = st_externalpipewrap(TLINE_HIST(n)[lastpos].mode)))
+		if ((newline = st_externalpipewrap(tlinehist(n)[lastpos].mode)))
 			continue;
 		if (xwrite(to[1], "\n", 1) < 0)
 			break;
@@ -2726,7 +2727,7 @@ draw(void)
 	term.ocx = cx;
 	term.ocy = term.c.y;
 	xfinishdraw();
-	if (ocx != term.ocx || ocy != term.ocy)
+	if (st_drawimspotactive(ocx, ocy, term.ocx, term.ocy))
 		xximspot(term.ocx, term.ocy);
 }
 

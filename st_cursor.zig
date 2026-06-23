@@ -220,6 +220,10 @@ export fn st_drawcursoractive(scr: c_int) c_int {
     return if (scr == 0) 1 else 0;
 }
 
+export fn st_drawimspotactive(old_x: c_int, old_y: c_int, new_x: c_int, new_y: c_int) c_int {
+    return if (old_x != new_x or old_y != new_y) 1 else 0;
+}
+
 export fn st_tcursorplan(mode: c_int, alt: c_int) ZigCursorStorePlan {
     return (CursorStore{ .mode = mode, .alt = alt != 0 }).plan();
 }
@@ -347,6 +351,8 @@ test "draw plans gate search scan and cursor" {
     try std.testing.expectEqual(@as(c_int, 0), st_drawsearchscan(0));
     try std.testing.expectEqual(@as(c_int, 1), st_drawcursoractive(0));
     try std.testing.expectEqual(@as(c_int, 0), st_drawcursoractive(2));
+    try std.testing.expectEqual(@as(c_int, 1), st_drawimspotactive(0, 0, 1, 0));
+    try std.testing.expectEqual(@as(c_int, 0), st_drawimspotactive(1, 2, 1, 2));
 }
 
 test "tcursor plan maps mode and alt slot" {

@@ -19,10 +19,10 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_attr.zig` 通过 `SgrParams`、`AttrUpdate` 承载 SGR 属性更新规划，是 `tsetattr(...)` 的 Zig 迁移主体。
 - `st_base64.zig` 通过 `Base64Input`、`Base64Decoder` 承载 OSC 等路径复用的 base64 解码入口。
 - `st_csi.zig` 通过 `CsiParser`、`CsiArgParser` 承载 CSI 原始字节解析和 private marker 分类。
-- `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
+- `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`ExternalPipe`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
 - `st_state.zig` 通过 `CsiCommand`、`ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 CSI 状态、scroll region、resize、reset、tab 和 clear rect 规划。
-- `st_edit.zig` 通过 `EditCommand`、`TextSpan`、`LineRegion`、`KeyboardScroll` 承载 CSI edit、行内搬移、区域滚动和键盘滚动规划。
-- `st_cursor.zig` 通过 `CursorCommand`、`CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载 CSI 光标、移动 clamp、换行、draw cursor 和保存/恢复规划。
+- `st_edit.zig` 通过 `EditCommand`、`TextSpan`、`LineRegion`、`KeyboardScroll` 承载 CSI edit、行内搬移、区域滚动、历史环形指针和键盘滚动规划。
+- `st_cursor.zig` 通过 `CursorCommand`、`CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载 CSI 光标、移动 clamp、换行、draw cursor、IME spot 更新判断和保存/恢复规划。
 - `st_erase.zig` 通过 `EraseCommand`、`ClearRect` 承载 ED/EL 清理计划和清理矩形归一化。
 - `st_mode.zig` 通过 `ModeParam`、`Utf8Selector`、`CharsetSelector`、`AltScreen` 承载 mode、UTF-8、charset 和 alternate screen 参数分类。
 - `st_light.zig` 通过 `LightCommand` 承载轻量 CSI 动作分类。
@@ -34,8 +34,8 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`EscFlow` 承载字符写入、STR 收集和 ESC flow adapter，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
-- `st_search.zig` 承载 search 输入编辑、跳转、提交/取消、hit、line match 和历史环形索引纯逻辑。
-- `st_line.zig` 作为 line、selection、search 相关 C ABI adapter，并集中处理 C 标量到 Zig enum/bool/value object 的薄转换。
+- `st_search.zig` 承载 search 输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
+- `st_line.zig` 作为 line、selection、search/history 相关 C ABI adapter，并集中处理 C 标量到 Zig enum/bool/value object 的薄转换。
 
 ## 当前状态
 

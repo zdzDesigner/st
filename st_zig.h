@@ -118,6 +118,7 @@ typedef struct {
 typedef struct {
 	int count;
 	int new_scr;
+	int new_histi;
 } ZigScrollPlan;
 
 typedef struct {
@@ -351,6 +352,64 @@ typedef struct {
 } ZigSearchDeletePlan;
 
 typedef struct {
+	int run;
+	int grow;
+	size_t inputcap;
+	size_t insert_at;
+	size_t move_dst;
+	size_t move_src;
+	size_t move_len;
+	size_t new_len;
+	size_t new_cursor;
+} ZigSearchInsertPlan;
+
+typedef struct {
+	int kind;
+	size_t start;
+	size_t end;
+	size_t cursor;
+} ZigSearchCursorEditPlan;
+
+typedef struct {
+	int kind;
+	size_t inputlen;
+	size_t inputcursor;
+} ZigSearchStateEditPlan;
+
+typedef struct {
+	int x;
+	int y;
+	int scr;
+	int len;
+} ZigSearchMatch;
+
+typedef struct {
+	int kind;
+	int cap;
+	ZigSearchMatch match;
+} ZigSearchAppendPlan;
+
+enum {
+	ST_ZIG_SEARCH_APPEND_SKIP = 0,
+	ST_ZIG_SEARCH_APPEND = 1,
+	ST_ZIG_SEARCH_APPEND_GROW = 2,
+};
+
+enum {
+	ST_ZIG_SEARCH_CURSOR_NONE = 0,
+	ST_ZIG_SEARCH_CURSOR_DELETE = 1,
+	ST_ZIG_SEARCH_CURSOR_MOVE = 2,
+};
+
+enum {
+	ST_ZIG_SEARCH_STATE_NONE = 0,
+	ST_ZIG_SEARCH_STATE_CLEAR_INPUT = 1,
+	ST_ZIG_SEARCH_STATE_COMMIT_CLEAR = 2,
+	ST_ZIG_SEARCH_STATE_COMMIT_SET = 3,
+	ST_ZIG_SEARCH_STATE_CANCEL = 4,
+};
+
+typedef struct {
 	size_t alloc_len;
 	int active;
 	int current;
@@ -368,6 +427,11 @@ typedef struct {
 	int kind;
 	int lastpos;
 } ZigExternalPipeLinePlan;
+
+typedef struct {
+	int hist;
+	int index;
+} ZigHistoryLinePlan;
 
 enum {
 	ST_ZIG_EXTERNALPIPE_BREAK = 0,
@@ -516,13 +580,14 @@ ZigDrawCursorPlan st_drawcursorplan(int, int, int, int, int, int, const ZigGlyph
 int st_drawregionline(int);
 int st_drawsearchscan(int);
 int st_drawcursoractive(int);
+int st_drawimspotactive(int, int, int, int);
 ZigCursorStorePlan st_tcursorplan(int, int);
 int st_tsetmodecursor(int);
 ZigEditPlan st_planedit(char, const int *, int, int, int);
 ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 int st_tlineinregion(int, int, int);
-ZigScrollPlan st_tscrollplan(int, int, int, int, int, int);
+ZigScrollPlan st_tscrollplan(int, int, int, int, int, int, int, int);
 int st_tscrollselplan(int);
 ZigKScrollPlan st_kscrolldownplan(int, int, int);
 ZigKScrollPlan st_kscrollupplan(int, int, int, int);
@@ -577,17 +642,34 @@ ZigSelSnapWordStep st_selsnapwordstep(int, int, int, unsigned short, int, int, u
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchcurrentvalid(int, int, int);
 int st_searchhit(int, int, int, int, int, int, int, int);
+int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
+int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchlinematch(const ZigGlyph *, int, int, const uint32_t *, int, int);
+int st_searchscanlineend(int, int);
+ZigSearchAppendPlan st_searchappendmatch(int, int, int, int, int, int);
 int st_searchnextcurrent(int, int);
 int st_searchjumpscr(int, int, int);
 int st_searchhistindex(int, int, int);
+int st_tlinehistindex(int, int, int, int);
+ZigHistoryLinePlan st_tlinehistplan(int, int, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
 size_t st_searchprevchar(const unsigned char *, size_t);
 size_t st_searchnextchar(const unsigned char *, size_t, size_t);
 size_t st_searchdeletewordstart(const unsigned char *, size_t);
+ZigSearchCursorEditPlan st_searchbackspaceedit(const unsigned char *, int, size_t, size_t);
+ZigSearchCursorEditPlan st_searchdeleteforwardedit(const unsigned char *, int, size_t, size_t);
+ZigSearchCursorEditPlan st_searchdeletewordedit(const unsigned char *, int, size_t, size_t);
+ZigSearchCursorEditPlan st_searchmoveleftedit(const unsigned char *, int, size_t, size_t);
+ZigSearchCursorEditPlan st_searchmoverightedit(const unsigned char *, int, size_t, size_t);
+ZigSearchCursorEditPlan st_searchhomeedit(int);
+ZigSearchCursorEditPlan st_searchendedit(int, size_t);
+ZigSearchStateEditPlan st_searchclearinputedit(int);
+ZigSearchStateEditPlan st_searchcommitedit(int, size_t);
+ZigSearchStateEditPlan st_searchcanceledit(int);
 size_t st_searchinputcap(size_t, size_t, size_t);
 int st_searchinputgrow(size_t, size_t, size_t);
 int st_searchinputplan(int, size_t);
+ZigSearchInsertPlan st_searchinsertplan(int, size_t, size_t, size_t, size_t);
 int st_searchbackspaceplan(int, size_t, size_t);
 int st_searchdeleteforwardplan(int, size_t, size_t);
 int st_searchdeletewordplan(int, size_t);
@@ -598,8 +680,10 @@ int st_searchcommitplan(int, size_t);
 int st_searchcancelplan(int);
 int st_searchclearinputplan(int);
 int st_searchbaractive(int, int);
+int st_searchinputactiveplan(int);
 ZigExternalPipeLinePlan st_externalpipelinelen(int, int);
 int st_externalpipewrap(unsigned short);
+int st_externalpipelimit(int);
 ZigSearchSetPlan st_searchsetplan(size_t, int);
 ZigSearchPromptPlan st_searchpromptplan(int, size_t);
 int st_searchmatchcap(int, int);

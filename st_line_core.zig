@@ -130,6 +130,14 @@ pub const VisualLine = struct {
     }
 };
 
+pub const ExternalPipe = struct {
+    histsize: i32,
+
+    pub fn limit(self: ExternalPipe) i32 {
+        return self.histsize + 3;
+    }
+};
+
 pub const Viewport = struct {
     rows: i32,
 
@@ -171,6 +179,10 @@ pub fn externalPipeLine(linelen: i32, cols: i32) ExternalPipeLinePlan {
 
 pub fn externalPipeWrap(mode: u16) bool {
     return model.hasWrap(mode);
+}
+
+pub fn externalPipeLimit(histsize: i32) i32 {
+    return (ExternalPipe{ .histsize = histsize }).limit();
 }
 
 fn minInt(a: i32, b: i32) i32 {
@@ -239,4 +251,5 @@ test "line core dump and external pipe plans" {
     try std.testing.expectEqual(ExternalPipeLineKind.write, externalPipeLine(3, 10).kind);
     try std.testing.expect(externalPipeWrap(model.attr_wrap));
     try std.testing.expect(!externalPipeWrap(0));
+    try std.testing.expectEqual(@as(i32, 13), externalPipeLimit(10));
 }
