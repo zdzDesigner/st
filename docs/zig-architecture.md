@@ -29,8 +29,8 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_strhandle.zig` 通过 `StringSequence`、`StringAction`、`StringArgs` 承载字符串序列启动和 OSC/DCS action 分类。
 - `st_strparse.zig` 通过 `StringParser` 承载 OSC/DCS 参数边界扫描。
 - `st_putc_decode.zig` 通过 `RuneInput`、`ControlWriter` 承载 rune 解码和控制字符显示规划。
-- `st_control_esc.zig` 通过 `EscSequence`、`ControlSequence` 承载 ESC/control 字节到执行计划的纯决策逻辑。
-- `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`EscFlow` 承载字符写入、STR 收集和 ESC flow adapter，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
+- `st_control_esc.zig` 通过 `EscSequence`、`ControlSequence` 承载 ESC/control 字节到纯 plan 的决策逻辑。
+- `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`InputControlPlan`、`InputEscPlan`、`InputEscFlowPlan` 承载字符写入、STR 收集和 input 主线计划，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
 - `st_search.zig` 承载 search 输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
@@ -45,6 +45,9 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - Search 和 Selection 主流程已完成迁移定版；后续只做局部优化、无用 ABI 删除或更大粒度 command plan 聚合。
 - Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C executor 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
+- Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
+- Search 扫描已完成聚合：`searchscanline` 改用 `st_searchlineplan`，旧 `st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
+- Selection 输出已完成首批聚合：`getsel` 改用 `st_getselexecplan`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 
 ## 完成定义

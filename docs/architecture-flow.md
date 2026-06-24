@@ -75,12 +75,12 @@ flowchart TB
 flowchart TD
     Read[twrite / tputc] --> Decode[st_putc_decode.zig RuneInput]
     Decode --> Control{control?}
-    Control -->|是| ControlExec[st_control_esc.zig ControlSequence]
-    ControlExec --> CControl[st.c 执行 tab/backspace/linefeed/bell/str start]
+    Control -->|是| ControlExec[st_setchar.zig InputControlPlan]
+    ControlExec --> CControl[st.c 写 esc/charset/tabs 并执行 tab/backspace/linefeed/bell/str start]
     Control -->|否| Esc{ESC/STR active?}
     Esc -->|STR| Collect[st_setchar.zig StringCollector]
     Collect --> CString[st.c 扩容/strhandle]
-    Esc -->|ESC| EscFlow[st_setchar.zig EscFlow + st_control_esc.zig EscSequence]
+    Esc -->|ESC| EscFlow[st_setchar.zig InputEscFlowPlan / InputEscPlan]
     EscFlow --> CEsc[st.c 执行 CSI/charset/test/reset 等副作用]
     Esc -->|普通字符| Prepare[st_setchar.zig PutcPrepare]
     Prepare --> Write[st_setchar.zig GlyphLine.putcWrite]
@@ -99,7 +99,7 @@ flowchart TD
     CExec --> Effects[tmoveto / tclearregion / xsetmode / ttywrite / redraw]
 ```
 
-当前状态：`csihandle()` 已收敛为单一 `st_csiexecplan()` 顶层 command plan；C 侧只按 command kind 执行 `tapply*`、`tsetmode`、`tsetattr` 和 `xsetcursor` 等副作用。旧 `st_plancursor`、`st_planedit`、`st_planerase`、`st_planlight`、`st_planstate`、`st_planmisc` ABI 已删除。
+当前状态：`csihandle()` 已收敛为单一 `st_csiexecplan()` 顶层 command plan；C 侧只按 command kind 执行 `tapply*`、`tsetmode`、`tsetattr` 和 `xsetcursor` 等副作用。旧 `st_plancursor`、`st_planedit`、`st_planerase`、`st_planlight`、`st_planstate`、`st_planmisc` ABI 已删除。Input 主线已删除旧 `st_tcontrolexec`、`st_tescexec`、`st_tescflow`、`st_tescflowafter`、`st_tcontrolafter`、`st_tcontrolfinish` 碎片 ABI，改由 `InputControlPlan`、`InputEscPlan`、`InputEscFlowPlan` 返回状态写回计划。
 
 ## Search 子系统流程
 
@@ -132,10 +132,9 @@ flowchart TD
     SearchSet --> DecodeQuery[st.c utf8decode query]
     DecodeQuery --> SetPlan[st_search.zig SetPlan]
     SetPlan --> Scan[searchscan]
-    Scan --> LineMatch[st_search.zig LineMatcher]
-    LineMatch --> Append[st_search.zig MatchAppend union]
-    Append -->|grow_append| MatchRealloc[st.c xrealloc matches]
-    Append --> MatchWrite[st.c 写 SearchMatch]
+    Scan --> LinePlan[st_line.zig SearchLinePlan]
+    LinePlan -->|grow_append| MatchRealloc[st.c xrealloc matches]
+    LinePlan --> MatchWrite[st.c 写 SearchMatch]
     MatchWrite --> MatchList[st_search.zig MatchList slice]
     MatchList --> DrawHit[searchmatch/searchcurrent]
 ```
@@ -151,7 +150,7 @@ flowchart TD
     Scroll[selscroll] --> ScrollPlan[st_selection.zig scrollPlan]
     Normalize[selnormalize] --> Bounds[st_selection.zig normalize / normalizeColumns]
     Snap[selsnap] --> SnapPlan[st_selection.zig snapWordPlan / snapWordStep / snapLineX]
-    GetSel[getsel] --> GetLine[st_selection.zig getLinePlan / newline / buffer size]
+    GetSel[getsel] --> GetLine[st_line.zig GetSelExecPlan]
 
     StartPlan --> CState[st.c 更新 sel]
     ExtendPlan --> CState
@@ -206,8 +205,8 @@ flowchart LR
     F --> G[补启动冒烟验证]
 ```
 
-- **Search 定版**：主流程完成，旧 `st_search*plan` 兼容入口和测试专用 ABI 已删除；C 侧只保留扫描所需 `TLINE(...)`、匹配数组写入、输入缓冲区移动和 redraw/free 等副作用。
-- **Selection 定版**：主流程完成，line snap step 和 word snap loop step 已 plan 化；C 侧只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
+- **Search 定版**：主流程完成，旧 `st_search*plan` 兼容入口和测试专用 ABI 已删除；`searchscanline` 已合并为 `st_searchlineplan`，C 侧只保留扫描所需 `TLINE(...)`、匹配数组写入、输入缓冲区移动和 redraw/free 等副作用。
+- **Selection 定版**：主流程完成，`getsel` 已合并为 `st_getselexecplan`，line snap step 和 word snap loop step 已 plan 化；C 侧只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
 - **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
 - **Draw 收口**：draw frame gate、cursor 调整和 draw region dirty 扫描已迁移为 Zig plan；C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链。
 - **CSI 聚合**：`csihandle` 已改为 `ZigCsiExecPlan` 顶层分发，六个旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除；C 继续执行真实副作用。

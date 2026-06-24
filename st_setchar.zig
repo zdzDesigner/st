@@ -1,6 +1,6 @@
-//! st_setchar.zig 是当前最厚的 Zig 迁移模块，承载字符写入、STR 收集、ESC/control 状态执行等核心逻辑。
+//! st_setchar.zig 是当前最厚的 Zig 迁移模块，承载字符写入、STR 收集、ESC/control 输入计划等核心逻辑。
 //! [输入]: C 侧传入 rune、glyph 属性、当前行 buffer、ESC 状态、CSI/STR 缓冲区和必要的光标/终端尺寸字段。
-//! [输出]: 通过 extern struct 返回写入结果、prepare plan、STR collect 结果、ESC flow 结果或 control/ESC action。
+//! [输出]: 通过 extern struct 返回写入结果、prepare plan、STR collect 结果、ESC/control/input flow plan。
 //! [副作用边界]: 可修改传入的局部 glyph 行和显式传入的状态指针；不直接调用 X11、tty、滚屏、selection、allocator 或全局 `term`。
 //! [定位]: 这是 `tsetchar(...)` 与 `tputc(...)` 逐步迁移的汇聚点，目标是在不扩大 C/Zig 全局状态耦合的前提下持续压薄 `st.c`。
 
@@ -32,23 +32,37 @@ pub const ZigStrCollectExec = extern struct {
     new_size: usize,
 };
 
-pub const ZigEscFlowExec = extern struct {
+pub const ZigInputEscFlowPlan = extern struct {
     kind: c_int,
     handle_csi: c_int,
+    csi_write: c_int,
+    csi_byte: u8,
     new_csi_len: usize,
 };
 
-pub const ZigEscFlowAfter = extern struct {
-    clear_esc: c_int,
+pub const ZigInputControlPlan = extern struct {
+    action: c_int,
     new_esc: c_int,
-    stop: c_int,
+    finish_esc: c_int,
+    charset_set: c_int,
+    charset: c_int,
+    tab_set: c_int,
+    tab_x: c_int,
+};
+
+pub const ZigInputEscPlan = extern struct {
+    action: c_int,
+    ret: c_int,
+    new_esc: c_int,
+    charset_set: c_int,
+    charset: c_int,
+    icharset_set: c_int,
+    icharset: c_int,
+    tab_set: c_int,
+    tab_x: c_int,
 };
 
 pub const ZigEscPlan = control_esc.ZigEscPlan;
-
-pub const ZigEscExec = control_esc.ZigEscExec;
-
-pub const ZigControlExec = control_esc.ZigControlExec;
 
 const cs_graphic0 = 0;
 const attr_wide: c_ushort = 1 << 9;
@@ -260,28 +274,23 @@ const EscFlow = struct {
     csi_len: usize,
     csi_cap: usize,
 
-    fn exec(self: EscFlow) ZigEscFlowExec {
+    fn exec(self: EscFlow) ZigInputEscFlowPlan {
         if ((self.esc & esc_csi) != 0) {
-            self.csi_buf[self.csi_len] = @truncate(self.rune);
             const new_len = self.csi_len + 1;
             const handle_csi: c_int = if ((0x40 <= self.rune and self.rune <= 0x7E) or self.csi_len >= self.csi_cap - 1) 1 else 0;
-            return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .new_csi_len = new_len };
+            return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .csi_write = 1, .csi_byte = @truncate(self.rune), .new_csi_len = new_len };
         }
-        if ((self.esc & esc_utf8) != 0) return .{ .kind = esc_flow_utf8, .handle_csi = 0, .new_csi_len = self.csi_len };
-        if ((self.esc & esc_altcharset) != 0) return .{ .kind = esc_flow_altcharset, .handle_csi = 0, .new_csi_len = self.csi_len };
-        if ((self.esc & esc_test) != 0) return .{ .kind = esc_flow_test, .handle_csi = 0, .new_csi_len = self.csi_len };
-        if ((self.esc & esc_start) != 0) return .{ .kind = esc_flow_esc, .handle_csi = 0, .new_csi_len = self.csi_len };
-        return .{ .kind = esc_flow_none, .handle_csi = 0, .new_csi_len = self.csi_len };
-    }
-
-    fn after(kind: c_int, action_done: bool) ZigEscFlowAfter {
-        if ((kind == esc_flow_csi or kind == esc_flow_esc) and !action_done) {
-            return .{ .clear_esc = 0, .new_esc = 0, .stop = 1 };
-        }
-
-        return .{ .clear_esc = 1, .new_esc = 0, .stop = 1 };
+        if ((self.esc & esc_utf8) != 0) return emptyEscFlow(esc_flow_utf8, self.csi_len);
+        if ((self.esc & esc_altcharset) != 0) return emptyEscFlow(esc_flow_altcharset, self.csi_len);
+        if ((self.esc & esc_test) != 0) return emptyEscFlow(esc_flow_test, self.csi_len);
+        if ((self.esc & esc_start) != 0) return emptyEscFlow(esc_flow_esc, self.csi_len);
+        return emptyEscFlow(esc_flow_none, self.csi_len);
     }
 };
+
+fn emptyEscFlow(kind: c_int, csi_len: usize) ZigInputEscFlowPlan {
+    return .{ .kind = kind, .handle_csi = 0, .csi_write = 0, .csi_byte = 0, .new_csi_len = csi_len };
+}
 
 export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int) void {
     (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).setChar(rune, attr, dirty, x);
@@ -303,33 +312,55 @@ export fn st_tcollectstr(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [
     return (StringCollector{ .rune = rune, .esc = esc, .buf = buf, .len = len, .chunk = chunk, .chunk_len = chunk_len, .size = size }).exec();
 }
 
-export fn st_tescflow(esc: c_int, rune: u32, csi_buf: [*]u8, csi_len: usize, csi_cap: usize) ZigEscFlowExec {
-    return (EscFlow{ .esc = esc, .rune = rune, .csi_buf = csi_buf, .csi_len = csi_len, .csi_cap = csi_cap }).exec();
-}
-
-export fn st_tcontrolafter(esc: c_int) c_int {
-    return if (esc == 0) 1 else 0;
-}
-
-export fn st_tcontrolfinish(esc: c_int, clear_str: c_int) c_int {
-    if (clear_str == 0) return esc;
-    return esc & ~(esc_str_end | esc_str);
-}
-
-export fn st_tescflowafter(kind: c_int, action_done: c_int) ZigEscFlowAfter {
-    return EscFlow.after(kind, action_done != 0);
+export fn st_inputescflowplan(esc: c_int, rune: u32, csi_len: usize, csi_cap: usize) ZigInputEscFlowPlan {
+    return (EscFlow{ .esc = esc, .rune = rune, .csi_buf = undefined, .csi_len = csi_len, .csi_cap = csi_cap }).exec();
 }
 
 fn planEsc(ascii: u8) ZigEscPlan {
     return (control_esc.EscSequence{ .ascii = ascii }).plan();
 }
 
-export fn st_tescexec(ascii: u8, esc: *c_int, charset: *c_int, icharset: *c_int, tabs: [*]c_int, x: c_int) ZigEscExec {
-    return (control_esc.EscSequence{ .ascii = ascii }).exec(esc, charset, icharset, tabs, x);
+export fn st_inputescplan(ascii: u8, esc: c_int, charset: c_int, icharset: c_int, x: c_int) ZigInputEscPlan {
+    const raw = (control_esc.EscSequence{ .ascii = ascii }).plan();
+    var result = ZigInputEscPlan{ .action = control_esc.EscSequence.action(raw.kind), .ret = raw.ret, .new_esc = esc, .charset_set = 0, .charset = charset, .icharset_set = 0, .icharset = icharset, .tab_set = 0, .tab_x = x };
+    switch (raw.kind) {
+        esc_set_csi => result.new_esc = esc | esc_csi,
+        control_esc.esc_set_test => result.new_esc = esc | esc_test,
+        control_esc.esc_set_utf8 => result.new_esc = esc | esc_utf8,
+        control_esc.esc_lock_shift => {
+            result.charset_set = 1;
+            result.charset = raw.value;
+        },
+        esc_set_altcharset => {
+            result.icharset_set = 1;
+            result.icharset = raw.value;
+            result.new_esc = esc | esc_altcharset;
+        },
+        control_esc.esc_hts => result.tab_set = 1,
+        else => {},
+    }
+    return result;
 }
 
-export fn st_tcontrolexec(ascii: u8, esc: *c_int, charset: *c_int, tabs: [*]c_int, x: c_int) ZigControlExec {
-    return (control_esc.ControlSequence{ .ascii = ascii }).exec(esc, charset, tabs, x);
+export fn st_inputcontrolplan(ascii: u8, esc: c_int, charset: c_int, x: c_int) ZigInputControlPlan {
+    const raw = (control_esc.ControlSequence{ .ascii = ascii }).plan();
+    var result = ZigInputControlPlan{ .action = control_esc.ControlSequence.action(raw.kind), .new_esc = esc, .finish_esc = esc, .charset_set = 0, .charset = charset, .tab_set = 0, .tab_x = x };
+    switch (raw.kind) {
+        control_esc.ctl_escape => {
+            result.new_esc = (esc & ~(esc_csi | esc_altcharset | esc_test)) | esc_start;
+            result.finish_esc = result.new_esc;
+        },
+        control_esc.ctl_lock_shift => {
+            result.charset_set = 1;
+            result.charset = raw.value;
+        },
+        control_esc.ctl_set_tab_stop => result.tab_set = 1,
+        else => {},
+    }
+    if (control_esc.ControlSequence.clearsString(raw.kind)) {
+        result.finish_esc = result.new_esc & ~(esc_str_end | esc_str);
+    }
+    return result;
 }
 
 fn controlAction(kind: c_int) c_int {
@@ -546,44 +577,30 @@ test "tcollectstr appends chunk after planning" {
 }
 
 test "tescflow appends csi byte and finishes on final byte" {
-    var buf = [_]u8{ 0, 0, 0, 0 };
-
-    const exec = st_tescflow(esc_start | esc_csi, 'm', &buf, 0, buf.len);
+    const exec = st_inputescflowplan(esc_start | esc_csi, 'm', 0, 4);
 
     try std.testing.expectEqual(@as(c_int, esc_flow_csi), exec.kind);
     try std.testing.expectEqual(@as(c_int, 1), exec.handle_csi);
+    try std.testing.expectEqual(@as(c_int, 1), exec.csi_write);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
-    try std.testing.expectEqual(@as(u8, 'm'), buf[0]);
+    try std.testing.expectEqual(@as(u8, 'm'), exec.csi_byte);
 }
 
 test "tescflow keeps collecting non final csi byte" {
-    var buf = [_]u8{ 0, 0, 0, 0 };
-
-    const exec = st_tescflow(esc_start | esc_csi, '3', &buf, 0, buf.len);
+    const exec = st_inputescflowplan(esc_start | esc_csi, '3', 0, 4);
 
     try std.testing.expectEqual(@as(c_int, esc_flow_csi), exec.kind);
     try std.testing.expectEqual(@as(c_int, 0), exec.handle_csi);
+    try std.testing.expectEqual(@as(c_int, 1), exec.csi_write);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
-    try std.testing.expectEqual(@as(u8, '3'), buf[0]);
+    try std.testing.expectEqual(@as(u8, '3'), exec.csi_byte);
 }
 
 test "tescflow routes utf8 state" {
-    var buf = [_]u8{ 0, 0 };
-
-    const exec = st_tescflow(esc_start | esc_utf8, 'G', &buf, 0, buf.len);
+    const exec = st_inputescflowplan(esc_start | esc_utf8, 'G', 0, 2);
 
     try std.testing.expectEqual(@as(c_int, esc_flow_utf8), exec.kind);
     try std.testing.expectEqual(@as(usize, 0), exec.new_csi_len);
-}
-
-test "tcontrolafter clears lastc only when esc is empty" {
-    try std.testing.expectEqual(@as(c_int, 1), st_tcontrolafter(0));
-    try std.testing.expectEqual(@as(c_int, 0), st_tcontrolafter(esc_start));
-}
-
-test "tcontrolfinish clears string state only when requested" {
-    try std.testing.expectEqual(@as(c_int, esc_start), st_tcontrolfinish(esc_start | esc_str | esc_str_end, 1));
-    try std.testing.expectEqual(@as(c_int, esc_start | esc_str), st_tcontrolfinish(esc_start | esc_str, 0));
 }
 
 test "clear glyph resets cell using current colors" {
@@ -596,27 +613,6 @@ test "clear glyph resets cell using current colors" {
     try std.testing.expectEqual(@as(c_ushort, 0), line[0].mode);
     try std.testing.expectEqual(@as(u32, 7), line[0].fg);
     try std.testing.expectEqual(@as(u32, 8), line[0].bg);
-}
-
-test "tescflowafter preserves esc when eschandle wants more" {
-    const after = st_tescflowafter(esc_flow_esc, 0);
-    try std.testing.expectEqual(@as(c_int, 0), after.clear_esc);
-    try std.testing.expectEqual(@as(c_int, 0), after.new_esc);
-    try std.testing.expectEqual(@as(c_int, 1), after.stop);
-}
-
-test "tescflowafter preserves esc while csi is collecting" {
-    const after = st_tescflowafter(esc_flow_csi, 0);
-    try std.testing.expectEqual(@as(c_int, 0), after.clear_esc);
-    try std.testing.expectEqual(@as(c_int, 0), after.new_esc);
-    try std.testing.expectEqual(@as(c_int, 1), after.stop);
-}
-
-test "tescflowafter clears esc after handled sequence" {
-    const after = st_tescflowafter(esc_flow_utf8, 1);
-    try std.testing.expectEqual(@as(c_int, 1), after.clear_esc);
-    try std.testing.expectEqual(@as(c_int, 0), after.new_esc);
-    try std.testing.expectEqual(@as(c_int, 1), after.stop);
 }
 
 test "esc planner enters csi mode" {
@@ -639,73 +635,49 @@ test "esc planner selects alt charset slot" {
 }
 
 test "tescexec sets csi bit" {
-    var esc: c_int = esc_start;
-    var charset: c_int = 0;
-    var icharset: c_int = 0;
-    var tabs = [_]c_int{0};
+    const exec = st_inputescplan('[', esc_start, 0, 0, 0);
 
-    const exec = st_tescexec('[', &esc, &charset, &icharset, &tabs, 0);
-
-    try std.testing.expectEqual(@as(c_int, esc_start | esc_csi), esc);
+    try std.testing.expectEqual(@as(c_int, esc_start | esc_csi), exec.new_esc);
     try std.testing.expectEqual(@as(c_int, esc_action_none), exec.action);
     try std.testing.expectEqual(@as(c_int, 0), exec.ret);
 }
 
 test "tescexec selects alt charset and returns no action" {
-    var esc: c_int = esc_start;
-    var charset: c_int = 0;
-    var icharset: c_int = 0;
-    var tabs = [_]c_int{0};
+    const exec = st_inputescplan('+', esc_start, 0, 0, 0);
 
-    const exec = st_tescexec('+', &esc, &charset, &icharset, &tabs, 0);
-
-    try std.testing.expectEqual(@as(c_int, 3), icharset);
-    try std.testing.expectEqual(@as(c_int, esc_start | esc_altcharset), esc);
+    try std.testing.expectEqual(@as(c_int, 1), exec.icharset_set);
+    try std.testing.expectEqual(@as(c_int, 3), exec.icharset);
+    try std.testing.expectEqual(@as(c_int, esc_start | esc_altcharset), exec.new_esc);
     try std.testing.expectEqual(@as(c_int, esc_action_none), exec.action);
 }
 
 test "tescexec maps index to action" {
-    var esc: c_int = esc_start;
-    var charset: c_int = 0;
-    var icharset: c_int = 0;
-    var tabs = [_]c_int{0};
-
-    const exec = st_tescexec('D', &esc, &charset, &icharset, &tabs, 0);
+    const exec = st_inputescplan('D', esc_start, 0, 0, 0);
 
     try std.testing.expectEqual(@as(c_int, esc_action_ind), exec.action);
     try std.testing.expectEqual(@as(c_int, 1), exec.ret);
 }
 
 test "controlexec escape updates esc bits" {
-    var esc: c_int = esc_csi | esc_altcharset | esc_test;
-    var charset: c_int = 0;
-    var tabs = [_]c_int{0};
+    const exec = st_inputcontrolplan('\x1b', esc_csi | esc_altcharset | esc_test, 0, 0);
 
-    const exec = st_tcontrolexec('\x1b', &esc, &charset, &tabs, 0);
-
-    try std.testing.expectEqual(@as(c_int, esc_start), esc);
+    try std.testing.expectEqual(@as(c_int, esc_start), exec.new_esc);
     try std.testing.expectEqual(@as(c_int, ctl_action_escape), exec.action);
-    try std.testing.expectEqual(@as(c_int, 0), exec.clear_str);
+    try std.testing.expectEqual(@as(c_int, esc_start), exec.finish_esc);
 }
 
 test "controlexec lock shift updates charset" {
-    var esc: c_int = 0;
-    var charset: c_int = 0;
-    var tabs = [_]c_int{0};
+    const exec = st_inputcontrolplan('\x0e', 0, 0, 0);
 
-    const exec = st_tcontrolexec('\x0e', &esc, &charset, &tabs, 0);
-
-    try std.testing.expectEqual(@as(c_int, 1), charset);
+    try std.testing.expectEqual(@as(c_int, 1), exec.charset_set);
+    try std.testing.expectEqual(@as(c_int, 1), exec.charset);
     try std.testing.expectEqual(@as(c_int, ctl_action_none), exec.action);
 }
 
 test "controlexec sets tab stop and clears string" {
-    var esc: c_int = 0;
-    var charset: c_int = 0;
-    var tabs = [_]c_int{ 0, 0 };
+    const exec = st_inputcontrolplan(0x88, esc_start | esc_str | esc_str_end, 0, 1);
 
-    const exec = st_tcontrolexec(0x88, &esc, &charset, &tabs, 1);
-
-    try std.testing.expectEqual(@as(c_int, 1), tabs[1]);
-    try std.testing.expectEqual(@as(c_int, 1), exec.clear_str);
+    try std.testing.expectEqual(@as(c_int, 1), exec.tab_set);
+    try std.testing.expectEqual(@as(c_int, 1), exec.tab_x);
+    try std.testing.expectEqual(@as(c_int, esc_start), exec.finish_esc);
 }

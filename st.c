@@ -753,30 +753,26 @@ searchscan(void)
 void
 searchscanline(Line line, int scr, int y)
 {
-	int x, linelen, lastx, matchlen;
+	int x;
 	SearchMatch *match;
-	ZigSearchAppendPlan append;
+	ZigSearchLinePlan plan;
 
-	linelen = st_tlinelen((const ZigGlyph *)line, term.col);
-	lastx = st_searchscanlineend(linelen, search.qlen);
-	for (x = 0; x <= lastx; ++x) {
-		matchlen = st_searchlinematch((const ZigGlyph *)line, x,
-			linelen, search.query, search.qlen, term.col);
-		append = st_searchappendmatch(matchlen, search.nmatches,
-			search.cap, x, y, scr);
-		if (append.kind == ST_ZIG_SEARCH_APPEND_SKIP)
-			continue;
+	for (x = 0;; x = plan.next_x) {
+		plan = st_searchlineplan((const ZigGlyph *)line, x, term.col,
+			search.query, search.qlen, search.nmatches, search.cap, y, scr);
+		if (plan.kind == ST_ZIG_SEARCH_APPEND_SKIP)
+			break;
 
-		if (append.kind == ST_ZIG_SEARCH_APPEND_GROW) {
-			search.cap = append.cap;
+		if (plan.kind == ST_ZIG_SEARCH_APPEND_GROW) {
+			search.cap = plan.cap;
 			search.matches = xrealloc(search.matches,
 				search.cap * sizeof(*search.matches));
 		}
 		match = &search.matches[search.nmatches++];
-		match->x = append.match.x;
-		match->y = append.match.y;
-		match->scr = append.match.scr;
-		match->len = append.match.len;
+		match->x = plan.match.x;
+		match->y = plan.match.y;
+		match->scr = plan.match.scr;
+		match->len = plan.match.len;
 	}
 }
 
@@ -888,30 +884,28 @@ char *
 getsel(void)
 {
 	char *str, *ptr;
-	int y, bufsize, lastx, linelen;
+	int y;
 	Glyph *gp, *last;
-	ZigGetSelLinePlan line_plan;
+	ZigGetSelExecPlan plan;
 
 	if (sel.ob.x == -1)
 		return NULL;
 
-	bufsize = st_getselbufsize(term.col, sel.nb.y, sel.ne.y, UTF_SIZ);
-	ptr = str = xmalloc(bufsize);
+	plan = st_getselexecplan(sel.type, sel.nb.x, sel.nb.y, sel.ne.x,
+		sel.ne.y, sel.nb.y, term.col, (const ZigGlyph *)TLINE(sel.nb.y), UTF_SIZ);
+	ptr = str = xmalloc(plan.bufsize);
 
 	/* append every set & selected glyph to the selection */
 	for (y = sel.nb.y; y <= sel.ne.y; y++) {
-		if ((linelen = tlinelen(y)) == 0) {
+		plan = st_getselexecplan(sel.type, sel.nb.x, sel.nb.y, sel.ne.x,
+			sel.ne.y, y, term.col, (const ZigGlyph *)TLINE(y), UTF_SIZ);
+		if (plan.empty) {
 			*ptr++ = '\n';
 			continue;
 		}
 
-		line_plan = st_getsellineplan(sel.type, sel.nb.x, sel.nb.y,
-			sel.ne.x, sel.ne.y, y, term.col);
-		gp = &TLINE(y)[line_plan.start_x];
-		lastx = line_plan.last_x;
-		last = &TLINE(y)[st_getsellastx(lastx, linelen)];
-		while (last >= gp && last->u == ' ')
-			--last;
+		gp = &TLINE(y)[plan.start_x];
+		last = &TLINE(y)[plan.last_index];
 
 		for ( ; gp <= last; ++gp) {
 			if (gp->mode & ATTR_WDUMMY)
@@ -929,8 +923,7 @@ getsel(void)
 		 * st.
 		 * FIXME: Fix the computer world.
 		 */
-		if (st_getselnewline(y, sel.ne.y, lastx, linelen,
-			last->mode, sel.type))
+		if (plan.newline)
 			*ptr++ = '\n';
 	}
 	*ptr = 0;
@@ -2259,10 +2252,15 @@ tstrsequence(uchar c)
 void
 tcontrolcode(uchar ascii)
 {
-	ZigControlExec exec = st_tcontrolexec(ascii, &term.esc,
-		&term.charset, term.tabs, term.c.x);
+	ZigInputControlPlan plan = st_inputcontrolplan(ascii, term.esc,
+		term.charset, term.c.x);
 
-	switch (exec.action) {
+	if (plan.charset_set)
+		term.charset = plan.charset;
+	if (plan.tab_set)
+		term.tabs[plan.tab_x] = 1;
+
+	switch (plan.action) {
 	case ST_ZIG_CTL_ACTION_TAB:
 		tputtab(1);
 		return;
@@ -2283,6 +2281,7 @@ tcontrolcode(uchar ascii)
 		}
 		break;
 	case ST_ZIG_CTL_ACTION_ESCAPE:
+		term.esc = plan.new_esc;
 		csireset();
 		return;
 	case ST_ZIG_CTL_ACTION_SUBSTITUTE:
@@ -2302,7 +2301,7 @@ tcontrolcode(uchar ascii)
 		return;
 	}
 	/* only CAN, SUB, \a and C1 chars interrupt a sequence */
-	term.esc = st_tcontrolfinish(term.esc, exec.clear_str);
+	term.esc = plan.finish_esc;
 }
 
 /*
@@ -2312,9 +2311,17 @@ tcontrolcode(uchar ascii)
 int
 eschandle(uchar ascii)
 {
-	ZigEscExec exec = st_tescexec(ascii, &term.esc, &term.charset,
-		&term.icharset, term.tabs, term.c.x);
+	ZigInputEscPlan exec = st_inputescplan(ascii, term.esc, term.charset,
+		term.icharset, term.c.x);
 	ZigNewlinePlan plan;
+
+	term.esc = exec.new_esc;
+	if (exec.charset_set)
+		term.charset = exec.charset;
+	if (exec.icharset_set)
+		term.icharset = exec.icharset;
+	if (exec.tab_set)
+		term.tabs[exec.tab_x] = 1;
 
 	switch (exec.action) {
 	case ST_ZIG_ESC_ACTION_START_STR:
@@ -2372,8 +2379,7 @@ tputc(Rune u)
 	ZigPutcWriteResult write;
 	ZigPutcPreparePlan prepare;
 	ZigStrCollectExec collect_exec;
-	ZigEscFlowExec escflow;
-	ZigEscFlowAfter escafter;
+	ZigInputEscFlowPlan escflow;
 	int control;
 	int esc_action_done;
 	int width, len;
@@ -2442,15 +2448,17 @@ check_control_code:
 		/*
 		 * control codes are not shown ever
 		 */
-		if (st_tcontrolafter(term.esc))
+		if (term.esc == 0)
 			term.lastc = 0;
 		return;
 	} else if (term.esc & ESC_START) {
-		escflow = st_tescflow(term.esc, u, (unsigned char *)csiescseq.buf,
-			csiescseq.len, sizeof(csiescseq.buf));
+		escflow = st_inputescflowplan(term.esc, u, csiescseq.len,
+			sizeof(csiescseq.buf));
 		esc_action_done = 1;
 		switch (escflow.kind) {
 		case ST_ZIG_ESC_FLOW_CSI:
+			if (escflow.csi_write)
+				csiescseq.buf[csiescseq.len] = escflow.csi_byte;
 			csiescseq.len = escflow.new_csi_len;
 			esc_action_done = escflow.handle_csi;
 			if (escflow.handle_csi) {
@@ -2472,11 +2480,9 @@ check_control_code:
 			/* sequence already finished */
 			break;
 		}
-		escafter = st_tescflowafter(escflow.kind, esc_action_done);
-		if (escafter.stop && !escafter.clear_esc)
+		if ((escflow.kind == ST_ZIG_ESC_FLOW_CSI || escflow.kind == ST_ZIG_ESC_FLOW_ESC) && !esc_action_done)
 			return;
-		if (escafter.clear_esc)
-			term.esc = escafter.new_esc;
+		term.esc = 0;
 		/*
 		 * All characters which form part of a sequence are not
 		 * printed

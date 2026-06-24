@@ -1,6 +1,6 @@
 //! st_control_esc.zig 承载 ESC/control 字节到执行计划的纯决策逻辑。
-//! [输入]: C 侧传入的 ASCII/control 字节，以及显式传入的 ESC、charset、tab 状态指针。
-//! [输出]: ESC/control plan 和 executor 返回值。
+//! [输入]: ASCII/control 字节。
+//! [输出]: ESC/control 纯 plan 和 action 分类。
 //! [定位]: `st_setchar.zig` 的领域子模块，避免把 ESC/control 决策长期放在 C ABI adapter 文件中。
 //! [同步]: 修改本文件时需同步 `st_setchar.zig` 和 `docs/zig-architecture.md`。
 
@@ -80,19 +80,9 @@ pub const ZigEscPlan = extern struct {
     ret: c_int,
 };
 
-pub const ZigEscExec = extern struct {
-    action: c_int,
-    ret: c_int,
-};
-
-const ZigControlPlan = extern struct {
+pub const ZigControlPlan = extern struct {
     kind: c_int,
     value: c_int,
-};
-
-pub const ZigControlExec = extern struct {
-    action: c_int,
-    clear_str: c_int,
 };
 
 pub const EscSequence = struct {
@@ -118,28 +108,6 @@ pub const EscSequence = struct {
             '8' => .{ .kind = esc_cursor_load, .value = 0, .ret = 1 },
             '\\' => .{ .kind = esc_st, .value = 0, .ret = 1 },
             else => .{ .kind = esc_unknown, .value = 0, .ret = 1 },
-        };
-    }
-
-    pub fn exec(self: EscSequence, esc: *c_int, charset: *c_int, icharset: *c_int, tabs: [*]c_int, x: c_int) ZigEscExec {
-        const result = self.plan();
-
-        switch (result.kind) {
-            esc_set_csi => esc.* |= esc_csi,
-            esc_set_test => esc.* |= esc_test,
-            esc_set_utf8 => esc.* |= esc_utf8,
-            esc_lock_shift => charset.* = result.value,
-            esc_set_altcharset => {
-                icharset.* = result.value;
-                esc.* |= esc_altcharset;
-            },
-            esc_hts => tabs[@intCast(x)] = 1,
-            else => {},
-        }
-
-        return .{
-            .action = action(result.kind),
-            .ret = result.ret,
         };
     }
 
@@ -189,25 +157,6 @@ pub const ControlSequence = struct {
         };
     }
 
-    pub fn exec(self: ControlSequence, esc: *c_int, charset: *c_int, tabs: [*]c_int, x: c_int) ZigControlExec {
-        const result = self.plan();
-
-        switch (result.kind) {
-            ctl_escape => {
-                esc.* &= ~(esc_csi | esc_altcharset | esc_test);
-                esc.* |= esc_start;
-            },
-            ctl_lock_shift => charset.* = result.value,
-            ctl_set_tab_stop => tabs[@intCast(x)] = 1,
-            else => {},
-        }
-
-        return .{
-            .action = action(result.kind),
-            .clear_str = if (ControlSequence.clearsString(result.kind)) 1 else 0,
-        };
-    }
-
     pub fn action(kind: c_int) c_int {
         return switch (kind) {
             ctl_tab => ctl_action_tab,
@@ -240,14 +189,11 @@ test "esc planner enters csi mode" {
     try std.testing.expectEqual(@as(c_int, 0), plan.ret);
 }
 
-test "control executor sets tab stop and clears string" {
+test "control planner marks tab stop and clear string" {
     const std = @import("std");
-    var esc: c_int = 0;
-    var charset: c_int = 0;
-    var tabs = [_]c_int{ 0, 0 };
 
-    const exec = (ControlSequence{ .ascii = 0x88 }).exec(&esc, &charset, &tabs, 1);
+    const plan = (ControlSequence{ .ascii = 0x88 }).plan();
 
-    try std.testing.expectEqual(@as(c_int, 1), tabs[1]);
-    try std.testing.expectEqual(@as(c_int, 1), exec.clear_str);
+    try std.testing.expectEqual(@as(c_int, ctl_set_tab_stop), plan.kind);
+    try std.testing.expect(ControlSequence.clearsString(plan.kind));
 }

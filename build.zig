@@ -305,8 +305,14 @@ pub fn build(b: *std.Build) void {
         "-lc",
         "diff -u <(rg -o '^export fn st_[A-Za-z0-9_]+' --glob '*.zig' | sed 's/.*export fn //' | sort) <(rg -o 'st_[A-Za-z0-9_]+\\(' st_zig.h | sed 's/(//' | sort)",
     });
+    const abi_guard = b.addSystemCommand(&.{
+        bash,
+        "-lc",
+        "forbidden=$(rg -n 'st_plan[A-Za-z0-9_]*' st_zig.h st.c *.zig | rg -v 'st_plan(mode|strhandle|selnormalize|selnormalizecols)' || true); test -z \"$forbidden\"; diff -u <(rg --no-filename -o '^export fn st_[A-Za-z0-9_]+' --glob '*.zig' | sed 's/.*export fn //' | sort) <(rg --no-filename -o 'st_[A-Za-z0-9_]+\\(' st.c x.c hb.c boxdraw.c st.h win.h config.h hb.h arg.h boxdraw_data.h | sed 's/(//' | sort -u)",
+    });
     const abi_check_step = b.step("abi-check", "Verify Zig export symbols match st_zig.h declarations");
     abi_check_step.dependOn(&abi_check.step);
+    abi_check_step.dependOn(&abi_guard.step);
 
     addZigTests(b, &.{
         .{ .name = "st_base64_test", .module = base64_module },

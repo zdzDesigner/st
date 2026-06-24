@@ -79,9 +79,12 @@ const ZigSelSnapLineStep = extern struct {
     y: c_int,
 };
 
-const ZigGetSelLinePlan = extern struct {
+const ZigGetSelExecPlan = extern struct {
+    empty: c_int,
     start_x: c_int,
-    last_x: c_int,
+    last_index: c_int,
+    newline: c_int,
+    bufsize: c_int,
 };
 
 const ZigSearchStepPlan = extern struct {
@@ -115,9 +118,10 @@ const ZigSearchCursorEditPlan = extern struct {
 
 const ZigSearchMatch = search.SearchMatch;
 
-const ZigSearchAppendPlan = extern struct {
+const ZigSearchLinePlan = extern struct {
     kind: c_int,
     cap: c_int,
+    next_x: c_int,
     match: ZigSearchMatch,
 };
 
@@ -316,21 +320,21 @@ export fn st_searchcurrentmatch(matches: ?[*]const ZigSearchMatch, nmatches: c_i
     return boolInt(search.matchListCurrent(items, active != 0, current, term_scr, x, y));
 }
 
-export fn st_searchlinematch(line: [*]const ZigGlyph, x: c_int, linelen: c_int, query: [*]const u32, qlen: c_int, col: c_int) c_int {
-    return search.lineMatch(ZigGlyph, line[0..@intCast(col)], x, linelen, query[0..@intCast(qlen)], col);
-}
-
-export fn st_searchscanlineend(linelen: c_int, qlen: c_int) c_int {
-    return search.scanLineLastStart(linelen, qlen);
-}
-
-export fn st_searchappendmatch(match_len: c_int, nmatches: c_int, cap: c_int, x: c_int, y: c_int, scr: c_int) ZigSearchAppendPlan {
-    const plan = search.appendMatch(match_len, nmatches, cap, x, y, scr);
-    return switch (plan) {
-        .skip => .{ .kind = @intFromEnum(search.MatchAppendKind.skip), .cap = cap, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } },
-        .append => |match| .{ .kind = @intFromEnum(search.MatchAppendKind.append), .cap = cap, .match = match },
-        .grow_append => |grow| .{ .kind = @intFromEnum(search.MatchAppendKind.grow_append), .cap = grow.cap, .match = grow.match },
-    };
+export fn st_searchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int, query: [*]const u32, qlen: c_int, nmatches: c_int, cap: c_int, y: c_int, scr: c_int) ZigSearchLinePlan {
+    const glyphs = line[0..@intCast(col)];
+    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
+    const last_x = search.scanLineLastStart(linelen, qlen);
+    var x = start_x;
+    while (x <= last_x) : (x += 1) {
+        const match_len = search.lineMatch(ZigGlyph, glyphs, x, linelen, query[0..@intCast(qlen)], col);
+        const plan = search.appendMatch(match_len, nmatches, cap, x, y, scr);
+        switch (plan) {
+            .skip => {},
+            .append => |match| return .{ .kind = @intFromEnum(search.MatchAppendKind.append), .cap = cap, .next_x = x + 1, .match = match },
+            .grow_append => |grow| return .{ .kind = @intFromEnum(search.MatchAppendKind.grow_append), .cap = grow.cap, .next_x = x + 1, .match = grow.match },
+        }
+    }
+    return .{ .kind = @intFromEnum(search.MatchAppendKind.skip), .cap = cap, .next_x = x, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } };
 }
 
 export fn st_searchnextcurrent(oldcurrent: c_int, nmatches: c_int) c_int {
@@ -491,26 +495,32 @@ export fn st_searchsetplan(query_len: usize, qlen: c_int) ZigSearchSetPlan {
     };
 }
 
-export fn st_getsellineplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int) ZigGetSelLinePlan {
+export fn st_getselexecplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int, line: [*]const ZigGlyph, utf_siz: c_int) ZigGetSelExecPlan {
     const selection_type = selectionType(sel_type);
-    const plan = selection.getLinePlan(selection_type, .{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } }, y, col);
+    const bounds = selection.Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
+    const bufsize = selection.getBufferSize(col, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, utf_siz);
+    const glyphs = line[0..@intCast(col)];
+    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
+
+    if (linelen == 0) {
+        return .{ .empty = 1, .start_x = 0, .last_index = -1, .newline = 1, .bufsize = bufsize };
+    }
+
+    const line_plan = selection.getLinePlan(selection_type, bounds, y, col);
+    const start_x = line_plan.start_x;
+    var last_index = selection.getLastX(line_plan.last_x, linelen);
+    while (last_index >= start_x and glyphs[@intCast(last_index)].u == ' ') {
+        last_index -= 1;
+    }
+
+    const last_mode: c_ushort = if (last_index >= start_x) glyphs[@intCast(last_index)].mode else 0;
     return .{
-        .start_x = plan.start_x,
-        .last_x = plan.last_x,
+        .empty = if (last_index < start_x) 1 else 0,
+        .start_x = start_x,
+        .last_index = last_index,
+        .newline = boolInt(selection.needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, line_plan.last_x, linelen, last_mode, selection_type)),
+        .bufsize = bufsize,
     };
-}
-
-export fn st_getselbufsize(col: c_int, nb_y: c_int, ne_y: c_int, utf_siz: c_int) c_int {
-    return selection.getBufferSize(col, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, utf_siz);
-}
-
-export fn st_getsellastx(last_x: c_int, linelen: c_int) c_int {
-    return selection.getLastX(last_x, linelen);
-}
-
-export fn st_getselnewline(y: c_int, ne_y: c_int, last_x: c_int, linelen: c_int, last_mode: c_ushort, sel_type: c_int) c_int {
-    const selection_type = selectionType(sel_type);
-    return boolInt(selection.needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, last_x, linelen, last_mode, selection_type));
 }
 
 export fn st_planselnormalize(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
@@ -743,16 +753,21 @@ test "selection word snap step breaks on line end or delimiter" {
     try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(0, 3, 9, 2, 1, 1, 0, 6, 0, 0, 0, 'b', 'a').action);
 }
 
-test "search line match skips dummy cells" {
+test "search line plan skips dummy cells and returns next match" {
     const line = [_]ZigGlyph{
         .{ .u = '你', .mode = 0, .fg = 0, .bg = 0 },
         .{ .u = 0, .mode = attr_wdummy, .fg = 0, .bg = 0 },
         .{ .u = '好', .mode = 0, .fg = 0, .bg = 0 },
     };
     const query = [_]u32{ '你', '好' };
+    const plan = st_searchlineplan(&line, 0, line.len, &query, query.len, 0, 4, 3, 2);
+    const done = st_searchlineplan(&line, plan.next_x, line.len, &query, query.len, 1, 4, 3, 2);
 
-    try std.testing.expectEqual(@as(c_int, 3), st_searchlinematch(&line, 0, line.len, &query, query.len, line.len));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchlinematch(&line, 1, line.len, &query, query.len, line.len));
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.append)), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.match.x);
+    try std.testing.expectEqual(@as(c_int, 3), plan.match.len);
+    try std.testing.expectEqual(@as(c_int, 1), plan.next_x);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.skip)), done.kind);
 }
 
 test "search current valid checks active and bounds" {
@@ -774,20 +789,17 @@ test "search match list checks all and current matches" {
     try std.testing.expectEqual(@as(c_int, 0), st_searchmatchlist(null, 0, 1, -1, 0, 0, 0));
 }
 
-test "search scan line and append adapters expose actions" {
-    const skip = st_searchappendmatch(0, 0, 0, 2, 3, 4);
-    const append = st_searchappendmatch(2, 1, 4, 2, 3, 4);
-    const grow = st_searchappendmatch(2, 4, 4, 2, 3, 4);
+test "search line plan grows match cap when full" {
+    const line = [_]ZigGlyph{
+        .{ .u = '中', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '文', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const query = [_]u32{'中'};
+    const grow = st_searchlineplan(&line, 0, line.len, &query, query.len, 4, 4, 3, 2);
 
-    try std.testing.expectEqual(@as(c_int, 7), st_searchscanlineend(10, 3));
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.skip)), skip.kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.append)), append.kind);
-    try std.testing.expectEqual(@as(c_int, 2), append.match.x);
-    try std.testing.expectEqual(@as(c_int, 3), append.match.y);
-    try std.testing.expectEqual(@as(c_int, 4), append.match.scr);
-    try std.testing.expectEqual(@as(c_int, 2), append.match.len);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(search.MatchAppendKind.grow_append)), grow.kind);
     try std.testing.expectEqual(@as(c_int, 8), grow.cap);
+    try std.testing.expectEqual(@as(c_int, 0), grow.match.x);
 }
 
 test "search next current preserves valid old current" {
@@ -947,30 +959,69 @@ test "search prompt plan allocates missing input buffer" {
     try std.testing.expectEqual(@as(usize, 128), existing.inputcap);
 }
 
-test "get selection line plan handles regular multiline" {
-    const first = st_getsellineplan(sel_regular, 3, 2, 5, 4, 2, 10);
-    const middle = st_getsellineplan(sel_regular, 3, 2, 5, 4, 3, 10);
+test "get selection exec plan handles regular multiline" {
+    const line = [_]ZigGlyph{
+        .{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '丙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const first = st_getselexecplan(sel_regular, 3, 2, 5, 4, 2, line.len, &line, 4);
+    const middle = st_getselexecplan(sel_regular, 3, 2, 5, 4, 3, line.len, &line, 4);
 
     try std.testing.expectEqual(@as(c_int, 3), first.start_x);
-    try std.testing.expectEqual(@as(c_int, 9), middle.last_x);
+    try std.testing.expectEqual(@as(c_int, 4), first.last_index);
+    try std.testing.expectEqual(@as(c_int, 1), first.newline);
+    try std.testing.expectEqual(@as(c_int, 0), middle.start_x);
+    try std.testing.expectEqual(@as(c_int, 4), middle.last_index);
 }
 
-test "get selection line plan keeps rectangular bounds" {
-    const plan = st_getsellineplan(sel_rectangular, 3, 2, 5, 4, 3, 10);
+test "get selection exec plan keeps rectangular bounds" {
+    const line = [_]ZigGlyph{
+        .{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '丙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '丁', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '戊', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '己', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const plan = st_getselexecplan(sel_rectangular, 3, 2, 5, 4, 3, line.len, &line, 4);
 
     try std.testing.expectEqual(@as(c_int, 3), plan.start_x);
-    try std.testing.expectEqual(@as(c_int, 5), plan.last_x);
+    try std.testing.expectEqual(@as(c_int, 5), plan.last_index);
 }
 
-test "get selection buffer and last column plans" {
-    try std.testing.expectEqual(@as(c_int, 88), st_getselbufsize(10, 2, 3, 4));
-    try std.testing.expectEqual(@as(c_int, 4), st_getsellastx(9, 5));
-}
+test "get selection exec plan reports buffer size empty line and wrap newline" {
+    const empty = [_]ZigGlyph{
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const wrapped = [_]ZigGlyph{
+        .{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '乙', .mode = attr_wrap, .fg = 0, .bg = 0 },
+    };
+    const empty_plan = st_getselexecplan(sel_regular, 0, 2, 0, 3, 2, empty.len, &empty, 4);
+    const wrapped_regular = st_getselexecplan(sel_regular, 0, 0, 1, 1, 0, wrapped.len, &wrapped, 4);
+    const wrapped_rect = st_getselexecplan(sel_rectangular, 0, 0, 1, 1, 0, wrapped.len, &wrapped, 4);
 
-test "get selection newline follows wrap and rectangular mode" {
-    try std.testing.expectEqual(@as(c_int, 1), st_getselnewline(0, 1, 3, 5, 0, sel_regular));
-    try std.testing.expectEqual(@as(c_int, 0), st_getselnewline(0, 1, 3, 5, attr_wrap, sel_regular));
-    try std.testing.expectEqual(@as(c_int, 1), st_getselnewline(0, 1, 3, 5, attr_wrap, sel_rectangular));
+    try std.testing.expectEqual(@as(c_int, 88), empty_plan.bufsize);
+    try std.testing.expectEqual(@as(c_int, 1), empty_plan.empty);
+    try std.testing.expectEqual(@as(c_int, 0), wrapped_regular.newline);
+    try std.testing.expectEqual(@as(c_int, 1), wrapped_rect.newline);
 }
 
 test "rectangular selection checks both axes" {

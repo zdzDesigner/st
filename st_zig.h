@@ -251,13 +251,25 @@ typedef struct {
 
 typedef struct {
 	int action;
-	int ret;
-} ZigEscExec;
+	int new_esc;
+	int finish_esc;
+	int charset_set;
+	int charset;
+	int tab_set;
+	int tab_x;
+} ZigInputControlPlan;
 
 typedef struct {
 	int action;
-	int clear_str;
-} ZigControlExec;
+	int ret;
+	int new_esc;
+	int charset_set;
+	int charset;
+	int icharset_set;
+	int icharset;
+	int tab_set;
+	int tab_x;
+} ZigInputEscPlan;
 
 enum {
 	ST_ZIG_CTL_ACTION_TAB = 1,
@@ -304,21 +316,18 @@ typedef struct {
 typedef struct {
 	int kind;
 	int handle_csi;
+	int csi_write;
+	unsigned char csi_byte;
 	size_t new_csi_len;
-} ZigEscFlowExec;
+} ZigInputEscFlowPlan;
 
 enum {
 	ST_ZIG_ESC_FLOW_CSI = 1,
 	ST_ZIG_ESC_FLOW_UTF8 = 2,
 	ST_ZIG_ESC_FLOW_ALTCHARSET = 3,
 	ST_ZIG_ESC_FLOW_TEST = 4,
+	ST_ZIG_ESC_FLOW_ESC = 5,
 };
-
-typedef struct {
-	int clear_esc;
-	int new_esc;
-	int stop;
-} ZigEscFlowAfter;
 
 typedef struct {
 	uint32_t u;
@@ -390,9 +399,12 @@ typedef struct {
 } ZigSelSnapLineStep;
 
 typedef struct {
+	int empty;
 	int start_x;
-	int last_x;
-} ZigGetSelLinePlan;
+	int last_index;
+	int newline;
+	int bufsize;
+} ZigGetSelExecPlan;
 
 typedef struct {
 	int run;
@@ -439,8 +451,9 @@ typedef struct {
 typedef struct {
 	int kind;
 	int cap;
+	int next_x;
 	ZigSearchMatch match;
-} ZigSearchAppendPlan;
+} ZigSearchLinePlan;
 
 enum {
 	ST_ZIG_SEARCH_APPEND_SKIP = 0,
@@ -672,8 +685,8 @@ ZigStrSequence st_tstrsequence(unsigned char, int);
 ZigStrHandlePlan st_planstrhandle(char, int, int);
 int st_strclipboardrun(int, int);
 int st_strhasarg(int, int);
-ZigEscExec st_tescexec(unsigned char, int *, int *, int *, int *, int);
-ZigControlExec st_tcontrolexec(unsigned char, int *, int *, int *, int);
+ZigInputControlPlan st_inputcontrolplan(unsigned char, int, int, int);
+ZigInputEscPlan st_inputescplan(unsigned char, int, int, int, int);
 ZigPutcDecode st_putcdecode(uint32_t, int);
 ZigWriteControlPlan st_twritecontrol(uint32_t, int);
 void st_tsetchar(uint32_t, const ZigGlyph *, ZigGlyph *, int *, int, int, int);
@@ -681,10 +694,7 @@ void st_tclearglyph(ZigGlyph *, int, const ZigGlyph *);
 ZigPutcWriteResult st_tputcwrite(uint32_t, int, const ZigGlyph *, ZigGlyph *, int *, int, int, int, int);
 ZigPutcPreparePlan st_tputcprepare(int, int, int, int, int, int);
 ZigStrCollectExec st_tcollectstr(uint32_t, int, unsigned char *, size_t, const unsigned char *, size_t, size_t);
-ZigEscFlowExec st_tescflow(int, uint32_t, unsigned char *, size_t, size_t);
-int st_tcontrolafter(int);
-int st_tcontrolfinish(int, int);
-ZigEscFlowAfter st_tescflowafter(int, int);
+ZigInputEscFlowPlan st_inputescflowplan(int, uint32_t, size_t, size_t);
 int st_tlinelen(const ZigGlyph *, int);
 int st_tputtab(int, int, int, const int *);
 int st_tattrset(const ZigGlyph * const *, int, int, int);
@@ -703,9 +713,7 @@ int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchcurrentvalid(int, int, int);
 int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
-int st_searchlinematch(const ZigGlyph *, int, int, const uint32_t *, int, int);
-int st_searchscanlineend(int, int);
-ZigSearchAppendPlan st_searchappendmatch(int, int, int, int, int, int);
+ZigSearchLinePlan st_searchlineplan(const ZigGlyph *, int, int, const uint32_t *, int, int, int, int, int);
 int st_searchnextcurrent(int, int);
 int st_searchjumpscr(int, int, int);
 int st_searchhistindex(int, int, int);
@@ -732,10 +740,7 @@ int st_searchinputactiveplan(int);
 ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
 ZigSearchSetPlan st_searchsetplan(size_t, int);
 ZigSearchPromptPlan st_searchpromptplan(int, size_t);
-ZigGetSelLinePlan st_getsellineplan(int, int, int, int, int, int, int);
-int st_getselbufsize(int, int, int, int);
-int st_getsellastx(int, int);
-int st_getselnewline(int, int, int, int, unsigned short, int);
+ZigGetSelExecPlan st_getselexecplan(int, int, int, int, int, int, int, const ZigGlyph *, int);
 size_t st_ttywritecount(size_t, size_t);
 size_t st_ttywritechunk(const unsigned char *, size_t);
 int st_tprinterwrite(int);
