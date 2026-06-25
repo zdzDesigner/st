@@ -1,0 +1,5 @@
+patches/
+*.o
+st
+zig-out
+.zig-cache
