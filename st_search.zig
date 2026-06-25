@@ -89,42 +89,69 @@ pub const PromptPlan = struct {
 pub const SearchSnapshot = struct {
     // 第一版状态快照只携带可直接复制的标量，buffer 本体仍由 C 持有。
     // 这样 Zig 可以一次拿到“当前 search 视图”，而不必通过很多小 helper 反复回读 C 状态。
+    // 原始 UTF-8 字节长度，主要用于决定 query buffer 分配规模。
     query_len: i32,
+    // 搜索是否处于输入/激活态，决定 prompt/input/set 分支如何走。
     inputmode: bool,
+    // 输入缓冲区已写入的字节数，不包含结尾 '\0'。
     inputlen: usize,
+    // 当前输入光标位置，始终指向 UTF-8 codepoint 边界。
     inputcursor: usize,
+    // 输入 buffer 的容量，C 侧会按 effect 决定是否 realloc。
     inputcap: usize,
+    // 当前已扫描到的匹配总数，用于 current/jump 的归一化。
     nmatches: i32,
+    // matches 数组当前容量，避免 Zig/C 两边各自重复推导。
     match_cap: i32,
+    // 当前高亮匹配索引；-1 表示没有稳定 current。
     current: i32,
+    // 当前 search 是否激活；inactive 时所有编辑/扫描动作都应短路。
     active: bool,
 };
 
 pub const SearchStateUpdate = struct {
     // Zig 负责算出下一状态，C 只按结果写回，不再分散修补字段。
     // 这里保留 query_len，是为了让 searchset 这类入口也能把 decoded qlen 一并写回。
+    // decoded 后的 Rune 数量；和 snapshot.query_len 的 UTF-8 字节长度不同。
     query_len: i32,
+    // 最终激活态，写回 search.active。
     active: bool,
+    // 归一化后的 current 索引，供跳转和后续扫描收尾使用。
     current: i32,
+    // 输入栏是否仍处在编辑态。
     inputmode: bool,
+    // 输入缓冲区最终字节长度，不含 '\0'。
     inputlen: usize,
+    // 输入光标最终位置。
     inputcursor: usize,
+    // 输入 buffer 最终容量。
     inputcap: usize,
+    // 最终匹配数量，允许 C 直接写回 search.nmatches。
     nmatches: i32,
+    // 最终匹配数组容量，供后续 append/realloc 继续沿用。
     match_cap: i32,
 };
 
 pub const SearchEffectPlan = struct {
     // effect 只描述需要触发的副作用，不直接持有任何平台资源。
     // 目标是把“做什么”与“怎么做”拆开：Zig 决定动作，C 执行平台相关细节。
+    // 首次 prompt 时需要分配输入 buffer。
     alloc_input: bool,
+    // 输入编辑导致 buffer 需要重分配。
     realloc_input: bool,
+    // 需要分配 query Rune buffer。
     alloc_query: bool,
+    // 需要重分配 matches 数组。
     realloc_matches: bool,
+    // C 需要释放旧 query buffer。
     clear_query: bool,
+    // C 需要清理旧 matches。
     clear_matches: bool,
+    // 需要重新扫描行/历史。
     refresh_search: bool,
+    // 需要 redraw 一次。
     redraw: bool,
+    // 需要把 current 跳到对应 scrollback 层。
     jump: bool,
 };
 
@@ -138,9 +165,13 @@ pub const SearchInputResult = struct {
     update: SearchStateUpdate,
     effect: SearchEffectPlan,
     // 输入插入仍由 C 执行 memmove/memcpy，所以保留最小位移信息。
+    // 新字符的插入位置。
     insert_at: usize,
+    // 旧内容整体后移的目标位置。
     move_dst: usize,
+    // 旧内容整体后移的源位置。
     move_src: usize,
+    // 后移字节长度，包含尾随 '\0'。
     move_len: usize,
 };
 
@@ -149,23 +180,35 @@ pub const SearchSetResult = struct {
     // decode 完毕后再根据真实 qlen 生成最终状态与 effect。
     update: SearchStateUpdate,
     effect: SearchEffectPlan,
+    // decode 前的 query Rune buffer 预估长度，至少为 1。
     alloc_len: usize,
 };
 
 pub const SetPlan = struct {
+    // query Rune buffer 的最终分配长度。
     alloc_len: usize,
+    // qlen > 0 时 search 才进入 active。
     active: bool,
+    // 重新设置 query 后 current 回退到 -1，等待 C 后续归一化。
     current: i32,
 };
 
 pub const Hit = struct {
+    // search 是否激活；inactive 时命中永远为 false。
     active: bool,
+    // 命中的匹配所在 scrollback 层。
     match_scr: i32,
+    // 当前终端所在 scrollback 层。
     term_scr: i32,
+    // 命中的行号。
     match_y: i32,
+    // 查询点所在行号。
     y: i32,
+    // 查询点所在列号。
     x: i32,
+    // 匹配起始列号。
     match_x: i32,
+    // 匹配长度，单位是 glyph，不是字节。
     match_len: i32,
 
     pub fn contains(self: Hit) bool {
@@ -174,9 +217,13 @@ pub const Hit = struct {
 };
 
 pub const SearchMatch = extern struct {
+    // 命中位置列号。
     x: i32,
+    // 命中位置行号。
     y: i32,
+    // 命中所在的 scrollback 层。
     scr: i32,
+    // 匹配长度。
     len: i32,
 
     pub fn hit(self: SearchMatch, active: bool, term_scr: i32, x: i32, y: i32) bool {
@@ -185,7 +232,9 @@ pub const SearchMatch = extern struct {
 };
 
 pub const ScanLine = struct {
+    // 当前扫描行的有效长度。
     linelen: i32,
+    // 查询 Rune 数量。
     query_len: i32,
 
     pub fn lastStart(self: ScanLine) i32 {
@@ -194,25 +243,36 @@ pub const ScanLine = struct {
 };
 
 pub const MatchAppendKind = enum(i32) {
+    // 当前 x 位置没有命中，继续扫描。
     skip = 0,
+    // 可以直接追加当前匹配。
     append = 1,
+    // 需要先扩容再追加。
     grow_append = 2,
 };
 
 pub const GrowAppend = struct {
+    // 扩容后的新容量。
     cap: i32,
+    // 需要追加的匹配本体。
     match: SearchMatch,
 };
 
 pub const MatchAppend = union(MatchAppendKind) {
+    // 当前 x 没有命中。
     skip,
+    // 直接追加一条匹配。
     append: SearchMatch,
+    // 需要扩容后再追加。
     grow_append: GrowAppend,
 };
 
 pub const MatchList = struct {
+    // 扫描得到的全部匹配列表。
     matches: []const SearchMatch,
+    // search 是否激活。
     active: bool,
+    // current 高亮索引。
     current: i32,
 
     pub fn contains(self: MatchList, term_scr: i32, x: i32, y: i32) bool {
@@ -232,8 +292,11 @@ pub const MatchList = struct {
 };
 
 pub const Matches = struct {
+    // search 是否激活。
     active: bool,
+    // 当前高亮索引。
     current: i32,
+    // 当前匹配总数。
     count: i32,
 
     pub fn currentValid(self: Matches) bool {
@@ -273,8 +336,11 @@ pub const Matches = struct {
 };
 
 pub const Jump = struct {
+    // current 是否有效；无效时不允许切换 scrollback 层。
     current_valid: bool,
+    // 终端当前所在 scrollback 层。
     term_scr: i32,
+    // 目标匹配所在 scrollback 层。
     match_scr: i32,
 
     pub fn scroll(self: Jump) i32 {
@@ -284,7 +350,9 @@ pub const Jump = struct {
 };
 
 pub const History = struct {
+    // 环形历史缓冲的头指针。
     head: i32,
+    // 环形历史缓冲大小。
     size: i32,
 
     pub fn index(self: History, scroll: i32) i32 {
@@ -302,7 +370,9 @@ pub const HistoryLine = struct {
 };
 
 pub const HistoryView = struct {
+    // 历史总容量。
     histsize: i32,
+    // 当前终端行数，用于区分历史区和可见区。
     rows: i32,
 
     pub fn line(self: HistoryView, y: i32) HistoryLine {
@@ -313,9 +383,13 @@ pub const HistoryView = struct {
 };
 
 pub const Input = struct {
+    // search 输入是否可编辑。
     active: bool,
+    // 当前输入长度，不含 '\0'。
     len: usize,
+    // 当前光标位置。
     cursor: usize,
+    // 当前 buffer 容量。
     cap: usize,
 
     pub fn nextCap(self: Input, add_len: usize) usize {
@@ -429,6 +503,7 @@ pub const Input = struct {
 };
 
 pub const InputBytes = struct {
+    // 原始输入字节视图，光标移动要按 UTF-8 codepoint 边界处理。
     bytes: []const u8,
 
     pub fn prevChar(self: InputBytes, cursor: usize) usize {
@@ -466,7 +541,9 @@ pub const InputBytes = struct {
 };
 
 pub const InputEditor = struct {
+    // 当前输入状态快照。
     input: Input,
+    // 原始字节视图，用于计算 UTF-8 边界。
     bytes: InputBytes,
 
     pub fn backspace(self: InputEditor) CursorEdit {
@@ -511,8 +588,11 @@ pub const InputEditor = struct {
 
 pub fn LineMatcher(comptime Glyph: type) type {
     return struct {
+        // 当前扫描行的 glyph 切片。
         line: []const Glyph,
+        // 这行的有效长度。
         linelen: i32,
+        // 可见列数。
         cols: i32,
 
         const Self = @This();
