@@ -304,10 +304,6 @@ export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_i
     return boolInt(selection.isSelected(.{ .x = x, .y = y }, active, sel_alt == alt_screen, selection_type, bounds));
 }
 
-export fn st_searchcurrentvalid(active: c_int, current: c_int, nmatches: c_int) c_int {
-    return boolInt(search.currentValid(active != 0, current, nmatches));
-}
-
 export fn st_searchmatchlist(matches: ?[*]const ZigSearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
     const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
     const items = if (count == 0) &[_]ZigSearchMatch{} else (matches orelse return 0)[0..count];
@@ -337,22 +333,6 @@ export fn st_searchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int,
     return .{ .kind = @intFromEnum(search.MatchAppendKind.skip), .cap = cap, .next_x = x, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } };
 }
 
-export fn st_searchnextcurrent(oldcurrent: c_int, nmatches: c_int) c_int {
-    return search.nextCurrent(oldcurrent, nmatches);
-}
-
-export fn st_searchjumpscr(current_valid: c_int, term_scr: c_int, match_scr: c_int) c_int {
-    return search.jumpScroll(current_valid != 0, term_scr, match_scr);
-}
-
-export fn st_searchhistindex(histi: c_int, scr: c_int, histsize: c_int) c_int {
-    return search.historyIndex(histi, scr, histsize);
-}
-
-export fn st_tlinehistindex(y: c_int, histi: c_int, scr: c_int, histsize: c_int) c_int {
-    return search.visibleHistoryIndex(y, histi, scr, histsize);
-}
-
 export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
     const plan = search.historyLine(y, histsize, rows);
     return .{ .hist = boolInt(plan.hist), .index = plan.index };
@@ -364,14 +344,6 @@ export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, directio
         .run = boolInt(plan.run),
         .current = plan.current,
     };
-}
-
-export fn st_searchprevchar(input: [*]const u8, cursor: usize) usize {
-    return search.prevChar(input[0..cursor], cursor);
-}
-
-export fn st_searchnextchar(input: [*]const u8, cursor: usize, inputlen: usize) usize {
-    return search.nextChar(input[0..inputlen], cursor);
 }
 
 fn searchCursorEditPlan(edit: search.CursorEdit) ZigSearchCursorEditPlan {
@@ -447,21 +419,9 @@ export fn st_searchinsertplan(inputmode: c_int, inputlen: usize, cursor: usize, 
     };
 }
 
-export fn st_searchscanplan(active: c_int, qlen: c_int) c_int {
-    return boolInt(search.scanPlan(active != 0, qlen));
-}
-
 export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
     const plan = search.deletePlan(start, end, inputlen);
     return .{ .run = boolInt(plan.run), .new_len = plan.new_len };
-}
-
-export fn st_searchbaractive(inputmode: c_int, active: c_int) c_int {
-    return boolInt(search.barActive(inputmode != 0, active != 0));
-}
-
-export fn st_searchinputactiveplan(inputmode: c_int) c_int {
-    return boolInt(search.inputActive(inputmode != 0));
 }
 
 export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPipePlan {
@@ -523,13 +483,13 @@ export fn st_getselexecplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_i
     };
 }
 
-export fn st_planselnormalize(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
+export fn st_selnormalizeplan(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
     const selection_type = selectionType(sel_type);
     const bounds = selection.normalize(selection_type, .{ .x = ob_x, .y = ob_y }, .{ .x = oe_x, .y = oe_y });
     return .{ .nb_x = bounds.start.x, .nb_y = bounds.start.y, .ne_x = bounds.end.x, .ne_y = bounds.end.y };
 }
 
-export fn st_planselnormalizecols(sel_type: c_int, nb_x: c_int, ne_x: c_int, nb_len: c_int, ne_len: c_int, col: c_int) ZigSelBounds {
+export fn st_selnormalizecolsplan(sel_type: c_int, nb_x: c_int, ne_x: c_int, nb_len: c_int, ne_len: c_int, col: c_int) ZigSelBounds {
     const selection_type = selectionType(sel_type);
     const bounds = selection.normalizeColumns(selection_type, .{ .start = .{ .x = nb_x, .y = 0 }, .end = .{ .x = ne_x, .y = 0 } }, nb_len, ne_len, col);
     return .{ .nb_x = bounds.start.x, .nb_y = 0, .ne_x = bounds.end.x, .ne_y = 0 };
@@ -771,9 +731,9 @@ test "search line plan skips dummy cells and returns next match" {
 }
 
 test "search current valid checks active and bounds" {
-    try std.testing.expectEqual(@as(c_int, 1), st_searchcurrentvalid(1, 0, 1));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchcurrentvalid(0, 0, 1));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchcurrentvalid(1, 2, 1));
+    try std.testing.expect(search.currentValid(true, 0, 1));
+    try std.testing.expect(!search.currentValid(false, 0, 1));
+    try std.testing.expect(!search.currentValid(true, 2, 1));
 }
 
 test "search match list checks all and current matches" {
@@ -803,21 +763,21 @@ test "search line plan grows match cap when full" {
 }
 
 test "search next current preserves valid old current" {
-    try std.testing.expectEqual(@as(c_int, -1), st_searchnextcurrent(2, 0));
-    try std.testing.expectEqual(@as(c_int, 2), st_searchnextcurrent(2, 5));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchnextcurrent(8, 5));
+    try std.testing.expectEqual(@as(c_int, -1), search.nextCurrent(2, 0));
+    try std.testing.expectEqual(@as(c_int, 2), search.nextCurrent(2, 5));
+    try std.testing.expectEqual(@as(c_int, 0), search.nextCurrent(8, 5));
 }
 
 test "search jump changes scroll only for valid different target" {
-    try std.testing.expectEqual(@as(c_int, 3), st_searchjumpscr(1, 0, 3));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchjumpscr(0, 0, 3));
+    try std.testing.expectEqual(@as(c_int, 3), search.jumpScroll(true, 0, 3));
+    try std.testing.expectEqual(@as(c_int, 0), search.jumpScroll(false, 0, 3));
 }
 
 test "search history index wraps around current history head" {
-    try std.testing.expectEqual(@as(c_int, 6), st_searchhistindex(7, 2, 10));
-    try std.testing.expectEqual(@as(c_int, 9), st_searchhistindex(0, 2, 10));
-    try std.testing.expectEqual(@as(c_int, 4), st_tlinehistindex(3, 7, 7, 10));
-    try std.testing.expectEqual(@as(c_int, 9), st_tlinehistindex(0, 0, 2, 10));
+    try std.testing.expectEqual(@as(c_int, 6), search.historyIndex(7, 2, 10));
+    try std.testing.expectEqual(@as(c_int, 9), search.historyIndex(0, 2, 10));
+    try std.testing.expectEqual(@as(c_int, 4), search.visibleHistoryIndex(3, 7, 7, 10));
+    try std.testing.expectEqual(@as(c_int, 9), search.visibleHistoryIndex(0, 0, 2, 10));
 }
 
 test "history line plan maps scrollback and live rows" {
@@ -839,8 +799,8 @@ test "search step wraps in both directions" {
 test "search char movement skips utf8 continuation bytes" {
     const input = "a你b";
 
-    try std.testing.expectEqual(@as(usize, 1), st_searchprevchar(input, 4));
-    try std.testing.expectEqual(@as(usize, 4), st_searchnextchar(input, 1, input.len));
+    try std.testing.expectEqual(@as(usize, 1), search.prevChar(input, 4));
+    try std.testing.expectEqual(@as(usize, 4), search.nextChar(input, 1));
 }
 
 test "search insert plan describes buffer edit" {
@@ -903,8 +863,6 @@ test "search input edit plans guard inactive and empty cases" {
     try std.testing.expectEqual(@as(c_int, 0), st_searchdeleteforwardedit("abc", 1, 3, 3).kind);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), st_searchdeleteforwardedit("abc", 1, 3, 2).kind);
     try std.testing.expectEqual(@as(c_int, 0), st_searchdeletewordedit("abc", 1, 3, 0).kind);
-    try std.testing.expectEqual(@as(c_int, 1), st_searchinputactiveplan(1));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchscanplan(1, 2));
 }
 
 test "search delete plan validates range and updates length" {
@@ -920,11 +878,6 @@ test "search commit and cancel plans report actions" {
     try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.cancel)), st_searchcanceledit(1).kind);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.clear_input)), st_searchclearinputedit(1).kind);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), st_searchclearinputedit(0).kind);
-    try std.testing.expectEqual(@as(c_int, 1), st_searchbaractive(1, 0));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchbaractive(0, 1));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchbaractive(0, 0));
-    try std.testing.expectEqual(@as(c_int, 1), st_searchinputactiveplan(1));
-    try std.testing.expectEqual(@as(c_int, 0), st_searchinputactiveplan(0));
 }
 
 test "external pipe line plan handles break skip and write" {
@@ -1035,7 +988,7 @@ test "selection rejects inactive or alternate screen mismatch" {
 }
 
 test "selection normalize keeps regular multiline edge columns" {
-    const bounds = st_planselnormalize(sel_regular, 7, 4, 2, 9);
+    const bounds = st_selnormalizeplan(sel_regular, 7, 4, 2, 9);
 
     try std.testing.expectEqual(@as(c_int, 7), bounds.nb_x);
     try std.testing.expectEqual(@as(c_int, 4), bounds.nb_y);
@@ -1044,7 +997,7 @@ test "selection normalize keeps regular multiline edge columns" {
 }
 
 test "selection normalize sorts same line columns" {
-    const bounds = st_planselnormalize(sel_regular, 8, 3, 2, 3);
+    const bounds = st_selnormalizeplan(sel_regular, 8, 3, 2, 3);
 
     try std.testing.expectEqual(@as(c_int, 2), bounds.nb_x);
     try std.testing.expectEqual(@as(c_int, 3), bounds.nb_y);
@@ -1053,7 +1006,7 @@ test "selection normalize sorts same line columns" {
 }
 
 test "selection normalize rectangular sorts both axes" {
-    const bounds = st_planselnormalize(sel_rectangular, 8, 6, 2, 3);
+    const bounds = st_selnormalizeplan(sel_rectangular, 8, 6, 2, 3);
 
     try std.testing.expectEqual(@as(c_int, 2), bounds.nb_x);
     try std.testing.expectEqual(@as(c_int, 3), bounds.nb_y);
@@ -1062,7 +1015,7 @@ test "selection normalize rectangular sorts both axes" {
 }
 
 test "selection normalize cols adjusts regular edges" {
-    const bounds = st_planselnormalizecols(sel_regular, 8, 9, 5, 9, 10);
+    const bounds = st_selnormalizecolsplan(sel_regular, 8, 9, 5, 9, 10);
 
     try std.testing.expectEqual(@as(c_int, 5), bounds.nb_x);
     try std.testing.expectEqual(@as(c_int, 9), bounds.ne_x);

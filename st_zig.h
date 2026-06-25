@@ -233,6 +233,8 @@ typedef struct {
 
 typedef struct {
 	int kind;
+	int cursor_store_action;
+	int swap_screen;
 } ZigModePlan;
 
 typedef struct {
@@ -242,6 +244,8 @@ typedef struct {
 
 typedef struct {
 	int kind;
+	int arg1_present;
+	int clipboard_run;
 } ZigStrHandlePlan;
 
 typedef struct {
@@ -662,7 +666,6 @@ int st_tmoveato_y(int, int, int);
 ZigDrawFramePlan st_drawframeplan(int, int, int, int, int, int, int, int, const ZigGlyph * const *);
 ZigDrawRegionPlan st_drawregionplan(const int *, int, int);
 ZigCursorStorePlan st_tcursorplan(int, int);
-int st_tsetmodecursor(int);
 ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 int st_tlineinregion(int, int, int);
@@ -675,16 +678,12 @@ ZigResizeExecPlan st_tresizeexecplan(const int *, int, int, int, int, int, int, 
 ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
 int st_tdectest(char);
-ZigModePlan st_planmode(int, int);
+ZigModePlan st_modeplan(int, int, int, int);
 int st_tdefutf8(int, char);
 int st_tdeftran(char);
-int st_tswapscreenmode(int);
-int st_tsetmodeswap(int, int);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrSequence st_tstrsequence(unsigned char, int);
-ZigStrHandlePlan st_planstrhandle(char, int, int);
-int st_strclipboardrun(int, int);
-int st_strhasarg(int, int);
+ZigStrHandlePlan st_strhandleplan(char, int, int, int);
 ZigInputControlPlan st_inputcontrolplan(unsigned char, int, int, int);
 ZigInputEscPlan st_inputescplan(unsigned char, int, int, int, int);
 ZigPutcDecode st_putcdecode(uint32_t, int);
@@ -710,18 +709,11 @@ ZigSelSnapLineStep st_selsnaplinestep(int, int, int, int);
 ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
 ZigSelSnapWordStep st_selsnapwordloopstep(int, int, int, int, int, int, int, int, unsigned short, int, int, uint32_t, uint32_t);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
-int st_searchcurrentvalid(int, int, int);
 int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
 ZigSearchLinePlan st_searchlineplan(const ZigGlyph *, int, int, const uint32_t *, int, int, int, int, int);
-int st_searchnextcurrent(int, int);
-int st_searchjumpscr(int, int, int);
-int st_searchhistindex(int, int, int);
-int st_tlinehistindex(int, int, int, int);
 ZigHistoryLinePlan st_tlinehistplan(int, int, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
-size_t st_searchprevchar(const unsigned char *, size_t);
-size_t st_searchnextchar(const unsigned char *, size_t, size_t);
 ZigSearchCursorEditPlan st_searchbackspaceedit(const unsigned char *, int, size_t, size_t);
 ZigSearchCursorEditPlan st_searchdeleteforwardedit(const unsigned char *, int, size_t, size_t);
 ZigSearchCursorEditPlan st_searchdeletewordedit(const unsigned char *, int, size_t, size_t);
@@ -733,10 +725,7 @@ ZigSearchStateEditPlan st_searchclearinputedit(int);
 ZigSearchStateEditPlan st_searchcommitedit(int, size_t);
 ZigSearchStateEditPlan st_searchcanceledit(int);
 ZigSearchInsertPlan st_searchinsertplan(int, size_t, size_t, size_t, size_t);
-int st_searchscanplan(int, int);
 ZigSearchDeletePlan st_searchdeleteplan(size_t, size_t, size_t);
-int st_searchbaractive(int, int);
-int st_searchinputactiveplan(int);
 ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
 ZigSearchSetPlan st_searchsetplan(size_t, int);
 ZigSearchPromptPlan st_searchpromptplan(int, size_t);
@@ -746,7 +735,7 @@ size_t st_ttywritechunk(const unsigned char *, size_t);
 int st_tprinterwrite(int);
 int st_sttyfits(size_t, size_t);
 int st_ttyreadpending(int);
-ZigSelBounds st_planselnormalize(int, int, int, int, int);
-ZigSelBounds st_planselnormalizecols(int, int, int, int, int, int);
+ZigSelBounds st_selnormalizeplan(int, int, int, int, int);
+ZigSelBounds st_selnormalizecolsplan(int, int, int, int, int, int);
 
 #endif

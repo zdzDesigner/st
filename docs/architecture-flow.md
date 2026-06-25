@@ -1,12 +1,12 @@
 # 架构流程图
 
-本文档补充 `docs/zig-architecture.md`：前者描述边界规则，本文描述主要流程、模块关系和后续迁移路线。
+本文档补充 `docs/zig-architecture.md`：前者描述边界规则，本文描述主要流程、模块关系和后续迁移路线。当前路线已从“长期 C executor”调整为“先压缩成极薄 C shim，再逐步迁到 Zig 主导”。
 
 ## C/Zig 边界总览
 
 ```mermaid
 flowchart LR
-    Input[PTY / X11 / 用户输入] --> C[st.c executor]
+    Input[PTY / X11 / 用户输入] --> C[st.c / x.c shim]
     C --> State[term / sel / search 全局状态]
     C --> SideEffects[X11 / PTY / clipboard / IO / malloc / memmove]
     C --> H[st_zig.h C ABI]
@@ -23,9 +23,9 @@ flowchart LR
     class H,Adapter,Domain,Plan zig;
 ```
 
-- C 侧持有全局状态和实际副作用，包括 `term`、`sel`、`search`、X11、PTY、clipboard、IO、内存所有权和 `TLINE(...)` 数组访问。
-- Zig 侧只接收显式值、指针切片或 extern struct，返回可测试 plan；内部模块不读取 C 全局变量。
-- `st_zig.h` 是唯一公开 ABI，`zig build abi-check` 校验 Zig `export fn st_*` 与头文件声明一致。
+- 当前 C 侧仍持有全局状态和实际副作用，包括 `term`、`sel`、`search`、X11、PTY、clipboard、IO、内存所有权和 `TLINE(...)` 数组访问。
+- 目标形态是：Zig 逐步持有状态与主线决策，C 收缩成只执行平台桥接和副作用的极薄 shim。
+- `st_zig.h` 目前仍是唯一公开 ABI，`zig build abi-check` 校验 Zig `export fn st_*` 与头文件声明一致；后续它应逐步退化为过渡兼容层。
 
 ## 模块关系图
 
@@ -103,7 +103,9 @@ flowchart TD
 
 ## Search 子系统流程
 
-当前状态：主流程完成，后续只做局部优化或无用 ABI 删除。C 侧保留搜索扫描所需的 `TLINE(...)` 读取、匹配数组写入、输入缓冲区内存移动和 redraw/free 等副作用；Zig 侧负责输入编辑、扫描范围、match append、current/jump 和状态动作计划。
+当前状态：主流程完成，近期已做多轮 ABI 瘦身。接下来的主目标不是继续拆小 helper，而是把 `search` 作为第一批状态所有权迁移入口：先迁读模型，再迁写模型，最后把 realloc/free/redraw 等 effect 保留在 C shim。
+
+第一版契约：C 先组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；Zig 返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 只执行内存、副作用和最终写回。
 
 ```mermaid
 flowchart TD
@@ -130,8 +132,12 @@ flowchart TD
     ApplyState -->|cancel| Redraw
 
     SearchSet --> DecodeQuery[st.c utf8decode query]
-    DecodeQuery --> SetPlan[st_search.zig SetPlan]
-    SetPlan --> Scan[searchscan]
+    DecodeQuery --> Snapshot[SearchSnapshot]
+    Snapshot --> Update[SearchStateUpdate]
+    Snapshot --> Effect[SearchEffectPlan]
+    Update --> Scan[searchscan]
+    Effect --> CEffects[xmalloc/xrealloc/free/redraw/searchjump]
+    CEffects --> Scan
     Scan --> LinePlan[st_line.zig SearchLinePlan]
     LinePlan -->|grow_append| MatchRealloc[st.c xrealloc matches]
     LinePlan --> MatchWrite[st.c 写 SearchMatch]
@@ -198,18 +204,19 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A[Search 旧 adapter 已清理] --> C[Selection snap step 已 union 化]
-    C --> D[Resize 循环范围 plan 化]
-    D --> E[Draw/dirty range plan 收敛]
-    E --> F[删除无用 ABI 符号]
-    F --> G[补启动冒烟验证]
+    A[Search 小 ABI 已收薄] --> B[SearchSnapshot / SearchStateUpdate]
+    B --> C[Zig 接管 search 写模型]
+    C --> D[同样方式迁移 selection]
+    D --> E[term 主状态读写迁移]
+    E --> F[C 收缩为极薄 shim]
+    F --> G[再评估 PTY/X11/clipboard 所有权]
 ```
 
-- **Search 定版**：主流程完成，旧 `st_search*plan` 兼容入口和测试专用 ABI 已删除；`searchscanline` 已合并为 `st_searchlineplan`，C 侧只保留扫描所需 `TLINE(...)`、匹配数组写入、输入缓冲区移动和 redraw/free 等副作用。
+- **Search 第一优先级**：主流程纯逻辑已稳定，且小 ABI 已大幅收薄；下一步开始定义 `SearchSnapshot`、`SearchStateUpdate` 和 `SearchEffectPlan`，让 Zig 逐步接管 `search` 读写模型。
 - **Selection 定版**：主流程完成，`getsel` 已合并为 `st_getselexecplan`，line snap step 和 word snap loop step 已 plan 化；C 侧只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
 - **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
 - **Draw 收口**：draw frame gate、cursor 调整和 draw region dirty 扫描已迁移为 Zig plan；C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链。
 - **CSI 聚合**：`csihandle` 已改为 `ZigCsiExecPlan` 顶层分发，六个旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除；C 继续执行真实副作用。
 - **ExternalPipe 聚合**：行长度、write/skip、lastpos 和 wrap newline 已合并为 `st_externalpipeplan`；C 继续负责 `tlinehist`、`utf8encode` 和 `xwrite`。
-- **ABI 瘦身**：`st_zig.h` 只保留 C executor 实际调用入口；仅 Zig 测试引用的 export 应删除，测试改测内部领域函数。
+- **ABI 瘦身**：`st_zig.h` 仍只保留 C shim 实际调用入口；已清理多轮旧 `st_plan*` 和 search/mode/strhandle 小 helper。后续新增边界优先是 snapshot/update/effect 结构，而不是新的零碎 `st_*` 导出。
 - **验证要求**：每批迁移后执行 `zig fmt`、`zig build abi-check`、`zig build test`、`zig build`；提交或发布前补 `timeout 5 ./zig-out/bin/st`。

@@ -44,8 +44,7 @@
 #define ISCONTROLC1(c)		(BETWEEN(c, 0x80, 0x9f))
 #define ISCONTROL(c)		(ISCONTROLC0(c) || ISCONTROLC1(c))
 #define ISDELIM(u)		(u && wcschr(worddelimiters, u))
-#define TLINE(y)		((y) < term.scr ? term.hist[st_tlinehistindex((y), \
-				term.histi, term.scr, HISTSIZE)] : \
+#define TLINE(y)		((y) < term.scr ? term.hist[(int)((((y) + term.histi - term.scr + HISTSIZE + 1) % HISTSIZE))] : \
 				term.line[(y) - term.scr])
 
 enum term_mode {
@@ -412,7 +411,7 @@ selnormalize(void)
 {
 	ZigSelBounds bounds;
 
-	bounds = st_planselnormalize(sel.type, sel.ob.x, sel.ob.y,
+	bounds = st_selnormalizeplan(sel.type, sel.ob.x, sel.ob.y,
 		sel.oe.x, sel.oe.y);
 	sel.nb.x = bounds.nb_x;
 	sel.nb.y = bounds.nb_y;
@@ -425,7 +424,7 @@ selnormalize(void)
 	/* expand selection over line breaks */
 	if (sel.type == SEL_RECTANGULAR)
 		return;
-	bounds = st_planselnormalizecols(sel.type, sel.nb.x, sel.ne.x,
+	bounds = st_selnormalizecolsplan(sel.type, sel.nb.x, sel.ne.x,
 		tlinelen(sel.nb.y), tlinelen(sel.ne.y), term.col);
 	sel.nb.x = bounds.nb_x;
 	sel.ne.x = bounds.ne_x;
@@ -468,13 +467,13 @@ searchclear(const Arg *arg)
 int
 searchinputactive(void)
 {
-	return st_searchinputactiveplan(search.inputmode);
+	return search.inputmode;
 }
 
 int
 searchbaractive(void)
 {
-	return st_searchbaractive(search.inputmode, search.active);
+	return search.inputmode || search.active;
 }
 
 const char *
@@ -638,14 +637,27 @@ searchapplyedit(ZigSearchCursorEditPlan plan, int refresh_search)
 size_t
 searchprevchar(size_t cursor)
 {
-	return st_searchprevchar((const unsigned char *)search.input, cursor);
+	size_t next;
+
+	if (cursor == 0)
+		return 0;
+	next = cursor - 1;
+	while (next > 0 && (((unsigned char)search.input[next] & 0xc0) == 0x80))
+		next--;
+	return next;
 }
 
 size_t
 searchnextchar(size_t cursor)
 {
-	return st_searchnextchar((const unsigned char *)search.input, cursor,
-		search.inputlen);
+	size_t next;
+
+	if (cursor >= search.inputlen)
+		return search.inputlen;
+	next = cursor + 1;
+	while (next < search.inputlen && (((unsigned char)search.input[next] & 0xc0) == 0x80))
+		next++;
+	return next;
 }
 
 void
@@ -737,7 +749,7 @@ searchscan(void)
 
 	oldcurrent = search.current;
 	search.nmatches = 0;
-	if (!st_searchscanplan(search.active, search.qlen))
+	if (!search.active || search.qlen <= 0)
 		return;
 
 	for (y = 0; y < term.row; ++y) {
@@ -747,7 +759,12 @@ searchscan(void)
 		searchscanline(searchhistline(scr), scr, 0);
 	}
 
-	search.current = st_searchnextcurrent(oldcurrent, search.nmatches);
+	if (search.nmatches == 0)
+		search.current = -1;
+	else if (oldcurrent >= 0 && oldcurrent < search.nmatches)
+		search.current = oldcurrent;
+	else
+		search.current = 0;
 }
 
 void
@@ -779,7 +796,7 @@ searchscanline(Line line, int scr, int y)
 Line
 searchhistline(int scr)
 {
-	return term.hist[st_searchhistindex(term.histi, scr, HISTSIZE)];
+	return term.hist[(int)(((term.histi - scr + HISTSIZE + 1) % HISTSIZE))];
 }
 
 void
@@ -788,11 +805,11 @@ searchjump(void)
 	SearchMatch *match;
 	int nextscr;
 
-	if (!st_searchcurrentvalid(search.active, search.current, search.nmatches))
+	if (!search.active || search.current < 0 || search.current >= search.nmatches)
 		return;
 
 	match = &search.matches[search.current];
-	nextscr = st_searchjumpscr(1, term.scr, match->scr);
+	nextscr = (term.scr != match->scr) ? match->scr : term.scr;
 	if (term.scr != nextscr) {
 		term.scr = nextscr;
 		tfulldirt();
@@ -1337,7 +1354,7 @@ tswapscreen(void)
 
 	term.line = term.alt;
 	term.alt = tmp;
-	term.mode = st_tswapscreenmode(term.mode);
+	term.mode ^= MODE_ALTSCREEN;
 	tfulldirt();
 }
 
@@ -1757,7 +1774,7 @@ tsetmode(int priv, int set, int *args, int narg)
 	int alt, *lim;
 
 	for (lim = args + narg; args < lim; ++args) {
-		plan = st_planmode(priv, *args);
+		plan = st_modeplan(priv, *args, set, IS_SET(MODE_ALTSCREEN));
 
 		switch (plan.kind) {
 		case ST_ZIG_MODE_IGNORE:
@@ -1810,7 +1827,8 @@ tsetmode(int priv, int set, int *args, int narg)
 		case ST_ZIG_MODE_ALT1049:
 			if (!allowaltscreen)
 				break;
-			tcursor(st_tsetmodecursor(set));
+			if (plan.cursor_store_action >= 0)
+				tcursor(plan.cursor_store_action);
 			/* FALLTHROUGH */
 		case ST_ZIG_MODE_ALT47:
 			if (!allowaltscreen)
@@ -1819,13 +1837,14 @@ tsetmode(int priv, int set, int *args, int narg)
 			if (alt) {
 				tclearregion(0, 0, term.col-1, term.row-1);
 			}
-			if (st_tsetmodeswap(set, alt))
+			if (plan.swap_screen)
 				tswapscreen();
 			if (*args != 1049)
 				break;
 			/* FALLTHROUGH */
 		case ST_ZIG_MODE_CURSOR1048:
-			tcursor(st_tsetmodecursor(set));
+			if (plan.cursor_store_action >= 0)
+				tcursor(plan.cursor_store_action);
 			break;
 		case ST_ZIG_MODE_BRACKETED_PASTE:
 			xsetmode(set, MODE_BRCKTPASTE);
@@ -1946,7 +1965,7 @@ strhandle(void)
 	term.esc &= ~(ESC_STR_END|ESC_STR);
 	strparse();
 	par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
-	plan = st_planstrhandle(strescseq.type, narg, par);
+	plan = st_strhandleplan(strescseq.type, narg, par, allowwindowops);
 
 	switch (plan.kind) {
 	case 1:
@@ -1965,7 +1984,7 @@ strhandle(void)
 	case 5:
 		return;
 	case 0:
-		if (st_strclipboardrun(narg, allowwindowops)) {
+		if (plan.clipboard_run) {
 			dec = base64dec(strescseq.args[2]);
 			if (dec) {
 				xsetsel(dec);
@@ -1977,7 +1996,7 @@ strhandle(void)
 		return;
 	case 7:
 		p = strescseq.args[2];
-		j = st_strhasarg(narg, 1) ? atoi(strescseq.args[1]) : -1;
+		j = plan.arg1_present ? atoi(strescseq.args[1]) : -1;
 		if (xsetcolorname(j, p)) {
 			fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
 			        j, p ? p : "(null)");
@@ -1986,9 +2005,9 @@ strhandle(void)
 		}
 		return;
 	case 8:
-		j = st_strhasarg(narg, 1) ? atoi(strescseq.args[1]) : -1;
+		j = plan.arg1_present ? atoi(strescseq.args[1]) : -1;
 		if (xsetcolorname(j, p)) {
-			if (!st_strhasarg(narg, 1))
+			if (!plan.arg1_present)
 				return;
 			fprintf(stderr, "erresc: invalid color j=%d, p=%s\n",
 			        j, p ? p : "(null)");

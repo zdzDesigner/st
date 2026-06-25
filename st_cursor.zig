@@ -225,10 +225,6 @@ export fn st_tcursorplan(mode: c_int, alt: c_int) ZigCursorStorePlan {
     return (CursorStore{ .mode = mode, .alt = alt != 0 }).plan();
 }
 
-export fn st_tsetmodecursor(set: c_int) c_int {
-    return if (set != 0) cursor_save else cursor_load;
-}
-
 fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
     if (value < lower) return lower;
     if (value > upper) return upper;
@@ -333,9 +329,4 @@ test "tcursor plan maps mode and alt slot" {
     try std.testing.expectEqual(@as(c_int, 1), save.slot);
     try std.testing.expectEqual(@as(c_int, cursor_store_load), load.action);
     try std.testing.expectEqual(@as(c_int, 0), load.slot);
-}
-
-test "tsetmode cursor action follows set flag" {
-    try std.testing.expectEqual(@as(c_int, cursor_save), st_tsetmodecursor(1));
-    try std.testing.expectEqual(@as(c_int, cursor_load), st_tsetmodecursor(0));
 }
