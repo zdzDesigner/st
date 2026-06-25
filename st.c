@@ -525,6 +525,7 @@ searchprompt(const Arg *arg)
 	ZigSearchSnapshot snapshot;
 
 	(void)arg;
+	/* 先把 search 元信息打平成快照，再交给 Zig 决定新状态和副作用。 */
 	snapshot = (ZigSearchSnapshot){
 		.query_len = search.qlen,
 		.inputmode = search.inputmode,
@@ -537,6 +538,8 @@ searchprompt(const Arg *arg)
 		.active = search.active,
 	};
 	result = st_searchpromptupdate(snapshot);
+	/* 这一段是 snapshot -> update 的标准写回模板：
+	 * Zig 决定 search 元信息的新值，C 只负责落回真实状态结构。 */
 	search.active = result.update.active;
 	search.current = result.update.current;
 	search.inputmode = result.update.inputmode;
@@ -556,23 +559,43 @@ searchprompt(const Arg *arg)
 void
 searchinput(const char *text, size_t len)
 {
-	ZigSearchInsertPlan plan;
+	ZigSearchInputResult result;
+	ZigSearchSnapshot snapshot;
 
-	plan = st_searchinsertplan(search.inputmode, search.inputlen,
-		search.inputcursor, search.inputcap, len);
-	if (!plan.run)
+	snapshot = (ZigSearchSnapshot){
+		.query_len = search.qlen,
+		.inputmode = search.inputmode,
+		.inputlen = search.inputlen,
+		.inputcursor = search.inputcursor,
+		.inputcap = search.inputcap,
+		.nmatches = search.nmatches,
+		.match_cap = search.cap,
+		.current = search.current,
+		.active = search.active,
+	};
+	result = st_searchinputupdate(snapshot, len);
+	if (!result.effect.refresh_search)
 		return;
 
-	if (plan.grow) {
-		search.inputcap = plan.inputcap;
+	/* Zig 只规划输入视图更新，真正的 realloc/memmove/memcpy 仍在 C shim 执行。 */
+	search.active = result.update.active;
+	search.current = result.update.current;
+	search.inputmode = result.update.inputmode;
+	search.inputlen = result.update.inputlen;
+	search.inputcursor = result.update.inputcursor;
+	search.inputcap = result.update.inputcap;
+	search.nmatches = result.update.nmatches;
+	search.cap = result.update.match_cap;
+
+	if (result.effect.realloc_input) {
 		search.input = xrealloc(search.input, search.inputcap);
 	}
-	memmove(search.input + plan.move_dst,
-		search.input + plan.move_src,
-		plan.move_len);
-	memcpy(search.input + plan.insert_at, text, len);
-	search.inputlen = plan.new_len;
-	search.inputcursor = plan.new_cursor;
+	/* move_len 包含结尾的 '\0'，这样插入后 C 只需要补写新字节，
+	 * 原有尾部和字符串终止符会一起被后移。 */
+	memmove(search.input + result.move_dst,
+		search.input + result.move_src,
+		result.move_len);
+	memcpy(search.input + result.insert_at, text, len);
 	search.input[search.inputlen] = '\0';
 	searchset(search.input);
 }
@@ -633,6 +656,9 @@ searchend(void)
 void
 searchapplyedit(ZigSearchCursorEditPlan plan, int refresh_search)
 {
+	/* 这一层把 Zig 返回的“编辑意图”翻译成真实状态写回。
+	 * delete 需要先改 buffer 再改 cursor；move 只需要改 cursor。
+	 * refresh_search 为真时，说明这次编辑改变了查询内容，必须重新跑 searchset。 */
 	switch (plan.kind) {
 	case ST_ZIG_SEARCH_CURSOR_NONE:
 		return;
@@ -704,6 +730,8 @@ searchcancel(void)
 void
 searchapplystateedit(ZigSearchStateEditPlan plan)
 {
+	/* state edit 处理的是更粗粒度的状态迁移：清空输入、提交、取消。
+	 * 这类动作往往伴随后续 searchset/searchclear/redraw，因此集中在这里落回 C 状态。 */
 	switch (plan.kind) {
 	case ST_ZIG_SEARCH_STATE_NONE:
 		return;
@@ -736,11 +764,24 @@ searchset(const char *query)
 	size_t len, off, step;
 	int qlen = 0;
 	Rune *runes;
-	ZigSearchSetPlan plan;
+	ZigSearchSetResult result;
+	ZigSearchSnapshot snapshot;
 
 	len = strlen(query);
-	plan = st_searchsetplan(len, 0);
-	runes = xmalloc(plan.alloc_len * sizeof(*runes));
+	/* 第一次调用只拿分配尺度，UTF-8 decode 仍由 C 执行，避免这一批同时迁资源和解码。 */
+	snapshot = (ZigSearchSnapshot){
+		.query_len = search.qlen,
+		.inputmode = search.inputmode,
+		.inputlen = search.inputlen,
+		.inputcursor = search.inputcursor,
+		.inputcap = search.inputcap,
+		.nmatches = search.nmatches,
+		.match_cap = search.cap,
+		.current = search.current,
+		.active = search.active,
+	};
+	result = st_searchsetupdate(snapshot, len, 0);
+	runes = xmalloc(result.alloc_len * sizeof(*runes));
 	for (off = 0; off < len; off += step) {
 		step = utf8decode(query + off, &rune, len - off);
 		if (step == 0)
@@ -748,15 +789,29 @@ searchset(const char *query)
 		runes[qlen++] = rune;
 	}
 
-	free(search.query);
-	plan = st_searchsetplan(len, qlen);
+	result = st_searchsetupdate(snapshot, len, qlen);
+	/* 第二次调用基于 decoded qlen 生成最终状态和 effect，C 只负责执行释放/扫描/跳转。 */
+	if (result.effect.clear_query)
+		free(search.query);
+	/* query 指针本体仍由 C 持有，但 active/current/qlen 等“状态决策”已交给 Zig。 */
 	search.query = runes;
-	search.qlen = qlen;
-	search.active = plan.active;
-	search.current = plan.current;
-	searchscan();
-	searchjump();
-	redraw();
+	search.qlen = result.update.query_len;
+	search.active = result.update.active;
+	search.current = result.update.current;
+	search.inputmode = result.update.inputmode;
+	search.inputlen = result.update.inputlen;
+	search.inputcursor = result.update.inputcursor;
+	search.inputcap = result.update.inputcap;
+	search.nmatches = result.update.nmatches;
+	search.cap = result.update.match_cap;
+	if (result.effect.refresh_search)
+		/* 当前 effect 语义里，refresh_search 表示“需要重新计算匹配集合”。 */
+		searchscan();
+	if (result.effect.jump)
+		/* jump 只在 searchset 这类会改变 current/active 的路径上触发。 */
+		searchjump();
+	if (result.effect.redraw)
+		redraw();
 }
 
 void
@@ -764,6 +819,8 @@ searchscan(void)
 {
 	int y, scr, oldcurrent;
 
+	/* scan 会重建整份 matches 数组。
+	 * 先记住旧 current，扫描结束后再决定保留旧索引、回退到 0，还是置为 -1。 */
 	oldcurrent = search.current;
 	search.nmatches = 0;
 	if (!search.active || search.qlen <= 0)
@@ -776,6 +833,8 @@ searchscan(void)
 		searchscanline(searchhistline(scr), scr, 0);
 	}
 
+	/* matches 重新生成后，current 需要重新归一化到稳定范围，
+	 * 避免旧索引越界或在“无匹配”时继续指向旧值。 */
 	if (search.nmatches == 0)
 		search.current = -1;
 	else if (oldcurrent >= 0 && oldcurrent < search.nmatches)
@@ -791,6 +850,8 @@ searchscanline(Line line, int scr, int y)
 	SearchMatch *match;
 	ZigSearchLinePlan plan;
 
+	/* Zig 负责告诉 C：当前位置是否命中、是否需要扩容、下一次应从哪里继续扫描。
+	 * C 只负责真正扩容 matches 并把命中的 SearchMatch 写进数组。 */
 	for (x = 0;; x = plan.next_x) {
 		plan = st_searchlineplan((const ZigGlyph *)line, x, term.col,
 			search.query, search.qlen, search.nmatches, search.cap, y, scr);
@@ -822,6 +883,8 @@ searchjump(void)
 	SearchMatch *match;
 	int nextscr;
 
+	/* jump 不负责重算匹配，只消费当前 search.current。
+	 * 如果当前匹配在不同的 scrollback 层，就把 term.scr 切过去并整体标脏。 */
 	if (!search.active || search.current < 0 || search.current >= search.nmatches)
 		return;
 

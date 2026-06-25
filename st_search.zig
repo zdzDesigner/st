@@ -6,16 +6,20 @@
 const std = @import("std");
 const model = @import("term_model.zig");
 
+// step 只服务“下一条/上一条匹配”这种循环跳转，不携带任何副作用。
 pub const StepPlan = struct {
     run: bool,
     current: i32,
 };
 
+// delete 只回答“这次删不删、删完长度是多少”，真正的 memmove 留给 C。
 pub const DeletePlan = struct {
     run: bool,
     new_len: usize,
 };
 
+// insert 描述一次插入对 buffer 视图的影响。
+// 这里故意把 move 段信息也算出来，这样 C shim 不需要重复推导位移范围。
 pub const InsertPlan = struct {
     run: bool,
     grow: bool,
@@ -83,6 +87,8 @@ pub const PromptPlan = struct {
 };
 
 pub const SearchSnapshot = struct {
+    // 第一版状态快照只携带可直接复制的标量，buffer 本体仍由 C 持有。
+    // 这样 Zig 可以一次拿到“当前 search 视图”，而不必通过很多小 helper 反复回读 C 状态。
     query_len: i32,
     inputmode: bool,
     inputlen: usize,
@@ -95,6 +101,9 @@ pub const SearchSnapshot = struct {
 };
 
 pub const SearchStateUpdate = struct {
+    // Zig 负责算出下一状态，C 只按结果写回，不再分散修补字段。
+    // 这里保留 query_len，是为了让 searchset 这类入口也能把 decoded qlen 一并写回。
+    query_len: i32,
     active: bool,
     current: i32,
     inputmode: bool,
@@ -106,6 +115,8 @@ pub const SearchStateUpdate = struct {
 };
 
 pub const SearchEffectPlan = struct {
+    // effect 只描述需要触发的副作用，不直接持有任何平台资源。
+    // 目标是把“做什么”与“怎么做”拆开：Zig 决定动作，C 执行平台相关细节。
     alloc_input: bool,
     realloc_input: bool,
     alloc_query: bool,
@@ -118,8 +129,27 @@ pub const SearchEffectPlan = struct {
 };
 
 pub const SearchPromptResult = struct {
+    // prompt 入口不碰文本内容，只重置输入视图并声明是否要分配输入缓冲区。
     update: SearchStateUpdate,
     effect: SearchEffectPlan,
+};
+
+pub const SearchInputResult = struct {
+    update: SearchStateUpdate,
+    effect: SearchEffectPlan,
+    // 输入插入仍由 C 执行 memmove/memcpy，所以保留最小位移信息。
+    insert_at: usize,
+    move_dst: usize,
+    move_src: usize,
+    move_len: usize,
+};
+
+pub const SearchSetResult = struct {
+    // set 入口比较特殊：它先需要 alloc_len 让 C 做 UTF-8 decode，
+    // decode 完毕后再根据真实 qlen 生成最终状态与 effect。
+    update: SearchStateUpdate,
+    effect: SearchEffectPlan,
+    alloc_len: usize,
 };
 
 pub const SetPlan = struct {
@@ -186,6 +216,7 @@ pub const MatchList = struct {
     current: i32,
 
     pub fn contains(self: MatchList, term_scr: i32, x: i32, y: i32) bool {
+        // 普通高亮只关心“任意匹配是否覆盖当前位置”，不区分 current。
         for (self.matches) |match| {
             if (match.hit(self.active, term_scr, x, y)) return true;
         }
@@ -193,6 +224,8 @@ pub const MatchList = struct {
     }
 
     pub fn containsCurrent(self: MatchList, term_scr: i32, x: i32, y: i32) bool {
+        // current 高亮必须先确认 current 仍落在合法匹配范围里，
+        // 这样历史匹配数量变化后不会读到失效索引。
         if (!(Matches{ .active = self.active, .current = self.current, .count = @intCast(self.matches.len) }).currentValid()) return false;
         return self.matches[@intCast(self.current)].hit(self.active, term_scr, x, y);
     }
@@ -208,12 +241,15 @@ pub const Matches = struct {
     }
 
     pub fn nextCurrent(self: Matches) i32 {
+        // 没有任何匹配时返回 -1；旧 current 仍合法就保留，
+        // 否则回退到第 0 个匹配，保证 search.current 总能落到稳定值上。
         if (self.count == 0) return -1;
         if (between(self.current, 0, self.count - 1)) return self.current;
         return 0;
     }
 
     pub fn step(self: Matches, direction: i32) StepPlan {
+        // next/prev 逻辑在匹配集合内部循环，不让 current 越出 [0, count)。
         if (!self.active or self.count == 0) return .{ .run = false, .current = self.current };
         return .{
             .run = true,
@@ -222,6 +258,7 @@ pub const Matches = struct {
     }
 
     pub fn nextCap(self: Matches, cap: i32) i32 {
+        // 匹配数组采用指数扩容，避免 scan 时频繁 realloc。
         if (self.count != cap) return cap;
         return if (cap != 0) cap * 2 else 16;
     }
@@ -282,6 +319,7 @@ pub const Input = struct {
     cap: usize,
 
     pub fn nextCap(self: Input, add_len: usize) usize {
+        // 输入缓冲区沿用倍增扩容策略，保证追加和中间插入都能摊薄 realloc 成本。
         const required = self.len + add_len + 1;
         var next_cap = self.cap;
         while (required > next_cap) {
@@ -320,6 +358,8 @@ pub const Input = struct {
     }
 
     pub fn insertPlan(self: Input, add_len: usize) InsertPlan {
+        // InsertPlan 把“插入文本后哪些字节要后移”一次算清，
+        // C 侧只需要按 move_src/move_dst/move_len 执行内存移动即可。
         if (!self.insertable()) {
             return .{
                 .run = false,
@@ -392,6 +432,8 @@ pub const InputBytes = struct {
     bytes: []const u8,
 
     pub fn prevChar(self: InputBytes, cursor: usize) usize {
+        // search 输入框按 UTF-8 codepoint 移动，
+        // 这里通过跳过 continuation byte 保证不会把光标停在多字节字符中间。
         if (cursor == 0) return 0;
         var next = cursor - 1;
         while (next > 0 and (self.bytes[next] & 0xc0) == 0x80) {
@@ -401,6 +443,8 @@ pub const InputBytes = struct {
     }
 
     pub fn nextChar(self: InputBytes, cursor: usize) usize {
+        // 与 prevChar 对称：从下一个字节开始跳过 continuation byte，
+        // 最终停在下一个字符边界或输入末尾。
         if (cursor >= self.bytes.len) return self.bytes.len;
         var next = cursor + 1;
         while (next < self.bytes.len and (self.bytes[next] & 0xc0) == 0x80) {
@@ -426,6 +470,8 @@ pub const InputEditor = struct {
     bytes: InputBytes,
 
     pub fn backspace(self: InputEditor) CursorEdit {
+        // 编辑器层把“是否允许操作”和“光标边界如何移动”封装起来，
+        // C 不需要理解 UTF-8 或删除范围细节，只消费结果即可。
         if (!self.input.canBackspace()) return .none;
         const prev = self.bytes.prevChar(self.input.cursor);
         return .{ .delete = .{ .start = prev, .end = self.input.cursor, .cursor = prev } };
@@ -472,6 +518,8 @@ pub fn LineMatcher(comptime Glyph: type) type {
         const Self = @This();
 
         pub fn match(self: Self, x: i32, query: []const u32) i32 {
+            // 行级匹配需要跳过 wide dummy cell，
+            // 否则双宽字符的占位格会把 query 对齐和 match_len 算错。
             if (x < 0 or x >= self.linelen or x >= self.cols or self.line.len == 0) return 0;
 
             if (model.hasWideDummy(self.line[@intCast(x)].mode)) return 0;
@@ -617,9 +665,11 @@ pub fn promptPlan(has_input: bool, inputcap: usize) PromptPlan {
 }
 
 pub fn promptResult(snapshot: SearchSnapshot) SearchPromptResult {
+    // prompt 入口先重置输入视图，再把真正的分配/redraw 留给 C shim。
     const plan = promptPlan(snapshot.inputcap != 0, snapshot.inputcap);
     return .{
         .update = .{
+            .query_len = snapshot.query_len,
             .active = snapshot.active,
             .current = snapshot.current,
             .inputmode = plan.inputmode,
@@ -640,6 +690,71 @@ pub fn promptResult(snapshot: SearchSnapshot) SearchPromptResult {
             .redraw = true,
             .jump = false,
         },
+    };
+}
+
+pub fn inputResult(snapshot: SearchSnapshot, add_len: usize) SearchInputResult {
+    // input 入口先复用既有插入规则，再把 buffer 位移细节交回 C 执行。
+    const plan = insertPlan(snapshot.inputmode, snapshot.inputlen, snapshot.inputcursor, snapshot.inputcap, add_len);
+    return .{
+        .update = .{
+            .query_len = snapshot.query_len,
+            .active = snapshot.active,
+            .current = snapshot.current,
+            .inputmode = snapshot.inputmode,
+            .inputlen = plan.new_len,
+            .inputcursor = plan.new_cursor,
+            .inputcap = plan.inputcap,
+            .nmatches = snapshot.nmatches,
+            .match_cap = snapshot.match_cap,
+        },
+        .effect = .{
+            .alloc_input = false,
+            .realloc_input = plan.grow,
+            .alloc_query = false,
+            .realloc_matches = false,
+            .clear_query = false,
+            .clear_matches = false,
+            .refresh_search = plan.run,
+            .redraw = false,
+            .jump = false,
+        },
+        .insert_at = plan.insert_at,
+        .move_dst = plan.move_dst,
+        .move_src = plan.move_src,
+        .move_len = plan.move_len,
+    };
+}
+
+pub fn setResult(snapshot: SearchSnapshot, query_len: usize, qlen: i32) SearchSetResult {
+    // set 入口是 search 状态切换的关口：Zig 只决定新状态和 effect，UTF-8 decode/scan/jump 仍由 C 驱动。
+    // 这里的 query_len 是原始 UTF-8 字节长度，qlen 是 decode 后的 Rune 数量；
+    // 两者都保留是为了把“分配多大 buffer”和“搜索是否 active”分开计算。
+    const plan = setPlan(query_len, qlen);
+    return .{
+        .update = .{
+            .query_len = qlen,
+            .active = plan.active,
+            .current = plan.current,
+            .inputmode = snapshot.inputmode,
+            .inputlen = snapshot.inputlen,
+            .inputcursor = snapshot.inputcursor,
+            .inputcap = snapshot.inputcap,
+            .nmatches = snapshot.nmatches,
+            .match_cap = snapshot.match_cap,
+        },
+        .effect = .{
+            .alloc_input = false,
+            .realloc_input = false,
+            .alloc_query = true,
+            .realloc_matches = false,
+            .clear_query = true,
+            .clear_matches = false,
+            .refresh_search = true,
+            .redraw = true,
+            .jump = true,
+        },
+        .alloc_len = plan.alloc_len,
     };
 }
 
@@ -855,6 +970,25 @@ test "search commit prompt and match capacity plans" {
     try std.testing.expect(prompt.update.active);
     try std.testing.expect(prompt.effect.alloc_input);
     try std.testing.expect(prompt.effect.redraw);
+
+    const input = inputResult(.{
+        .query_len = 0,
+        .inputmode = true,
+        .inputlen = 3,
+        .inputcursor = 1,
+        .inputcap = 8,
+        .nmatches = 2,
+        .match_cap = 4,
+        .current = 0,
+        .active = true,
+    }, 2);
+    try std.testing.expect(input.effect.refresh_search);
+    try std.testing.expectEqual(@as(usize, 1), input.insert_at);
+    try std.testing.expectEqual(@as(usize, 3), input.move_dst);
+    try std.testing.expectEqual(@as(usize, 1), input.move_src);
+    try std.testing.expectEqual(@as(usize, 3), input.move_len);
+    try std.testing.expectEqual(@as(usize, 5), input.update.inputlen);
+    try std.testing.expectEqual(@as(usize, 3), input.update.inputcursor);
 
     const empty = setPlan(0, 0);
     const active = setPlan(6, 2);

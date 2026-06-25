@@ -421,18 +421,6 @@ typedef struct {
 } ZigSearchDeletePlan;
 
 typedef struct {
-	int run;
-	int grow;
-	size_t inputcap;
-	size_t insert_at;
-	size_t move_dst;
-	size_t move_src;
-	size_t move_len;
-	size_t new_len;
-	size_t new_cursor;
-} ZigSearchInsertPlan;
-
-typedef struct {
 	int kind;
 	size_t start;
 	size_t end;
@@ -480,12 +468,6 @@ enum {
 };
 
 typedef struct {
-	size_t alloc_len;
-	int active;
-	int current;
-} ZigSearchSetPlan;
-
-typedef struct {
 	int query_len;
 	int inputmode;
 	size_t inputlen;
@@ -498,6 +480,7 @@ typedef struct {
 } ZigSearchSnapshot;
 
 typedef struct {
+	int query_len;
 	int active;
 	int current;
 	int inputmode;
@@ -524,6 +507,21 @@ typedef struct {
 	ZigSearchStateUpdate update;
 	ZigSearchEffectPlan effect;
 } ZigSearchPromptResult;
+
+typedef struct {
+	ZigSearchStateUpdate update;
+	ZigSearchEffectPlan effect;
+	size_t insert_at;
+	size_t move_dst;
+	size_t move_src;
+	size_t move_len;
+} ZigSearchInputResult;
+
+typedef struct {
+	ZigSearchStateUpdate update;
+	ZigSearchEffectPlan effect;
+	size_t alloc_len;
+} ZigSearchSetResult;
 
 typedef struct {
 	int kind;
@@ -756,11 +754,11 @@ ZigSearchCursorEditPlan st_searchendedit(int, size_t);
 ZigSearchStateEditPlan st_searchclearinputedit(int);
 ZigSearchStateEditPlan st_searchcommitedit(int, size_t);
 ZigSearchStateEditPlan st_searchcanceledit(int);
-ZigSearchInsertPlan st_searchinsertplan(int, size_t, size_t, size_t, size_t);
 ZigSearchDeletePlan st_searchdeleteplan(size_t, size_t, size_t);
 ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
-ZigSearchSetPlan st_searchsetplan(size_t, int);
 ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
+ZigSearchInputResult st_searchinputupdate(ZigSearchSnapshot, size_t);
+ZigSearchSetResult st_searchsetupdate(ZigSearchSnapshot, size_t, int);
 ZigGetSelExecPlan st_getselexecplan(int, int, int, int, int, int, int, const ZigGlyph *, int);
 size_t st_ttywritecount(size_t, size_t);
 size_t st_ttywritechunk(const unsigned char *, size_t);

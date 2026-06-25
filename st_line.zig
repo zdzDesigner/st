@@ -97,18 +97,6 @@ const ZigSearchDeletePlan = extern struct {
     new_len: usize,
 };
 
-const ZigSearchInsertPlan = extern struct {
-    run: c_int,
-    grow: c_int,
-    inputcap: usize,
-    insert_at: usize,
-    move_dst: usize,
-    move_src: usize,
-    move_len: usize,
-    new_len: usize,
-    new_cursor: usize,
-};
-
 const ZigSearchCursorEditPlan = extern struct {
     kind: c_int,
     start: usize,
@@ -131,13 +119,9 @@ const ZigSearchStateEditPlan = extern struct {
     inputcursor: usize,
 };
 
-const ZigSearchSetPlan = extern struct {
-    alloc_len: usize,
-    active: c_int,
-    current: c_int,
-};
-
 const ZigSearchSnapshot = extern struct {
+    // 这组 extern struct 是 C shim 与 Zig search 领域模型之间的新主边界。
+    // 第一版只承载可复制的状态标量，避免一开始就把内存所有权一起迁过去。
     query_len: c_int,
     inputmode: c_int,
     inputlen: usize,
@@ -150,6 +134,8 @@ const ZigSearchSnapshot = extern struct {
 };
 
 const ZigSearchStateUpdate = extern struct {
+    // Zig 算出的下一状态；C 只负责最终写回到 SearchState。
+    query_len: c_int,
     active: c_int,
     current: c_int,
     inputmode: c_int,
@@ -161,6 +147,7 @@ const ZigSearchStateUpdate = extern struct {
 };
 
 const ZigSearchEffectPlan = extern struct {
+    // effect 只描述副作用类型，不直接表达平台细节。
     alloc_input: c_int,
     realloc_input: c_int,
     alloc_query: c_int,
@@ -175,6 +162,21 @@ const ZigSearchEffectPlan = extern struct {
 const ZigSearchPromptResult = extern struct {
     update: ZigSearchStateUpdate,
     effect: ZigSearchEffectPlan,
+};
+
+const ZigSearchInputResult = extern struct {
+    update: ZigSearchStateUpdate,
+    effect: ZigSearchEffectPlan,
+    insert_at: usize,
+    move_dst: usize,
+    move_src: usize,
+    move_len: usize,
+};
+
+const ZigSearchSetResult = extern struct {
+    update: ZigSearchStateUpdate,
+    effect: ZigSearchEffectPlan,
+    alloc_len: usize,
 };
 
 const ZigExternalPipePlan = extern struct {
@@ -436,21 +438,6 @@ export fn st_searchcanceledit(inputmode: c_int) ZigSearchStateEditPlan {
     return searchStateEditPlan(search.cancelEdit(inputmode != 0));
 }
 
-export fn st_searchinsertplan(inputmode: c_int, inputlen: usize, cursor: usize, inputcap: usize, add_len: usize) ZigSearchInsertPlan {
-    const plan = search.insertPlan(inputmode != 0, inputlen, cursor, inputcap, add_len);
-    return .{
-        .run = boolInt(plan.run),
-        .grow = boolInt(plan.grow),
-        .inputcap = plan.inputcap,
-        .insert_at = plan.insert_at,
-        .move_dst = plan.move_dst,
-        .move_src = plan.move_src,
-        .move_len = plan.move_len,
-        .new_len = plan.new_len,
-        .new_cursor = plan.new_cursor,
-    };
-}
-
 export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
     const plan = search.deletePlan(start, end, inputlen);
     return .{ .run = boolInt(plan.run), .new_len = plan.new_len };
@@ -468,6 +455,7 @@ export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPi
 }
 
 export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResult {
+    // adapter 只做 extern struct <-> 领域 struct 转换，避免把字段写回规则散落在 C。
     const result = search.promptResult(.{
         .query_len = snapshot.query_len,
         .inputmode = snapshot.inputmode != 0,
@@ -481,6 +469,7 @@ export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResu
     });
     return .{
         .update = .{
+            .query_len = result.update.query_len,
             .active = boolInt(result.update.active),
             .current = result.update.current,
             .inputmode = boolInt(result.update.inputmode),
@@ -504,12 +493,86 @@ export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResu
     };
 }
 
-export fn st_searchsetplan(query_len: usize, qlen: c_int) ZigSearchSetPlan {
-    const plan = search.setPlan(query_len, qlen);
+export fn st_searchinputupdate(snapshot: ZigSearchSnapshot, add_len: usize) ZigSearchInputResult {
+    // 输入插入的位移细节由 Zig 计算，C 继续执行真实内存移动。
+    const result = search.inputResult(.{
+        .query_len = snapshot.query_len,
+        .inputmode = snapshot.inputmode != 0,
+        .inputlen = snapshot.inputlen,
+        .inputcursor = snapshot.inputcursor,
+        .inputcap = snapshot.inputcap,
+        .nmatches = snapshot.nmatches,
+        .match_cap = snapshot.match_cap,
+        .current = snapshot.current,
+        .active = snapshot.active != 0,
+    }, add_len);
     return .{
-        .alloc_len = plan.alloc_len,
-        .active = boolInt(plan.active),
-        .current = plan.current,
+        .update = .{
+            .query_len = result.update.query_len,
+            .active = boolInt(result.update.active),
+            .current = result.update.current,
+            .inputmode = boolInt(result.update.inputmode),
+            .inputlen = result.update.inputlen,
+            .inputcursor = result.update.inputcursor,
+            .inputcap = result.update.inputcap,
+            .nmatches = result.update.nmatches,
+            .match_cap = result.update.match_cap,
+        },
+        .effect = .{
+            .alloc_input = boolInt(result.effect.alloc_input),
+            .realloc_input = boolInt(result.effect.realloc_input),
+            .alloc_query = boolInt(result.effect.alloc_query),
+            .realloc_matches = boolInt(result.effect.realloc_matches),
+            .clear_query = boolInt(result.effect.clear_query),
+            .clear_matches = boolInt(result.effect.clear_matches),
+            .refresh_search = boolInt(result.effect.refresh_search),
+            .redraw = boolInt(result.effect.redraw),
+            .jump = boolInt(result.effect.jump),
+        },
+        .insert_at = result.insert_at,
+        .move_dst = result.move_dst,
+        .move_src = result.move_src,
+        .move_len = result.move_len,
+    };
+}
+
+export fn st_searchsetupdate(snapshot: ZigSearchSnapshot, query_len: usize, qlen: c_int) ZigSearchSetResult {
+    // set 路径分两段调用：第一次拿 alloc_len，decode 后再带 qlen 生成最终状态/effect。
+    const result = search.setResult(.{
+        .query_len = snapshot.query_len,
+        .inputmode = snapshot.inputmode != 0,
+        .inputlen = snapshot.inputlen,
+        .inputcursor = snapshot.inputcursor,
+        .inputcap = snapshot.inputcap,
+        .nmatches = snapshot.nmatches,
+        .match_cap = snapshot.match_cap,
+        .current = snapshot.current,
+        .active = snapshot.active != 0,
+    }, query_len, qlen);
+    return .{
+        .update = .{
+            .query_len = result.update.query_len,
+            .active = boolInt(result.update.active),
+            .current = result.update.current,
+            .inputmode = boolInt(result.update.inputmode),
+            .inputlen = result.update.inputlen,
+            .inputcursor = result.update.inputcursor,
+            .inputcap = result.update.inputcap,
+            .nmatches = result.update.nmatches,
+            .match_cap = result.update.match_cap,
+        },
+        .effect = .{
+            .alloc_input = boolInt(result.effect.alloc_input),
+            .realloc_input = boolInt(result.effect.realloc_input),
+            .alloc_query = boolInt(result.effect.alloc_query),
+            .realloc_matches = boolInt(result.effect.realloc_matches),
+            .clear_query = boolInt(result.effect.clear_query),
+            .clear_matches = boolInt(result.effect.clear_matches),
+            .refresh_search = boolInt(result.effect.refresh_search),
+            .redraw = boolInt(result.effect.redraw),
+            .jump = boolInt(result.effect.jump),
+        },
+        .alloc_len = result.alloc_len,
     };
 }
 
@@ -861,25 +924,6 @@ test "search char movement skips utf8 continuation bytes" {
     try std.testing.expectEqual(@as(usize, 4), search.nextChar(input, 1));
 }
 
-test "search insert plan describes buffer edit" {
-    const empty = st_searchinsertplan(1, 0, 0, 8, 2);
-    const plan = st_searchinsertplan(1, 3, 1, 8, 2);
-
-    try std.testing.expectEqual(@as(c_int, 1), empty.run);
-    try std.testing.expectEqual(@as(usize, 0), empty.insert_at);
-    try std.testing.expectEqual(@as(usize, 1), empty.move_len);
-    try std.testing.expectEqual(@as(usize, 2), empty.new_len);
-    try std.testing.expectEqual(@as(usize, 2), empty.new_cursor);
-    try std.testing.expectEqual(@as(c_int, 1), plan.run);
-    try std.testing.expectEqual(@as(c_int, 0), plan.grow);
-    try std.testing.expectEqual(@as(usize, 1), plan.insert_at);
-    try std.testing.expectEqual(@as(usize, 3), plan.move_dst);
-    try std.testing.expectEqual(@as(usize, 1), plan.move_src);
-    try std.testing.expectEqual(@as(usize, 3), plan.move_len);
-    try std.testing.expectEqual(@as(usize, 5), plan.new_len);
-    try std.testing.expectEqual(@as(usize, 3), plan.new_cursor);
-}
-
 test "search cursor edit adapters expose tagged actions" {
     const input = "abc  你好";
     const backspace = st_searchbackspaceedit(input, 1, input.len, input.len);
@@ -949,16 +993,6 @@ test "external pipe line plan handles break skip and write" {
     try std.testing.expectEqual(@as(c_int, 1), st_externalpipeplan(&wrapped, wrapped.len).newline);
 }
 
-test "search set plan keeps allocation nonzero and resets current" {
-    const empty = st_searchsetplan(0, 0);
-    const active = st_searchsetplan(6, 2);
-
-    try std.testing.expectEqual(@as(usize, 1), empty.alloc_len);
-    try std.testing.expectEqual(@as(c_int, 0), empty.active);
-    try std.testing.expectEqual(@as(c_int, 1), active.active);
-    try std.testing.expectEqual(@as(c_int, -1), active.current);
-}
-
 test "search prompt update resets input and requests redraw" {
     const result = st_searchpromptupdate(.{
         .query_len = 0,
@@ -977,6 +1011,52 @@ test "search prompt update resets input and requests redraw" {
     try std.testing.expectEqual(@as(usize, 0), result.update.inputcursor);
     try std.testing.expectEqual(@as(usize, 64), result.update.inputcap);
     try std.testing.expectEqual(@as(c_int, 1), result.effect.alloc_input);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.redraw);
+}
+
+test "search input update describes buffer edit and refresh" {
+    const result = st_searchinputupdate(.{
+        .query_len = 0,
+        .inputmode = 1,
+        .inputlen = 3,
+        .inputcursor = 1,
+        .inputcap = 8,
+        .nmatches = 2,
+        .match_cap = 4,
+        .current = 0,
+        .active = 1,
+    }, 2);
+
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.refresh_search);
+    try std.testing.expectEqual(@as(usize, 1), result.insert_at);
+    try std.testing.expectEqual(@as(usize, 3), result.move_dst);
+    try std.testing.expectEqual(@as(usize, 1), result.move_src);
+    try std.testing.expectEqual(@as(usize, 3), result.move_len);
+    try std.testing.expectEqual(@as(usize, 5), result.update.inputlen);
+    try std.testing.expectEqual(@as(usize, 3), result.update.inputcursor);
+}
+
+test "search set update requests query alloc and refresh" {
+    const result = st_searchsetupdate(.{
+        .query_len = 1,
+        .inputmode = 1,
+        .inputlen = 3,
+        .inputcursor = 2,
+        .inputcap = 8,
+        .nmatches = 2,
+        .match_cap = 4,
+        .current = 1,
+        .active = 0,
+    }, 6, 2);
+
+    try std.testing.expectEqual(@as(usize, 6), result.alloc_len);
+    try std.testing.expectEqual(@as(c_int, 2), result.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 1), result.update.active);
+    try std.testing.expectEqual(@as(c_int, -1), result.update.current);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.alloc_query);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.clear_query);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.jump);
     try std.testing.expectEqual(@as(c_int, 1), result.effect.redraw);
 }
 
