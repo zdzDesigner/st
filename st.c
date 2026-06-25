@@ -521,19 +521,36 @@ searchprev(const Arg *arg)
 void
 searchprompt(const Arg *arg)
 {
-	ZigSearchPromptPlan plan;
+	ZigSearchPromptResult result;
+	ZigSearchSnapshot snapshot;
 
 	(void)arg;
-	plan = st_searchpromptplan(search.input != NULL, search.inputcap);
-	search.inputmode = plan.inputmode;
-	search.inputlen = plan.inputlen;
-	search.inputcursor = plan.inputcursor;
-	if (plan.alloc) {
-		search.inputcap = plan.inputcap;
+	snapshot = (ZigSearchSnapshot){
+		.query_len = search.qlen,
+		.inputmode = search.inputmode,
+		.inputlen = search.inputlen,
+		.inputcursor = search.inputcursor,
+		.inputcap = search.inputcap,
+		.nmatches = search.nmatches,
+		.match_cap = search.cap,
+		.current = search.current,
+		.active = search.active,
+	};
+	result = st_searchpromptupdate(snapshot);
+	search.active = result.update.active;
+	search.current = result.update.current;
+	search.inputmode = result.update.inputmode;
+	search.inputlen = result.update.inputlen;
+	search.inputcursor = result.update.inputcursor;
+	search.inputcap = result.update.inputcap;
+	search.nmatches = result.update.nmatches;
+	search.cap = result.update.match_cap;
+	if (result.effect.alloc_input) {
 		search.input = xmalloc(search.inputcap);
 	}
 	search.input[0] = '\0';
-	redraw();
+	if (result.effect.redraw)
+		redraw();
 }
 
 void

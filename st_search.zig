@@ -82,6 +82,46 @@ pub const PromptPlan = struct {
     inputcap: usize,
 };
 
+pub const SearchSnapshot = struct {
+    query_len: i32,
+    inputmode: bool,
+    inputlen: usize,
+    inputcursor: usize,
+    inputcap: usize,
+    nmatches: i32,
+    match_cap: i32,
+    current: i32,
+    active: bool,
+};
+
+pub const SearchStateUpdate = struct {
+    active: bool,
+    current: i32,
+    inputmode: bool,
+    inputlen: usize,
+    inputcursor: usize,
+    inputcap: usize,
+    nmatches: i32,
+    match_cap: i32,
+};
+
+pub const SearchEffectPlan = struct {
+    alloc_input: bool,
+    realloc_input: bool,
+    alloc_query: bool,
+    realloc_matches: bool,
+    clear_query: bool,
+    clear_matches: bool,
+    refresh_search: bool,
+    redraw: bool,
+    jump: bool,
+};
+
+pub const SearchPromptResult = struct {
+    update: SearchStateUpdate,
+    effect: SearchEffectPlan,
+};
+
 pub const SetPlan = struct {
     alloc_len: usize,
     active: bool,
@@ -576,6 +616,33 @@ pub fn promptPlan(has_input: bool, inputcap: usize) PromptPlan {
     };
 }
 
+pub fn promptResult(snapshot: SearchSnapshot) SearchPromptResult {
+    const plan = promptPlan(snapshot.inputcap != 0, snapshot.inputcap);
+    return .{
+        .update = .{
+            .active = snapshot.active,
+            .current = snapshot.current,
+            .inputmode = plan.inputmode,
+            .inputlen = plan.inputlen,
+            .inputcursor = plan.inputcursor,
+            .inputcap = plan.inputcap,
+            .nmatches = snapshot.nmatches,
+            .match_cap = snapshot.match_cap,
+        },
+        .effect = .{
+            .alloc_input = plan.alloc,
+            .realloc_input = false,
+            .alloc_query = false,
+            .realloc_matches = false,
+            .clear_query = false,
+            .clear_matches = false,
+            .refresh_search = false,
+            .redraw = true,
+            .jump = false,
+        },
+    };
+}
+
 pub fn setPlan(query_len: usize, qlen: i32) SetPlan {
     return .{
         .alloc_len = if (query_len != 0) query_len else 1,
@@ -768,6 +835,26 @@ test "search commit prompt and match capacity plans" {
     try std.testing.expectEqual(@as(usize, 64), missing.inputcap);
     try std.testing.expect(!existing.alloc);
     try std.testing.expectEqual(@as(usize, 128), existing.inputcap);
+
+    const prompt = promptResult(.{
+        .query_len = 0,
+        .inputmode = false,
+        .inputlen = 4,
+        .inputcursor = 2,
+        .inputcap = 0,
+        .nmatches = 3,
+        .match_cap = 8,
+        .current = 1,
+        .active = true,
+    });
+    try std.testing.expect(prompt.update.inputmode);
+    try std.testing.expectEqual(@as(usize, 0), prompt.update.inputlen);
+    try std.testing.expectEqual(@as(usize, 0), prompt.update.inputcursor);
+    try std.testing.expectEqual(@as(usize, 64), prompt.update.inputcap);
+    try std.testing.expectEqual(@as(i32, 1), prompt.update.current);
+    try std.testing.expect(prompt.update.active);
+    try std.testing.expect(prompt.effect.alloc_input);
+    try std.testing.expect(prompt.effect.redraw);
 
     const empty = setPlan(0, 0);
     const active = setPlan(6, 2);

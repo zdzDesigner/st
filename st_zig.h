@@ -486,12 +486,44 @@ typedef struct {
 } ZigSearchSetPlan;
 
 typedef struct {
+	int query_len;
 	int inputmode;
 	size_t inputlen;
 	size_t inputcursor;
-	int alloc;
 	size_t inputcap;
-} ZigSearchPromptPlan;
+	int nmatches;
+	int match_cap;
+	int current;
+	int active;
+} ZigSearchSnapshot;
+
+typedef struct {
+	int active;
+	int current;
+	int inputmode;
+	size_t inputlen;
+	size_t inputcursor;
+	size_t inputcap;
+	int nmatches;
+	int match_cap;
+} ZigSearchStateUpdate;
+
+typedef struct {
+	int alloc_input;
+	int realloc_input;
+	int alloc_query;
+	int realloc_matches;
+	int clear_query;
+	int clear_matches;
+	int refresh_search;
+	int redraw;
+	int jump;
+} ZigSearchEffectPlan;
+
+typedef struct {
+	ZigSearchStateUpdate update;
+	ZigSearchEffectPlan effect;
+} ZigSearchPromptResult;
 
 typedef struct {
 	int kind;
@@ -728,7 +760,7 @@ ZigSearchInsertPlan st_searchinsertplan(int, size_t, size_t, size_t, size_t);
 ZigSearchDeletePlan st_searchdeleteplan(size_t, size_t, size_t);
 ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
 ZigSearchSetPlan st_searchsetplan(size_t, int);
-ZigSearchPromptPlan st_searchpromptplan(int, size_t);
+ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
 ZigGetSelExecPlan st_getselexecplan(int, int, int, int, int, int, int, const ZigGlyph *, int);
 size_t st_ttywritecount(size_t, size_t);
 size_t st_ttywritechunk(const unsigned char *, size_t);

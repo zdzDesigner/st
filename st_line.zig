@@ -137,12 +137,44 @@ const ZigSearchSetPlan = extern struct {
     current: c_int,
 };
 
-const ZigSearchPromptPlan = extern struct {
+const ZigSearchSnapshot = extern struct {
+    query_len: c_int,
     inputmode: c_int,
     inputlen: usize,
     inputcursor: usize,
-    alloc: c_int,
     inputcap: usize,
+    nmatches: c_int,
+    match_cap: c_int,
+    current: c_int,
+    active: c_int,
+};
+
+const ZigSearchStateUpdate = extern struct {
+    active: c_int,
+    current: c_int,
+    inputmode: c_int,
+    inputlen: usize,
+    inputcursor: usize,
+    inputcap: usize,
+    nmatches: c_int,
+    match_cap: c_int,
+};
+
+const ZigSearchEffectPlan = extern struct {
+    alloc_input: c_int,
+    realloc_input: c_int,
+    alloc_query: c_int,
+    realloc_matches: c_int,
+    clear_query: c_int,
+    clear_matches: c_int,
+    refresh_search: c_int,
+    redraw: c_int,
+    jump: c_int,
+};
+
+const ZigSearchPromptResult = extern struct {
+    update: ZigSearchStateUpdate,
+    effect: ZigSearchEffectPlan,
 };
 
 const ZigExternalPipePlan = extern struct {
@@ -435,14 +467,40 @@ export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPi
     };
 }
 
-export fn st_searchpromptplan(has_input: c_int, inputcap: usize) ZigSearchPromptPlan {
-    const plan = search.promptPlan(has_input != 0, inputcap);
+export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResult {
+    const result = search.promptResult(.{
+        .query_len = snapshot.query_len,
+        .inputmode = snapshot.inputmode != 0,
+        .inputlen = snapshot.inputlen,
+        .inputcursor = snapshot.inputcursor,
+        .inputcap = snapshot.inputcap,
+        .nmatches = snapshot.nmatches,
+        .match_cap = snapshot.match_cap,
+        .current = snapshot.current,
+        .active = snapshot.active != 0,
+    });
     return .{
-        .inputmode = boolInt(plan.inputmode),
-        .inputlen = plan.inputlen,
-        .inputcursor = plan.inputcursor,
-        .alloc = boolInt(plan.alloc),
-        .inputcap = plan.inputcap,
+        .update = .{
+            .active = boolInt(result.update.active),
+            .current = result.update.current,
+            .inputmode = boolInt(result.update.inputmode),
+            .inputlen = result.update.inputlen,
+            .inputcursor = result.update.inputcursor,
+            .inputcap = result.update.inputcap,
+            .nmatches = result.update.nmatches,
+            .match_cap = result.update.match_cap,
+        },
+        .effect = .{
+            .alloc_input = boolInt(result.effect.alloc_input),
+            .realloc_input = boolInt(result.effect.realloc_input),
+            .alloc_query = boolInt(result.effect.alloc_query),
+            .realloc_matches = boolInt(result.effect.realloc_matches),
+            .clear_query = boolInt(result.effect.clear_query),
+            .clear_matches = boolInt(result.effect.clear_matches),
+            .refresh_search = boolInt(result.effect.refresh_search),
+            .redraw = boolInt(result.effect.redraw),
+            .jump = boolInt(result.effect.jump),
+        },
     };
 }
 
@@ -901,15 +959,25 @@ test "search set plan keeps allocation nonzero and resets current" {
     try std.testing.expectEqual(@as(c_int, -1), active.current);
 }
 
-test "search prompt plan allocates missing input buffer" {
-    const missing = st_searchpromptplan(0, 0);
-    const existing = st_searchpromptplan(1, 128);
+test "search prompt update resets input and requests redraw" {
+    const result = st_searchpromptupdate(.{
+        .query_len = 0,
+        .inputmode = 0,
+        .inputlen = 5,
+        .inputcursor = 3,
+        .inputcap = 0,
+        .nmatches = 2,
+        .match_cap = 4,
+        .current = 1,
+        .active = 1,
+    });
 
-    try std.testing.expectEqual(@as(c_int, 1), missing.inputmode);
-    try std.testing.expectEqual(@as(c_int, 1), missing.alloc);
-    try std.testing.expectEqual(@as(usize, 64), missing.inputcap);
-    try std.testing.expectEqual(@as(c_int, 0), existing.alloc);
-    try std.testing.expectEqual(@as(usize, 128), existing.inputcap);
+    try std.testing.expectEqual(@as(c_int, 1), result.update.inputmode);
+    try std.testing.expectEqual(@as(usize, 0), result.update.inputlen);
+    try std.testing.expectEqual(@as(usize, 0), result.update.inputcursor);
+    try std.testing.expectEqual(@as(usize, 64), result.update.inputcap);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.alloc_input);
+    try std.testing.expectEqual(@as(c_int, 1), result.effect.redraw);
 }
 
 test "get selection exec plan handles regular multiline" {
