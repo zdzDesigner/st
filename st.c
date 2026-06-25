@@ -236,12 +236,18 @@ static void searchscan(void);
 static void searchset(const char *);
 static void searchscanline(Line, int, int);
 static Line searchhistline(int);
-static void searchapplyedit(ZigSearchCursorEditPlan, int);
-static void searchapplystateedit(ZigSearchStateEditPlan);
+static ZigSearchSnapshot searchsnapshot(void);
+static void searchapplyupdate(ZigSearchStateUpdate);
+static void searchresetstate(void);
+static void searchapplycursor(int);
+static void searchapplystate(int);
 static void searchjump(void);
 static size_t searchprevchar(size_t);
 static size_t searchnextchar(size_t);
 static void searchdelete(size_t, size_t);
+
+static void selsetends(int, int, int, int);
+static void selsetbounds(ZigSelBounds);
 
 static void selnormalize(void);
 static void selscroll(int, int);
@@ -357,27 +363,45 @@ tlinehist(int y)
 void
 selstart(int col, int row, int snap)
 {
-	ZigSelStartPlan plan;
+	ZigSelectionStateResult result;
+	ZigSelectionSnapshot snapshot;
 
 	selclear();
-	plan = st_selstartplan(col, row, snap, IS_SET(MODE_ALTSCREEN));
-	sel.mode = plan.mode;
-	sel.type = plan.sel_type;
-	sel.alt = plan.alt;
-	sel.snap = plan.snap;
-	sel.oe.x = sel.ob.x = plan.x;
-	sel.oe.y = sel.ob.y = plan.y;
-	selnormalize();
-
-	sel.mode = plan.final_mode;
-	tsetdirt(sel.nb.y, sel.ne.y);
+	snapshot = (ZigSelectionSnapshot){
+		.mode = sel.mode,
+		.selection_type = sel.type,
+		.alt = sel.alt,
+		.snap = sel.snap,
+		.ob_x = sel.ob.x,
+		.ob_y = sel.ob.y,
+		.oe_x = sel.oe.x,
+		.oe_y = sel.oe.y,
+		.nb_x = sel.nb.x,
+		.nb_y = sel.nb.y,
+		.ne_x = sel.ne.x,
+		.ne_y = sel.ne.y,
+	};
+	result = st_selstartupdate(snapshot, col, row, snap, IS_SET(MODE_ALTSCREEN));
+	sel.mode = result.update.mode;
+	sel.type = result.update.selection_type;
+	sel.alt = result.update.alt;
+	sel.snap = result.update.snap;
+	selsetends(result.update.ob_x, result.update.ob_y, result.update.oe_x, result.update.oe_y);
+	selsetbounds((ZigSelBounds){
+		.nb_x = result.update.nb_x,
+		.nb_y = result.update.nb_y,
+		.ne_x = result.update.ne_x,
+		.ne_y = result.update.ne_y,
+	});
+	if (result.effect.dirty)
+		tsetdirt(result.effect.top, result.effect.bot);
 }
 
 void
 selextend(int col, int row, int type, int done)
 {
-	int oldey, oldex, oldsby, oldsey, oldtype;
-	ZigSelExtendPlan plan;
+	ZigSelectionStateResult result;
+	ZigSelectionSnapshot snapshot;
 
 	if (sel.mode == SEL_IDLE)
 		return;
@@ -385,49 +409,87 @@ selextend(int col, int row, int type, int done)
 		selclear();
 		return;
 	}
-
-	oldey = sel.oe.y;
-	oldex = sel.oe.x;
-	oldsby = sel.nb.y;
-	oldsey = sel.ne.y;
-	oldtype = sel.type;
-
-	sel.oe.x = col;
-	sel.oe.y = row;
-	selnormalize();
-	sel.type = type;
-
-	plan = st_selextendplan(oldex, oldey, oldtype, oldsby, oldsey,
-		sel.oe.x, sel.oe.y, sel.type, sel.nb.y, sel.ne.y,
-		sel.mode, done);
-	if (plan.dirty)
-		tsetdirt(plan.top, plan.bot);
-
-	sel.mode = plan.mode;
+	snapshot = (ZigSelectionSnapshot){
+		.mode = sel.mode,
+		.selection_type = sel.type,
+		.alt = sel.alt,
+		.snap = sel.snap,
+		.ob_x = sel.ob.x,
+		.ob_y = sel.ob.y,
+		.oe_x = sel.oe.x,
+		.oe_y = sel.oe.y,
+		.nb_x = sel.nb.x,
+		.nb_y = sel.nb.y,
+		.ne_x = sel.ne.x,
+		.ne_y = sel.ne.y,
+	};
+	result = st_selextendupdate(snapshot, col, row, type, done);
+	sel.mode = result.update.mode;
+	sel.type = result.update.selection_type;
+	sel.alt = result.update.alt;
+	sel.snap = result.update.snap;
+	selsetends(result.update.ob_x, result.update.ob_y, result.update.oe_x, result.update.oe_y);
+	selsetbounds((ZigSelBounds){
+		.nb_x = result.update.nb_x,
+		.nb_y = result.update.nb_y,
+		.ne_x = result.update.ne_x,
+		.ne_y = result.update.ne_y,
+	});
+	if (result.effect.dirty)
+		tsetdirt(result.effect.top, result.effect.bot);
 }
 
 void
 selnormalize(void)
 {
-	ZigSelBounds bounds;
+	ZigSelectionStateResult result;
+	ZigSelectionSnapshot snapshot;
+	int start_len, end_len;
 
-	bounds = st_selnormalizeplan(sel.type, sel.ob.x, sel.ob.y,
-		sel.oe.x, sel.oe.y);
+	start_len = tlinelen(sel.ob.y < sel.oe.y ? sel.ob.y : sel.oe.y);
+	end_len = tlinelen(sel.ob.y < sel.oe.y ? sel.oe.y : sel.ob.y);
+	snapshot = (ZigSelectionSnapshot){
+		.mode = sel.mode,
+		.selection_type = sel.type,
+		.alt = sel.alt,
+		.snap = sel.snap,
+		.ob_x = sel.ob.x,
+		.ob_y = sel.ob.y,
+		.oe_x = sel.oe.x,
+		.oe_y = sel.oe.y,
+		.nb_x = sel.nb.x,
+		.nb_y = sel.nb.y,
+		.ne_x = sel.ne.x,
+		.ne_y = sel.ne.y,
+	};
+	result = st_selnormalizeupdate(snapshot, term.col, start_len, end_len);
+	selsetbounds((ZigSelBounds){
+		.nb_x = result.update.nb_x,
+		.nb_y = result.update.nb_y,
+		.ne_x = result.update.ne_x,
+		.ne_y = result.update.ne_y,
+	});
+
+	selsnap(&sel.nb.x, &sel.nb.y, -1);
+	selsnap(&sel.ne.x, &sel.ne.y, +1);
+}
+
+static void
+selsetends(int ob_x, int ob_y, int oe_x, int oe_y)
+{
+	sel.ob.x = ob_x;
+	sel.ob.y = ob_y;
+	sel.oe.x = oe_x;
+	sel.oe.y = oe_y;
+}
+
+static void
+selsetbounds(ZigSelBounds bounds)
+{
 	sel.nb.x = bounds.nb_x;
 	sel.nb.y = bounds.nb_y;
 	sel.ne.x = bounds.ne_x;
 	sel.ne.y = bounds.ne_y;
-
-	selsnap(&sel.nb.x, &sel.nb.y, -1);
-	selsnap(&sel.ne.x, &sel.ne.y, +1);
-
-	/* expand selection over line breaks */
-	if (sel.type == SEL_RECTANGULAR)
-		return;
-	bounds = st_selnormalizecolsplan(sel.type, sel.nb.x, sel.ne.x,
-		tlinelen(sel.nb.y), tlinelen(sel.ne.y), term.col);
-	sel.nb.x = bounds.nb_x;
-	sel.ne.x = bounds.ne_x;
 }
 
 int
@@ -456,11 +518,7 @@ void
 searchclear(const Arg *arg)
 {
 	(void)arg;
-	free(search.query);
-	free(search.input);
-	free(search.matches);
-	memset(&search, 0, sizeof(search));
-	search.current = -1;
+	searchresetstate();
 	redraw();
 }
 
@@ -522,32 +580,10 @@ void
 searchprompt(const Arg *arg)
 {
 	ZigSearchPromptResult result;
-	ZigSearchSnapshot snapshot;
 
 	(void)arg;
-	/* 先把 search 元信息打平成快照，再交给 Zig 决定新状态和副作用。 */
-	snapshot = (ZigSearchSnapshot){
-		.query_len = search.qlen,
-		.inputmode = search.inputmode,
-		.inputlen = search.inputlen,
-		.inputcursor = search.inputcursor,
-		.inputcap = search.inputcap,
-		.nmatches = search.nmatches,
-		.match_cap = search.cap,
-		.current = search.current,
-		.active = search.active,
-	};
-	result = st_searchpromptupdate(snapshot);
-	/* 这一段是 snapshot -> update 的标准写回模板：
-	 * Zig 决定 search 元信息的新值，C 只负责落回真实状态结构。 */
-	search.active = result.update.active;
-	search.current = result.update.current;
-	search.inputmode = result.update.inputmode;
-	search.inputlen = result.update.inputlen;
-	search.inputcursor = result.update.inputcursor;
-	search.inputcap = result.update.inputcap;
-	search.nmatches = result.update.nmatches;
-	search.cap = result.update.match_cap;
+	result = st_searchpromptupdate(searchsnapshot());
+	searchapplyupdate(result.update);
 	if (result.effect.alloc_input) {
 		search.input = xmalloc(search.inputcap);
 	}
@@ -560,32 +596,13 @@ void
 searchinput(const char *text, size_t len)
 {
 	ZigSearchInputResult result;
-	ZigSearchSnapshot snapshot;
 
-	snapshot = (ZigSearchSnapshot){
-		.query_len = search.qlen,
-		.inputmode = search.inputmode,
-		.inputlen = search.inputlen,
-		.inputcursor = search.inputcursor,
-		.inputcap = search.inputcap,
-		.nmatches = search.nmatches,
-		.match_cap = search.cap,
-		.current = search.current,
-		.active = search.active,
-	};
-	result = st_searchinputupdate(snapshot, len);
+	result = st_searchinputupdate(searchsnapshot(), len);
 	if (!result.effect.refresh_search)
 		return;
 
 	/* Zig 只规划输入视图更新，真正的 realloc/memmove/memcpy 仍在 C shim 执行。 */
-	search.active = result.update.active;
-	search.current = result.update.current;
-	search.inputmode = result.update.inputmode;
-	search.inputlen = result.update.inputlen;
-	search.inputcursor = result.update.inputcursor;
-	search.inputcap = result.update.inputcap;
-	search.nmatches = result.update.nmatches;
-	search.cap = result.update.match_cap;
+	searchapplyupdate(result.update);
 
 	if (result.effect.realloc_input) {
 		search.input = xrealloc(search.input, search.inputcap);
@@ -603,77 +620,104 @@ searchinput(const char *text, size_t len)
 void
 searchbackspace(void)
 {
-	searchapplyedit(st_searchbackspaceedit((const unsigned char *)searchinputtext(),
-		search.inputmode, search.inputlen, search.inputcursor), 1);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_BACKSPACE);
 }
 
 void
 searchdeleteforward(void)
 {
-	searchapplyedit(st_searchdeleteforwardedit((const unsigned char *)searchinputtext(),
-		search.inputmode, search.inputlen, search.inputcursor), 1);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_DELETE_FORWARD);
 }
 
 void
 searchdeleteword(void)
 {
-	searchapplyedit(st_searchdeletewordedit((const unsigned char *)searchinputtext(),
-		search.inputmode, search.inputlen, search.inputcursor), 1);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_DELETE_WORD);
 }
 
 void
 searchclearinput(void)
 {
-	searchapplystateedit(st_searchclearinputedit(search.inputmode));
+	searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_CLEAR_INPUT);
 }
 
 void
 searchmoveleft(void)
 {
-	searchapplyedit(st_searchmoveleftedit((const unsigned char *)searchinputtext(),
-		search.inputmode, search.inputlen, search.inputcursor), 0);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_MOVE_LEFT);
 }
 
 void
 searchmoveright(void)
 {
-	searchapplyedit(st_searchmoverightedit((const unsigned char *)searchinputtext(),
-		search.inputmode, search.inputlen, search.inputcursor), 0);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_MOVE_RIGHT);
 }
 
 void
 searchhome(void)
 {
-	searchapplyedit(st_searchhomeedit(search.inputmode), 0);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_HOME);
 }
 
 void
 searchend(void)
 {
-	searchapplyedit(st_searchendedit(search.inputmode, search.inputlen), 0);
+	searchapplycursor(ST_ZIG_SEARCH_CURSOR_ACTION_END);
 }
 
-void
-searchapplyedit(ZigSearchCursorEditPlan plan, int refresh_search)
+static ZigSearchSnapshot
+searchsnapshot(void)
 {
-	/* 这一层把 Zig 返回的“编辑意图”翻译成真实状态写回。
-	 * delete 需要先改 buffer 再改 cursor；move 只需要改 cursor。
-	 * refresh_search 为真时，说明这次编辑改变了查询内容，必须重新跑 searchset。 */
-	switch (plan.kind) {
-	case ST_ZIG_SEARCH_CURSOR_NONE:
-		return;
-	case ST_ZIG_SEARCH_CURSOR_DELETE:
-		searchdelete(plan.start, plan.end);
-		search.inputcursor = plan.cursor;
-		break;
-	case ST_ZIG_SEARCH_CURSOR_MOVE:
-		search.inputcursor = plan.cursor;
-		break;
-	}
+	return (ZigSearchSnapshot){
+		.query_len = search.qlen,
+		.inputmode = search.inputmode,
+		.inputlen = search.inputlen,
+		.inputcursor = search.inputcursor,
+		.inputcap = search.inputcap,
+		.nmatches = search.nmatches,
+		.match_cap = search.cap,
+		.current = search.current,
+		.active = search.active,
+	};
+}
 
-	if (refresh_search)
+static void
+searchapplyupdate(ZigSearchStateUpdate update)
+{
+	search.qlen = update.query_len;
+	search.active = update.active;
+	search.current = update.current;
+	search.inputmode = update.inputmode;
+	search.inputlen = update.inputlen;
+	search.inputcursor = update.inputcursor;
+	search.inputcap = update.inputcap;
+	search.nmatches = update.nmatches;
+	search.cap = update.match_cap;
+}
+
+static void
+searchresetstate(void)
+{
+	free(search.query);
+	free(search.input);
+	free(search.matches);
+	memset(&search, 0, sizeof(search));
+	search.current = -1;
+}
+
+static void
+searchapplycursor(int action)
+{
+	ZigSearchCursorResult result;
+
+	result = st_searchcursorupdate(searchsnapshot(),
+		(const unsigned char *)searchinputtext(), action);
+	if (result.delete_start != result.delete_end)
+		searchdelete(result.delete_start, result.delete_end);
+	searchapplyupdate(result.update);
+	if (result.effect.refresh_search)
 		searchset(search.input);
-	else
+	else if (result.effect.redraw)
 		redraw();
 }
 
@@ -718,43 +762,40 @@ searchdelete(size_t start, size_t end)
 void
 searchcommit(void)
 {
-	searchapplystateedit(st_searchcommitedit(search.inputmode, search.inputlen));
+	searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_COMMIT);
 }
 
 void
 searchcancel(void)
 {
-	searchapplystateedit(st_searchcanceledit(search.inputmode));
+	searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_CANCEL);
 }
 
-void
-searchapplystateedit(ZigSearchStateEditPlan plan)
+static void
+searchapplystate(int action)
 {
-	/* state edit 处理的是更粗粒度的状态迁移：清空输入、提交、取消。
-	 * 这类动作往往伴随后续 searchset/searchclear/redraw，因此集中在这里落回 C 状态。 */
-	switch (plan.kind) {
-	case ST_ZIG_SEARCH_STATE_NONE:
-		return;
-	case ST_ZIG_SEARCH_STATE_CLEAR_INPUT:
-		search.inputlen = plan.inputlen;
-		search.inputcursor = plan.inputcursor;
-		if (search.input)
-			search.input[0] = '\0';
-		searchset(search.input);
-		break;
-	case ST_ZIG_SEARCH_STATE_COMMIT_CLEAR:
-		search.inputmode = 0;
-		searchclear(NULL);
-		break;
-	case ST_ZIG_SEARCH_STATE_COMMIT_SET:
-		search.inputmode = 0;
-		searchset(search.input);
-		break;
-	case ST_ZIG_SEARCH_STATE_CANCEL:
-		search.inputmode = 0;
-		redraw();
-		break;
+	ZigSearchStateResult result;
+
+	result = st_searchstateupdate(searchsnapshot(), action);
+	searchapplyupdate(result.update);
+	if (result.effect.clear_query) {
+		free(search.query);
+		search.query = NULL;
 	}
+	if (result.effect.clear_matches) {
+		free(search.matches);
+		search.matches = NULL;
+	}
+	if (search.input && search.inputlen == 0)
+		search.input[0] = '\0';
+	if (result.effect.clear_query && search.inputcap == 0) {
+		free(search.input);
+		search.input = NULL;
+	}
+	if (result.effect.refresh_search)
+		searchset(search.input ? search.input : "");
+	else if (result.effect.redraw)
+		redraw();
 }
 
 void
@@ -765,22 +806,10 @@ searchset(const char *query)
 	int qlen = 0;
 	Rune *runes;
 	ZigSearchSetResult result;
-	ZigSearchSnapshot snapshot;
 
 	len = strlen(query);
 	/* 第一次调用只拿分配尺度，UTF-8 decode 仍由 C 执行，避免这一批同时迁资源和解码。 */
-	snapshot = (ZigSearchSnapshot){
-		.query_len = search.qlen,
-		.inputmode = search.inputmode,
-		.inputlen = search.inputlen,
-		.inputcursor = search.inputcursor,
-		.inputcap = search.inputcap,
-		.nmatches = search.nmatches,
-		.match_cap = search.cap,
-		.current = search.current,
-		.active = search.active,
-	};
-	result = st_searchsetupdate(snapshot, len, 0);
+	result = st_searchsetupdate(searchsnapshot(), len, 0);
 	runes = xmalloc(result.alloc_len * sizeof(*runes));
 	for (off = 0; off < len; off += step) {
 		step = utf8decode(query + off, &rune, len - off);
@@ -789,21 +818,13 @@ searchset(const char *query)
 		runes[qlen++] = rune;
 	}
 
-	result = st_searchsetupdate(snapshot, len, qlen);
+	result = st_searchsetupdate(searchsnapshot(), len, qlen);
 	/* 第二次调用基于 decoded qlen 生成最终状态和 effect，C 只负责执行释放/扫描/跳转。 */
 	if (result.effect.clear_query)
 		free(search.query);
 	/* query 指针本体仍由 C 持有，但 active/current/qlen 等“状态决策”已交给 Zig。 */
 	search.query = runes;
-	search.qlen = result.update.query_len;
-	search.active = result.update.active;
-	search.current = result.update.current;
-	search.inputmode = result.update.inputmode;
-	search.inputlen = result.update.inputlen;
-	search.inputcursor = result.update.inputcursor;
-	search.inputcap = result.update.inputcap;
-	search.nmatches = result.update.nmatches;
-	search.cap = result.update.match_cap;
+	searchapplyupdate(result.update);
 	if (result.effect.refresh_search)
 		/* 当前 effect 语义里，refresh_search 表示“需要重新计算匹配集合”。 */
 		searchscan();
@@ -818,10 +839,13 @@ void
 searchscan(void)
 {
 	int y, scr, oldcurrent;
+	ZigSearchScanResult result;
 
 	/* scan 会重建整份 matches 数组。
 	 * 先记住旧 current，扫描结束后再决定保留旧索引、回退到 0，还是置为 -1。 */
 	oldcurrent = search.current;
+	if (search.matches && search.cap > 0)
+		search.nmatches = 0;
 	search.nmatches = 0;
 	if (!search.active || search.qlen <= 0)
 		return;
@@ -833,14 +857,14 @@ searchscan(void)
 		searchscanline(searchhistline(scr), scr, 0);
 	}
 
-	/* matches 重新生成后，current 需要重新归一化到稳定范围，
-	 * 避免旧索引越界或在“无匹配”时继续指向旧值。 */
-	if (search.nmatches == 0)
-		search.current = -1;
-	else if (oldcurrent >= 0 && oldcurrent < search.nmatches)
-		search.current = oldcurrent;
-	else
-		search.current = 0;
+	/* matches 重新生成后的 current/nmatches 收口也交给 Zig，
+	 * C 只保留数组写入和最终状态落回。 */
+	result = st_searchscanupdate(searchsnapshot(), search.nmatches, oldcurrent);
+	if (result.effect.clear_matches) {
+		free(search.matches);
+		search.matches = NULL;
+	}
+	searchapplyupdate(result.update);
 }
 
 void
@@ -881,7 +905,7 @@ void
 searchjump(void)
 {
 	SearchMatch *match;
-	int nextscr;
+	ZigSearchJumpPlan plan;
 
 	/* jump 不负责重算匹配，只消费当前 search.current。
 	 * 如果当前匹配在不同的 scrollback 层，就把 term.scr 切过去并整体标脏。 */
@@ -889,9 +913,10 @@ searchjump(void)
 		return;
 
 	match = &search.matches[search.current];
-	nextscr = (term.scr != match->scr) ? match->scr : term.scr;
-	if (term.scr != nextscr) {
-		term.scr = nextscr;
+	plan = st_searchjumpplan(search.active, search.current, search.nmatches,
+		term.scr, match->scr);
+	if (plan.run && term.scr != plan.new_scr) {
+		term.scr = plan.new_scr;
 		tfulldirt();
 	}
 }
@@ -1531,16 +1556,38 @@ tscrollup(int orig, int n, int copyhist)
 void
 selscroll(int orig, int n)
 {
-	ZigSelScrollPlan plan;
+	ZigSelectionStateResult result;
+	ZigSelectionSnapshot snapshot;
 
-	plan = st_selscrollplan(sel.ob.x, sel.ob.y, sel.oe.y,
-		sel.nb.y, sel.ne.y, orig, term.top, term.bot, n);
-	if (plan.action == ST_ZIG_SEL_SCROLL_CLEAR) {
+	snapshot = (ZigSelectionSnapshot){
+		.mode = sel.mode,
+		.selection_type = sel.type,
+		.alt = sel.alt,
+		.snap = sel.snap,
+		.ob_x = sel.ob.x,
+		.ob_y = sel.ob.y,
+		.oe_x = sel.oe.x,
+		.oe_y = sel.oe.y,
+		.nb_x = sel.nb.x,
+		.nb_y = sel.nb.y,
+		.ne_x = sel.ne.x,
+		.ne_y = sel.ne.y,
+	};
+	result = st_selscrollupdate(snapshot, orig, term.top, term.bot, n);
+	if (result.effect.clear) {
 		selclear();
-	} else if (plan.action == ST_ZIG_SEL_SCROLL_NORMALIZE) {
-		sel.ob.y = plan.ob_y;
-		sel.oe.y = plan.oe_y;
-		selnormalize();
+	} else {
+		sel.mode = result.update.mode;
+		sel.type = result.update.selection_type;
+		sel.alt = result.update.alt;
+		sel.snap = result.update.snap;
+		selsetends(result.update.ob_x, result.update.ob_y, result.update.oe_x, result.update.oe_y);
+		selsetbounds((ZigSelBounds){
+			.nb_x = result.update.nb_x,
+			.nb_y = result.update.nb_y,
+			.ne_x = result.update.ne_x,
+			.ne_y = result.update.ne_y,
+		});
 	}
 }
 

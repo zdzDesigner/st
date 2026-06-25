@@ -38,6 +38,16 @@ pub const CursorEditKind = enum(i32) {
     move = 2,
 };
 
+pub const CursorAction = enum(i32) {
+    backspace = 1,
+    delete_forward = 2,
+    delete_word = 3,
+    move_left = 4,
+    move_right = 5,
+    home = 6,
+    end = 7,
+};
+
 pub const DeleteEdit = struct {
     start: usize,
     end: usize,
@@ -56,6 +66,12 @@ pub const StateEditKind = enum(i32) {
     commit_clear = 2,
     commit_set = 3,
     cancel = 4,
+};
+
+pub const StateAction = enum(i32) {
+    clear_input = 1,
+    commit = 2,
+    cancel = 3,
 };
 
 pub const ResetInput = struct {
@@ -143,6 +159,8 @@ pub const SearchEffectPlan = struct {
     alloc_query: bool,
     // 需要重分配 matches 数组。
     realloc_matches: bool,
+    // 需要把 matches 缓冲区视为可复用，但不立即释放。
+    reuse_matches: bool,
     // C 需要释放旧 query buffer。
     clear_query: bool,
     // C 需要清理旧 matches。
@@ -175,6 +193,23 @@ pub const SearchInputResult = struct {
     move_len: usize,
 };
 
+pub const SearchCursorResult = struct {
+    update: SearchStateUpdate,
+    effect: SearchEffectPlan,
+    delete_start: usize,
+    delete_end: usize,
+};
+
+pub const SearchStateResult = struct {
+    update: SearchStateUpdate,
+    effect: SearchEffectPlan,
+};
+
+pub const SearchScanResult = struct {
+    update: SearchStateUpdate,
+    effect: SearchEffectPlan,
+};
+
 pub const SearchSetResult = struct {
     // set 入口比较特殊：它先需要 alloc_len 让 C 做 UTF-8 decode，
     // decode 完毕后再根据真实 qlen 生成最终状态与 effect。
@@ -191,6 +226,11 @@ pub const SetPlan = struct {
     active: bool,
     // 重新设置 query 后 current 回退到 -1，等待 C 后续归一化。
     current: i32,
+};
+
+pub const JumpPlan = struct {
+    run: bool,
+    new_scr: i32,
 };
 
 pub const Hit = struct {
@@ -674,6 +714,43 @@ pub fn step(active: bool, nmatches: i32, current: i32, direction: i32) StepPlan 
     return (Matches{ .active = active, .current = current, .count = nmatches }).step(direction);
 }
 
+pub fn jumpPlan(active: bool, current: i32, nmatches: i32, term_scr: i32, match_scr: i32) JumpPlan {
+    const valid = currentValid(active, current, nmatches);
+    return .{
+        .run = valid,
+        .new_scr = if (valid) jumpScroll(valid, term_scr, match_scr) else term_scr,
+    };
+}
+
+pub fn scanResult(snapshot: SearchSnapshot, nmatches: i32, current: i32) SearchScanResult {
+    const next_current = nextCurrent(current, nmatches);
+    return .{
+        .update = .{
+            .query_len = snapshot.query_len,
+            .active = snapshot.active,
+            .current = next_current,
+            .inputmode = snapshot.inputmode,
+            .inputlen = snapshot.inputlen,
+            .inputcursor = snapshot.inputcursor,
+            .inputcap = snapshot.inputcap,
+            .nmatches = nmatches,
+            .match_cap = snapshot.match_cap,
+        },
+        .effect = .{
+            .alloc_input = false,
+            .realloc_input = false,
+            .alloc_query = false,
+            .realloc_matches = false,
+            .reuse_matches = true,
+            .clear_query = false,
+            .clear_matches = false,
+            .refresh_search = false,
+            .redraw = false,
+            .jump = false,
+        },
+    };
+}
+
 pub fn prevChar(input: []const u8, cursor: usize) usize {
     return (InputBytes{ .bytes = input }).prevChar(cursor);
 }
@@ -764,11 +841,108 @@ pub fn promptResult(snapshot: SearchSnapshot) SearchPromptResult {
             .realloc_input = false,
             .alloc_query = false,
             .realloc_matches = false,
+            .reuse_matches = false,
             .clear_query = false,
             .clear_matches = false,
             .refresh_search = false,
             .redraw = true,
             .jump = false,
+        },
+    };
+}
+
+pub fn cursorResult(snapshot: SearchSnapshot, input: []const u8, action: CursorAction) SearchCursorResult {
+    const edit = switch (action) {
+        .backspace => cursorEdit(input, snapshot.inputmode, snapshot.inputlen, snapshot.inputcursor, .backspace),
+        .delete_forward => cursorEdit(input, snapshot.inputmode, snapshot.inputlen, snapshot.inputcursor, .delete_forward),
+        .delete_word => cursorEdit(input, snapshot.inputmode, snapshot.inputlen, snapshot.inputcursor, .delete_word),
+        .move_left => cursorEdit(input, snapshot.inputmode, snapshot.inputlen, snapshot.inputcursor, .move_left),
+        .move_right => cursorEdit(input, snapshot.inputmode, snapshot.inputlen, snapshot.inputcursor, .move_right),
+        .home => cursorEdit(&.{}, snapshot.inputmode, snapshot.inputlen, 0, .home),
+        .end => cursorEdit(&.{}, snapshot.inputmode, snapshot.inputlen, snapshot.inputlen, .end),
+    };
+
+    return switch (edit) {
+        .none => .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = snapshot.inputmode,
+                .inputlen = snapshot.inputlen,
+                .inputcursor = snapshot.inputcursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = false,
+                .redraw = false,
+                .jump = false,
+            },
+            .delete_start = 0,
+            .delete_end = 0,
+        },
+        .delete => |delete| .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = snapshot.inputmode,
+                .inputlen = snapshot.inputlen - (delete.end - delete.start),
+                .inputcursor = delete.cursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = true,
+                .redraw = false,
+                .jump = false,
+            },
+            .delete_start = delete.start,
+            .delete_end = delete.end,
+        },
+        .move => |cursor| .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = snapshot.inputmode,
+                .inputlen = snapshot.inputlen,
+                .inputcursor = cursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = false,
+                .redraw = true,
+                .jump = false,
+            },
+            .delete_start = 0,
+            .delete_end = 0,
         },
     };
 }
@@ -793,6 +967,7 @@ pub fn inputResult(snapshot: SearchSnapshot, add_len: usize) SearchInputResult {
             .realloc_input = plan.grow,
             .alloc_query = false,
             .realloc_matches = false,
+            .reuse_matches = false,
             .clear_query = false,
             .clear_matches = false,
             .refresh_search = plan.run,
@@ -803,6 +978,142 @@ pub fn inputResult(snapshot: SearchSnapshot, add_len: usize) SearchInputResult {
         .move_dst = plan.move_dst,
         .move_src = plan.move_src,
         .move_len = plan.move_len,
+    };
+}
+
+pub fn stateResult(snapshot: SearchSnapshot, action: StateAction) SearchStateResult {
+    const edit = switch (action) {
+        .clear_input => clearInputEdit(snapshot.inputmode),
+        .commit => commitEdit(snapshot.inputmode, snapshot.inputlen),
+        .cancel => cancelEdit(snapshot.inputmode),
+    };
+
+    return switch (edit) {
+        .none => .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = snapshot.inputmode,
+                .inputlen = snapshot.inputlen,
+                .inputcursor = snapshot.inputcursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = false,
+                .redraw = false,
+                .jump = false,
+            },
+        },
+        .clear_input => |clear| .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = snapshot.inputmode,
+                .inputlen = clear.len,
+                .inputcursor = clear.cursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = true,
+                .redraw = false,
+                .jump = false,
+            },
+        },
+        .commit_clear => .{
+            .update = .{
+                .query_len = 0,
+                .active = false,
+                .current = -1,
+                .inputmode = false,
+                .inputlen = 0,
+                .inputcursor = 0,
+                .inputcap = 0,
+                .nmatches = 0,
+                .match_cap = 0,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = true,
+                .clear_matches = true,
+                .refresh_search = false,
+                .redraw = true,
+                .jump = false,
+            },
+        },
+        .commit_set => .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = false,
+                .inputlen = snapshot.inputlen,
+                .inputcursor = snapshot.inputcursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = true,
+                .redraw = false,
+                .jump = false,
+            },
+        },
+        .cancel => .{
+            .update = .{
+                .query_len = snapshot.query_len,
+                .active = snapshot.active,
+                .current = snapshot.current,
+                .inputmode = false,
+                .inputlen = snapshot.inputlen,
+                .inputcursor = snapshot.inputcursor,
+                .inputcap = snapshot.inputcap,
+                .nmatches = snapshot.nmatches,
+                .match_cap = snapshot.match_cap,
+            },
+            .effect = .{
+                .alloc_input = false,
+                .realloc_input = false,
+                .alloc_query = false,
+                .realloc_matches = false,
+                .reuse_matches = false,
+                .clear_query = false,
+                .clear_matches = false,
+                .refresh_search = false,
+                .redraw = true,
+                .jump = false,
+            },
+        },
     };
 }
 
@@ -828,6 +1139,7 @@ pub fn setResult(snapshot: SearchSnapshot, query_len: usize, qlen: i32) SearchSe
             .realloc_input = false,
             .alloc_query = true,
             .realloc_matches = false,
+            .reuse_matches = false,
             .clear_query = true,
             .clear_matches = false,
             .refresh_search = true,

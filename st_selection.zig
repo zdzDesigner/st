@@ -72,6 +72,40 @@ pub const StartPlan = struct {
     final_mode: SelectionMode,
 };
 
+pub const SelectionSnapshot = struct {
+    mode: SelectionMode,
+    selection_type: SelectionType,
+    alt: bool,
+    snap: i32,
+    ob: model.Point,
+    oe: model.Point,
+    nb: model.Point,
+    ne: model.Point,
+};
+
+pub const SelectionStateUpdate = struct {
+    mode: SelectionMode,
+    selection_type: SelectionType,
+    alt: bool,
+    snap: i32,
+    ob: model.Point,
+    oe: model.Point,
+    nb: model.Point,
+    ne: model.Point,
+};
+
+pub const SelectionStateResult = struct {
+    update: SelectionStateUpdate,
+    effect: SelectionEffectPlan,
+};
+
+pub const SelectionEffectPlan = struct {
+    dirty: bool,
+    top: i32,
+    bot: i32,
+    clear: bool,
+};
+
 pub const ScrollAction = enum(i32) {
     none = 0,
     clear = 1,
@@ -162,6 +196,104 @@ pub fn startPlan(point: model.Point, snap: i32, alt_screen: bool) StartPlan {
         .snap = snap,
         .point = point,
         .final_mode = if (snap != 0) .ready else .empty,
+    };
+}
+
+pub fn startResult(snapshot: SelectionSnapshot, point: model.Point, snap: i32, alt_screen: bool) SelectionStateResult {
+    const plan = startPlan(point, snap, alt_screen);
+    return .{
+        .update = .{
+            .mode = plan.mode,
+            .selection_type = plan.selection_type,
+            .alt = plan.alt,
+            .snap = plan.snap,
+            .ob = point,
+            .oe = point,
+            .nb = point,
+            .ne = point,
+        },
+        .effect = .{
+            .dirty = snapshot.mode != plan.mode or snapshot.selection_type != plan.selection_type or snapshot.snap != plan.snap,
+            .top = point.y,
+            .bot = point.y,
+            .clear = false,
+        },
+    };
+}
+
+pub fn extendResult(snapshot: SelectionSnapshot, new_point: model.Point, new_type: SelectionType, done: bool) SelectionStateResult {
+    const old_bounds = Bounds{ .start = snapshot.nb, .end = snapshot.ne };
+    const new_bounds = normalize(new_type, snapshot.ob, new_point);
+    const plan = extendPlan(snapshot.oe, snapshot.selection_type, old_bounds, new_point, new_type, new_bounds, snapshot.mode, done);
+    return .{
+        .update = .{
+            .mode = plan.mode,
+            .selection_type = new_type,
+            .alt = snapshot.alt,
+            .snap = snapshot.snap,
+            .ob = snapshot.ob,
+            .oe = new_point,
+            .nb = new_bounds.start,
+            .ne = new_bounds.end,
+        },
+        .effect = .{ .dirty = plan.dirty, .top = plan.top, .bot = plan.bot, .clear = done and plan.mode == .idle },
+    };
+}
+
+pub fn scrollResult(snapshot: SelectionSnapshot, bounds: Bounds, scroll_origin: i32, top: i32, bot: i32, delta: i32) SelectionStateResult {
+    const plan = scrollPlan(snapshot.ob.x, snapshot.ob.y, snapshot.oe.y, bounds, scroll_origin, top, bot, delta);
+    const next_ob_y = switch (plan.action) {
+        .none => snapshot.ob.y,
+        .clear => snapshot.ob.y,
+        .normalize => plan.origin_y,
+    };
+    const next_oe_y = switch (plan.action) {
+        .none => snapshot.oe.y,
+        .clear => snapshot.oe.y,
+        .normalize => plan.extent_y,
+    };
+    return .{
+        .update = .{
+            .mode = if (plan.action == .clear) .idle else snapshot.mode,
+            .selection_type = snapshot.selection_type,
+            .alt = snapshot.alt,
+            .snap = snapshot.snap,
+            .ob = .{ .x = snapshot.ob.x, .y = next_ob_y },
+            .oe = .{ .x = snapshot.oe.x, .y = next_oe_y },
+            .nb = snapshot.nb,
+            .ne = snapshot.ne,
+        },
+        .effect = .{
+            .dirty = plan.action != .none,
+            .top = plan.origin_y,
+            .bot = plan.extent_y,
+            .clear = plan.action == .clear,
+        },
+    };
+}
+
+pub fn normalizeResult(snapshot: SelectionSnapshot, cols: i32, start_len: i32, end_len: i32) SelectionStateResult {
+    var bounds = normalize(snapshot.selection_type, snapshot.ob, snapshot.oe);
+    if (snapshot.selection_type != .rectangular) {
+        bounds = normalizeColumns(snapshot.selection_type, bounds, start_len, end_len, cols);
+    }
+    return .{
+        .update = .{
+            .mode = snapshot.mode,
+            .selection_type = snapshot.selection_type,
+            .alt = snapshot.alt,
+            .snap = snapshot.snap,
+            .ob = snapshot.ob,
+            .oe = snapshot.oe,
+            .nb = bounds.start,
+            .ne = bounds.end,
+        },
+        .effect = .{
+            .dirty = false,
+            .top = bounds.start.y,
+            .bot = bounds.end.y,
+            .clear = false,
+        },
     };
 }
 

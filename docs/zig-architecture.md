@@ -53,7 +53,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
-- Search 扫描已完成聚合：`searchscanline` 改用 `st_searchlineplan`，旧 `st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
+- Search 扫描已完成聚合：`searchscanline` 改用 `st_searchlineplan`，扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
 - Selection 输出已完成首批聚合：`getsel` 改用 `st_getselexecplan`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 
@@ -64,6 +64,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 第一阶段先让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
 - 第二阶段再让 Zig 接管 `search` 的写模型：C 不再分散写 `search.active`、`search.current`、`search.inputlen`、`search.inputcursor`、`search.query` 元信息，只执行 realloc/free/redraw 等副作用。
 - `search` 稳定后，再复制同一策略到 `sel`，最后再推进到 `term` 主状态。
+- `sel` 当前已进入统一快照阶段：`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口，C 侧开始消费 `SelectionSnapshot -> SelectionStateResult`，但 `selsnap()` 仍留在 C 侧。
 
 ### 第一版结构
 
@@ -87,7 +88,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `searchprompt()`：最适合先切到 `SearchSnapshot -> PromptUpdate + alloc_input effect`
 - `searchinput()`：适合切到 `SearchSnapshot + input bytes -> SearchStateUpdate + realloc_input effect`
 - `searchset()`：适合切到 `SearchSnapshot + decoded query -> SearchStateUpdate + alloc_query/realloc_matches/jump/redraw effect`
-- `searchapplyedit()` / `searchapplystateedit()`：作为第二批，等 `searchprompt/searchinput/searchset` 稳定后再收口
+- `searchapplycursor()` / `searchapplystate()`：第二批已收口，C 侧先构造 `SearchSnapshot`，再消费 `SearchCursorResult` / `SearchStateResult`，只执行 delete/free/redraw 等副作用
 
 ## 完成定义
 

@@ -57,6 +57,48 @@ const ZigSelStartPlan = extern struct {
     final_mode: c_int,
 };
 
+const ZigSelectionSnapshot = extern struct {
+    mode: c_int,
+    selection_type: c_int,
+    alt: c_int,
+    snap: c_int,
+    ob_x: c_int,
+    ob_y: c_int,
+    oe_x: c_int,
+    oe_y: c_int,
+    nb_x: c_int,
+    nb_y: c_int,
+    ne_x: c_int,
+    ne_y: c_int,
+};
+
+const ZigSelectionStateUpdate = extern struct {
+    mode: c_int,
+    selection_type: c_int,
+    alt: c_int,
+    snap: c_int,
+    ob_x: c_int,
+    ob_y: c_int,
+    oe_x: c_int,
+    oe_y: c_int,
+    nb_x: c_int,
+    nb_y: c_int,
+    ne_x: c_int,
+    ne_y: c_int,
+};
+
+const ZigSelectionEffectPlan = extern struct {
+    dirty: c_int,
+    top: c_int,
+    bot: c_int,
+    clear: c_int,
+};
+
+const ZigSelectionStateResult = extern struct {
+    update: ZigSelectionStateUpdate,
+    effect: ZigSelectionEffectPlan,
+};
+
 const ZigSelSnapWordPlan = extern struct {
     x: c_int,
     y: c_int,
@@ -92,16 +134,14 @@ const ZigSearchStepPlan = extern struct {
     current: c_int,
 };
 
+const ZigSearchJumpPlan = extern struct {
+    run: c_int,
+    new_scr: c_int,
+};
+
 const ZigSearchDeletePlan = extern struct {
     run: c_int,
     new_len: usize,
-};
-
-const ZigSearchCursorEditPlan = extern struct {
-    kind: c_int,
-    start: usize,
-    end: usize,
-    cursor: usize,
 };
 
 const ZigSearchMatch = search.SearchMatch;
@@ -111,12 +151,6 @@ const ZigSearchLinePlan = extern struct {
     cap: c_int,
     next_x: c_int,
     match: ZigSearchMatch,
-};
-
-const ZigSearchStateEditPlan = extern struct {
-    kind: c_int,
-    inputlen: usize,
-    inputcursor: usize,
 };
 
 const ZigSearchSnapshot = extern struct {
@@ -152,6 +186,7 @@ const ZigSearchEffectPlan = extern struct {
     realloc_input: c_int,
     alloc_query: c_int,
     realloc_matches: c_int,
+    reuse_matches: c_int,
     clear_query: c_int,
     clear_matches: c_int,
     refresh_search: c_int,
@@ -171,6 +206,23 @@ const ZigSearchInputResult = extern struct {
     move_dst: usize,
     move_src: usize,
     move_len: usize,
+};
+
+const ZigSearchCursorResult = extern struct {
+    update: ZigSearchStateUpdate,
+    effect: ZigSearchEffectPlan,
+    delete_start: usize,
+    delete_end: usize,
+};
+
+const ZigSearchStateResult = extern struct {
+    update: ZigSearchStateUpdate,
+    effect: ZigSearchEffectPlan,
+};
+
+const ZigSearchScanResult = extern struct {
+    update: ZigSearchStateUpdate,
+    effect: ZigSearchEffectPlan,
 };
 
 const ZigSearchSetResult = extern struct {
@@ -242,48 +294,29 @@ export fn st_tsetdirtrange(top: c_int, bot: c_int, row: c_int) ZigLineRange {
     };
 }
 
-export fn st_selscrollplan(ob_x: c_int, ob_y: c_int, oe_y: c_int, nb_y: c_int, ne_y: c_int, orig: c_int, top: c_int, bot: c_int, n: c_int) ZigSelScrollPlan {
-    const plan = selection.scrollPlan(ob_x, ob_y, oe_y, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, orig, top, bot, n);
-    return .{ .action = @intFromEnum(plan.action), .ob_y = plan.origin_y, .oe_y = plan.extent_y };
-}
-
-export fn st_selextendplan(old_oe_x: c_int, old_oe_y: c_int, old_type: c_int, old_nb_y: c_int, old_ne_y: c_int, new_oe_x: c_int, new_oe_y: c_int, new_type: c_int, new_nb_y: c_int, new_ne_y: c_int, old_mode: c_int, done: c_int) ZigSelExtendPlan {
-    const old_selection_type = selectionType(old_type);
-    const new_selection_type = selectionType(new_type);
-    const mode = selectionMode(old_mode);
-    const plan = selection.extendPlan(
-        .{ .x = old_oe_x, .y = old_oe_y },
-        old_selection_type,
-        .{ .start = .{ .x = 0, .y = old_nb_y }, .end = .{ .x = 0, .y = old_ne_y } },
-        .{ .x = new_oe_x, .y = new_oe_y },
-        new_selection_type,
-        .{ .start = .{ .x = 0, .y = new_nb_y }, .end = .{ .x = 0, .y = new_ne_y } },
-        mode,
-        done != 0,
-    );
-    return .{
-        .dirty = boolInt(plan.dirty),
-        .top = plan.top,
-        .bot = plan.bot,
-        .mode = @intFromEnum(plan.mode),
-    };
-}
-
 export fn st_selclearplan(ob_x: c_int) c_int {
     return boolInt(selection.shouldClear(ob_x));
 }
 
-export fn st_selstartplan(col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelStartPlan {
-    const plan = selection.startPlan(.{ .x = col, .y = row }, snap, alt_screen != 0);
-    return .{
-        .mode = @intFromEnum(plan.mode),
-        .sel_type = @intFromEnum(plan.selection_type),
-        .alt = boolInt(plan.alt),
-        .snap = plan.snap,
-        .x = plan.point.x,
-        .y = plan.point.y,
-        .final_mode = @intFromEnum(plan.final_mode),
-    };
+export fn st_selstartupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelectionStateResult {
+    const result = selection.startResult(selectionSnapshot(snapshot), .{ .x = col, .y = row }, snap, alt_screen != 0);
+    return selectionStateResult(result);
+}
+
+export fn st_selextendupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, sel_type: c_int, done: c_int) ZigSelectionStateResult {
+    const result = selection.extendResult(selectionSnapshot(snapshot), .{ .x = col, .y = row }, selectionType(sel_type), done != 0);
+    return selectionStateResult(result);
+}
+
+export fn st_selscrollupdate(snapshot: ZigSelectionSnapshot, orig: c_int, top: c_int, bot: c_int, delta: c_int) ZigSelectionStateResult {
+    const state = selectionSnapshot(snapshot);
+    const result = selection.scrollResult(state, .{ .start = state.nb, .end = state.ne }, orig, top, bot, delta);
+    return selectionStateResult(result);
+}
+
+export fn st_selnormalizeupdate(snapshot: ZigSelectionSnapshot, col: c_int, start_len: c_int, end_len: c_int) ZigSelectionStateResult {
+    const result = selection.normalizeResult(selectionSnapshot(snapshot), col, start_len, end_len);
+    return selectionStateResult(result);
 }
 
 export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
@@ -380,62 +413,128 @@ export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, directio
     };
 }
 
-fn searchCursorEditPlan(edit: search.CursorEdit) ZigSearchCursorEditPlan {
-    return switch (edit) {
-        .none => .{ .kind = @intFromEnum(search.CursorEditKind.none), .start = 0, .end = 0, .cursor = 0 },
-        .delete => |delete| .{ .kind = @intFromEnum(search.CursorEditKind.delete), .start = delete.start, .end = delete.end, .cursor = delete.cursor },
-        .move => |cursor| .{ .kind = @intFromEnum(search.CursorEditKind.move), .start = 0, .end = 0, .cursor = cursor },
+export fn st_searchjumpplan(active: c_int, current: c_int, nmatches: c_int, term_scr: c_int, match_scr: c_int) ZigSearchJumpPlan {
+    const plan = search.jumpPlan(active != 0, current, nmatches, term_scr, match_scr);
+    return .{ .run = boolInt(plan.run), .new_scr = plan.new_scr };
+}
+
+export fn st_searchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
+    const result = search.cursorResult(.{
+        .query_len = snapshot.query_len,
+        .inputmode = snapshot.inputmode != 0,
+        .inputlen = snapshot.inputlen,
+        .inputcursor = snapshot.inputcursor,
+        .inputcap = snapshot.inputcap,
+        .nmatches = snapshot.nmatches,
+        .match_cap = snapshot.match_cap,
+        .current = snapshot.current,
+        .active = snapshot.active != 0,
+    }, input[0..snapshot.inputlen], @enumFromInt(action));
+    return .{
+        .update = .{
+            .query_len = result.update.query_len,
+            .active = boolInt(result.update.active),
+            .current = result.update.current,
+            .inputmode = boolInt(result.update.inputmode),
+            .inputlen = result.update.inputlen,
+            .inputcursor = result.update.inputcursor,
+            .inputcap = result.update.inputcap,
+            .nmatches = result.update.nmatches,
+            .match_cap = result.update.match_cap,
+        },
+        .effect = .{
+            .alloc_input = boolInt(result.effect.alloc_input),
+            .realloc_input = boolInt(result.effect.realloc_input),
+            .alloc_query = boolInt(result.effect.alloc_query),
+            .realloc_matches = boolInt(result.effect.realloc_matches),
+            .reuse_matches = boolInt(result.effect.reuse_matches),
+            .clear_query = boolInt(result.effect.clear_query),
+            .clear_matches = boolInt(result.effect.clear_matches),
+            .refresh_search = boolInt(result.effect.refresh_search),
+            .redraw = boolInt(result.effect.redraw),
+            .jump = boolInt(result.effect.jump),
+        },
+        .delete_start = result.delete_start,
+        .delete_end = result.delete_end,
     };
 }
 
-fn searchStateEditPlan(edit: search.StateEdit) ZigSearchStateEditPlan {
-    return switch (edit) {
-        .none => .{ .kind = @intFromEnum(search.StateEditKind.none), .inputlen = 0, .inputcursor = 0 },
-        .clear_input => |clear| .{ .kind = @intFromEnum(search.StateEditKind.clear_input), .inputlen = clear.len, .inputcursor = clear.cursor },
-        .commit_clear => .{ .kind = @intFromEnum(search.StateEditKind.commit_clear), .inputlen = 0, .inputcursor = 0 },
-        .commit_set => .{ .kind = @intFromEnum(search.StateEditKind.commit_set), .inputlen = 0, .inputcursor = 0 },
-        .cancel => .{ .kind = @intFromEnum(search.StateEditKind.cancel), .inputlen = 0, .inputcursor = 0 },
+export fn st_searchstateupdate(snapshot: ZigSearchSnapshot, action: c_int) ZigSearchStateResult {
+    const result = search.stateResult(.{
+        .query_len = snapshot.query_len,
+        .inputmode = snapshot.inputmode != 0,
+        .inputlen = snapshot.inputlen,
+        .inputcursor = snapshot.inputcursor,
+        .inputcap = snapshot.inputcap,
+        .nmatches = snapshot.nmatches,
+        .match_cap = snapshot.match_cap,
+        .current = snapshot.current,
+        .active = snapshot.active != 0,
+    }, @enumFromInt(action));
+    return .{
+        .update = .{
+            .query_len = result.update.query_len,
+            .active = boolInt(result.update.active),
+            .current = result.update.current,
+            .inputmode = boolInt(result.update.inputmode),
+            .inputlen = result.update.inputlen,
+            .inputcursor = result.update.inputcursor,
+            .inputcap = result.update.inputcap,
+            .nmatches = result.update.nmatches,
+            .match_cap = result.update.match_cap,
+        },
+        .effect = .{
+            .alloc_input = boolInt(result.effect.alloc_input),
+            .realloc_input = boolInt(result.effect.realloc_input),
+            .alloc_query = boolInt(result.effect.alloc_query),
+            .realloc_matches = boolInt(result.effect.realloc_matches),
+            .reuse_matches = boolInt(result.effect.reuse_matches),
+            .clear_query = boolInt(result.effect.clear_query),
+            .clear_matches = boolInt(result.effect.clear_matches),
+            .refresh_search = boolInt(result.effect.refresh_search),
+            .redraw = boolInt(result.effect.redraw),
+            .jump = boolInt(result.effect.jump),
+        },
     };
 }
 
-export fn st_searchbackspaceedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .backspace));
-}
-
-export fn st_searchdeleteforwardedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .delete_forward));
-}
-
-export fn st_searchdeletewordedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .delete_word));
-}
-
-export fn st_searchmoveleftedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .move_left));
-}
-
-export fn st_searchmoverightedit(input: [*]const u8, inputmode: c_int, inputlen: usize, cursor: usize) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(input[0..inputlen], inputmode != 0, inputlen, cursor, .move_right));
-}
-
-export fn st_searchhomeedit(inputmode: c_int) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(&.{}, inputmode != 0, 0, 0, .home));
-}
-
-export fn st_searchendedit(inputmode: c_int, inputlen: usize) ZigSearchCursorEditPlan {
-    return searchCursorEditPlan(search.cursorEdit(&.{}, inputmode != 0, inputlen, inputlen, .end));
-}
-
-export fn st_searchclearinputedit(inputmode: c_int) ZigSearchStateEditPlan {
-    return searchStateEditPlan(search.clearInputEdit(inputmode != 0));
-}
-
-export fn st_searchcommitedit(inputmode: c_int, inputlen: usize) ZigSearchStateEditPlan {
-    return searchStateEditPlan(search.commitEdit(inputmode != 0, inputlen));
-}
-
-export fn st_searchcanceledit(inputmode: c_int) ZigSearchStateEditPlan {
-    return searchStateEditPlan(search.cancelEdit(inputmode != 0));
+export fn st_searchscanupdate(snapshot: ZigSearchSnapshot, nmatches: c_int, current: c_int) ZigSearchScanResult {
+    const result = search.scanResult(.{
+        .query_len = snapshot.query_len,
+        .inputmode = snapshot.inputmode != 0,
+        .inputlen = snapshot.inputlen,
+        .inputcursor = snapshot.inputcursor,
+        .inputcap = snapshot.inputcap,
+        .nmatches = snapshot.nmatches,
+        .match_cap = snapshot.match_cap,
+        .current = snapshot.current,
+        .active = snapshot.active != 0,
+    }, nmatches, current);
+    return .{
+        .update = .{
+            .query_len = result.update.query_len,
+            .active = boolInt(result.update.active),
+            .current = result.update.current,
+            .inputmode = boolInt(result.update.inputmode),
+            .inputlen = result.update.inputlen,
+            .inputcursor = result.update.inputcursor,
+            .inputcap = result.update.inputcap,
+            .nmatches = result.update.nmatches,
+            .match_cap = result.update.match_cap,
+        },
+        .effect = .{
+            .alloc_input = boolInt(result.effect.alloc_input),
+            .realloc_input = boolInt(result.effect.realloc_input),
+            .alloc_query = boolInt(result.effect.alloc_query),
+            .realloc_matches = boolInt(result.effect.realloc_matches),
+            .reuse_matches = boolInt(result.effect.reuse_matches),
+            .clear_query = boolInt(result.effect.clear_query),
+            .clear_matches = boolInt(result.effect.clear_matches),
+            .refresh_search = boolInt(result.effect.refresh_search),
+            .redraw = boolInt(result.effect.redraw),
+            .jump = boolInt(result.effect.jump),
+        },
+    };
 }
 
 export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
@@ -484,6 +583,7 @@ export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResu
             .realloc_input = boolInt(result.effect.realloc_input),
             .alloc_query = boolInt(result.effect.alloc_query),
             .realloc_matches = boolInt(result.effect.realloc_matches),
+            .reuse_matches = boolInt(result.effect.reuse_matches),
             .clear_query = boolInt(result.effect.clear_query),
             .clear_matches = boolInt(result.effect.clear_matches),
             .refresh_search = boolInt(result.effect.refresh_search),
@@ -523,6 +623,7 @@ export fn st_searchinputupdate(snapshot: ZigSearchSnapshot, add_len: usize) ZigS
             .realloc_input = boolInt(result.effect.realloc_input),
             .alloc_query = boolInt(result.effect.alloc_query),
             .realloc_matches = boolInt(result.effect.realloc_matches),
+            .reuse_matches = boolInt(result.effect.reuse_matches),
             .clear_query = boolInt(result.effect.clear_query),
             .clear_matches = boolInt(result.effect.clear_matches),
             .refresh_search = boolInt(result.effect.refresh_search),
@@ -566,6 +667,7 @@ export fn st_searchsetupdate(snapshot: ZigSearchSnapshot, query_len: usize, qlen
             .realloc_input = boolInt(result.effect.realloc_input),
             .alloc_query = boolInt(result.effect.alloc_query),
             .realloc_matches = boolInt(result.effect.realloc_matches),
+            .reuse_matches = boolInt(result.effect.reuse_matches),
             .clear_query = boolInt(result.effect.clear_query),
             .clear_matches = boolInt(result.effect.clear_matches),
             .refresh_search = boolInt(result.effect.refresh_search),
@@ -604,18 +706,6 @@ export fn st_getselexecplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_i
     };
 }
 
-export fn st_selnormalizeplan(sel_type: c_int, ob_x: c_int, ob_y: c_int, oe_x: c_int, oe_y: c_int) ZigSelBounds {
-    const selection_type = selectionType(sel_type);
-    const bounds = selection.normalize(selection_type, .{ .x = ob_x, .y = ob_y }, .{ .x = oe_x, .y = oe_y });
-    return .{ .nb_x = bounds.start.x, .nb_y = bounds.start.y, .ne_x = bounds.end.x, .ne_y = bounds.end.y };
-}
-
-export fn st_selnormalizecolsplan(sel_type: c_int, nb_x: c_int, ne_x: c_int, nb_len: c_int, ne_len: c_int, col: c_int) ZigSelBounds {
-    const selection_type = selectionType(sel_type);
-    const bounds = selection.normalizeColumns(selection_type, .{ .start = .{ .x = nb_x, .y = 0 }, .end = .{ .x = ne_x, .y = 0 } }, nb_len, ne_len, col);
-    return .{ .nb_x = bounds.start.x, .nb_y = 0, .ne_x = bounds.end.x, .ne_y = 0 };
-}
-
 fn attrMask(attr: c_int) c_ushort {
     return @truncate(@as(c_uint, @bitCast(attr)));
 }
@@ -632,6 +722,44 @@ fn selectionMode(value: c_int) selection.SelectionMode {
     if (value == sel_empty) return .empty;
     if (value == 0) return .idle;
     return .ready;
+}
+
+fn selectionSnapshot(snapshot: ZigSelectionSnapshot) selection.SelectionSnapshot {
+    return .{
+        .mode = selectionMode(snapshot.mode),
+        .selection_type = selectionType(snapshot.selection_type),
+        .alt = snapshot.alt != 0,
+        .snap = snapshot.snap,
+        .ob = .{ .x = snapshot.ob_x, .y = snapshot.ob_y },
+        .oe = .{ .x = snapshot.oe_x, .y = snapshot.oe_y },
+        .nb = .{ .x = snapshot.nb_x, .y = snapshot.nb_y },
+        .ne = .{ .x = snapshot.ne_x, .y = snapshot.ne_y },
+    };
+}
+
+fn selectionStateResult(result: selection.SelectionStateResult) ZigSelectionStateResult {
+    return .{
+        .update = .{
+            .mode = @intFromEnum(result.update.mode),
+            .selection_type = @intFromEnum(result.update.selection_type),
+            .alt = boolInt(result.update.alt),
+            .snap = result.update.snap,
+            .ob_x = result.update.ob.x,
+            .ob_y = result.update.ob.y,
+            .oe_x = result.update.oe.x,
+            .oe_y = result.update.oe.y,
+            .nb_x = result.update.nb.x,
+            .nb_y = result.update.nb.y,
+            .ne_x = result.update.ne.x,
+            .ne_y = result.update.ne.y,
+        },
+        .effect = .{
+            .dirty = boolInt(result.effect.dirty),
+            .top = result.effect.top,
+            .bot = result.effect.bot,
+            .clear = boolInt(result.effect.clear),
+        },
+    };
 }
 
 test "line length ignores trailing spaces" {
@@ -737,17 +865,17 @@ test "set dirt range clamps to terminal rows" {
 }
 
 test "selection scroll clears split selection" {
-    const plan = st_selscrollplan(0, 2, 6, 2, 6, 4, 0, 9, 1);
+    const plan = st_selscrollupdate(.{ .mode = sel_empty + 1, .selection_type = sel_regular, .alt = 0, .snap = 0, .ob_x = 0, .ob_y = 2, .oe_x = 3, .oe_y = 6, .nb_x = 0, .nb_y = 2, .ne_x = 3, .ne_y = 6 }, 4, 0, 9, 1);
 
-    try std.testing.expectEqual(@as(c_int, sel_scroll_clear), plan.action);
+    try std.testing.expectEqual(@as(c_int, 1), plan.effect.clear);
 }
 
 test "selection scroll moves and normalizes selection inside region" {
-    const plan = st_selscrollplan(0, 2, 3, 2, 3, 1, 0, 9, 2);
+    const plan = st_selscrollupdate(.{ .mode = sel_empty + 1, .selection_type = sel_regular, .alt = 0, .snap = 0, .ob_x = 0, .ob_y = 2, .oe_x = 3, .oe_y = 3, .nb_x = 0, .nb_y = 2, .ne_x = 3, .ne_y = 3 }, 1, 0, 9, 2);
 
-    try std.testing.expectEqual(@as(c_int, sel_scroll_normalize), plan.action);
-    try std.testing.expectEqual(@as(c_int, 4), plan.ob_y);
-    try std.testing.expectEqual(@as(c_int, 5), plan.oe_y);
+    try std.testing.expectEqual(@as(c_int, 1), plan.effect.dirty);
+    try std.testing.expectEqual(@as(c_int, 4), plan.update.ob_y);
+    try std.testing.expectEqual(@as(c_int, 5), plan.update.oe_y);
 }
 
 test "regular selection matches inclusive endpoints" {
@@ -756,12 +884,12 @@ test "regular selection matches inclusive endpoints" {
 }
 
 test "selection extend plan marks dirty and final mode" {
-    const plan = st_selextendplan(1, 2, sel_regular, 2, 4, 3, 5, sel_rectangular, 1, 6, sel_empty, 0);
+    const plan = st_selextendupdate(.{ .mode = sel_empty, .selection_type = sel_regular, .alt = 0, .snap = 0, .ob_x = 1, .ob_y = 2, .oe_x = 1, .oe_y = 2, .nb_x = 1, .nb_y = 2, .ne_x = 3, .ne_y = 4 }, 3, 5, sel_rectangular, 0);
 
-    try std.testing.expectEqual(@as(c_int, 1), plan.dirty);
-    try std.testing.expectEqual(@as(c_int, 1), plan.top);
-    try std.testing.expectEqual(@as(c_int, 6), plan.bot);
-    try std.testing.expectEqual(@as(c_int, sel_empty + 1), plan.mode);
+    try std.testing.expectEqual(@as(c_int, 1), plan.effect.dirty);
+    try std.testing.expectEqual(@as(c_int, 2), plan.effect.top);
+    try std.testing.expectEqual(@as(c_int, 5), plan.effect.bot);
+    try std.testing.expectEqual(@as(c_int, sel_empty + 1), plan.update.mode);
 }
 
 test "selection clear plan skips inactive selection" {
@@ -770,12 +898,12 @@ test "selection clear plan skips inactive selection" {
 }
 
 test "selection start plan initializes regular selection" {
-    const plan = st_selstartplan(3, 4, 1, 1);
+    const plan = st_selstartupdate(.{ .mode = 0, .selection_type = sel_regular, .alt = 0, .snap = 0, .ob_x = -1, .ob_y = 0, .oe_x = -1, .oe_y = 0, .nb_x = 0, .nb_y = 0, .ne_x = 0, .ne_y = 0 }, 3, 4, 1, 1);
 
-    try std.testing.expectEqual(@as(c_int, sel_empty), plan.mode);
-    try std.testing.expectEqual(@as(c_int, sel_regular), plan.sel_type);
-    try std.testing.expectEqual(@as(c_int, 1), plan.alt);
-    try std.testing.expectEqual(@as(c_int, sel_empty + 1), plan.final_mode);
+    try std.testing.expectEqual(@as(c_int, sel_empty), plan.update.mode);
+    try std.testing.expectEqual(@as(c_int, sel_regular), plan.update.selection_type);
+    try std.testing.expectEqual(@as(c_int, 1), plan.update.alt);
+    try std.testing.expectEqual(@as(c_int, 1), plan.effect.dirty);
 }
 
 test "selection line snap x chooses edge by direction" {
@@ -926,45 +1054,46 @@ test "search char movement skips utf8 continuation bytes" {
 
 test "search cursor edit adapters expose tagged actions" {
     const input = "abc  你好";
-    const backspace = st_searchbackspaceedit(input, 1, input.len, input.len);
-    const move_left = st_searchmoveleftedit(input, 1, input.len, input.len);
-    const home_edit = st_searchhomeedit(1);
-    const end_edit = st_searchendedit(1, input.len);
-    const inactive = st_searchbackspaceedit(input, 0, input.len, input.len);
+    const snapshot = ZigSearchSnapshot{ .query_len = 0, .inputmode = 1, .inputlen = input.len, .inputcursor = input.len, .inputcap = 32, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 };
+    const backspace = st_searchcursorupdate(snapshot, input, @intFromEnum(search.CursorAction.backspace));
+    const move_left = st_searchcursorupdate(snapshot, input, @intFromEnum(search.CursorAction.move_left));
+    const home_edit = st_searchcursorupdate(snapshot, input, @intFromEnum(search.CursorAction.home));
+    const end_edit = st_searchcursorupdate(.{ .query_len = 0, .inputmode = 1, .inputlen = input.len, .inputcursor = 0, .inputcap = 32, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, input, @intFromEnum(search.CursorAction.end));
+    const inactive = st_searchcursorupdate(.{ .query_len = 0, .inputmode = 0, .inputlen = input.len, .inputcursor = input.len, .inputcap = 32, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, input, @intFromEnum(search.CursorAction.backspace));
 
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), backspace.kind);
-    try std.testing.expectEqual(@as(usize, 8), backspace.start);
-    try std.testing.expectEqual(@as(usize, input.len), backspace.end);
-    try std.testing.expectEqual(@as(usize, 8), backspace.cursor);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.move)), move_left.kind);
-    try std.testing.expectEqual(@as(usize, 8), move_left.cursor);
-    try std.testing.expectEqual(@as(usize, 0), home_edit.cursor);
-    try std.testing.expectEqual(@as(usize, input.len), end_edit.cursor);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.none)), inactive.kind);
+    try std.testing.expectEqual(@as(usize, 8), backspace.delete_start);
+    try std.testing.expectEqual(@as(usize, input.len), backspace.delete_end);
+    try std.testing.expectEqual(@as(usize, 8), backspace.update.inputcursor);
+    try std.testing.expectEqual(@as(c_int, 1), backspace.effect.refresh_search);
+    try std.testing.expectEqual(@as(usize, 8), move_left.update.inputcursor);
+    try std.testing.expectEqual(@as(c_int, 1), move_left.effect.redraw);
+    try std.testing.expectEqual(@as(usize, 0), home_edit.update.inputcursor);
+    try std.testing.expectEqual(@as(usize, input.len), end_edit.update.inputcursor);
+    try std.testing.expectEqual(@as(c_int, 0), inactive.effect.refresh_search);
 }
 
 test "search state edit adapters expose tagged actions" {
-    const clear = st_searchclearinputedit(1);
-    const inactive_clear = st_searchclearinputedit(0);
-    const commit_clear = st_searchcommitedit(1, 0);
-    const commit_set = st_searchcommitedit(1, 3);
-    const cancel = st_searchcanceledit(1);
+    const clear = st_searchstateupdate(.{ .query_len = 2, .inputmode = 1, .inputlen = 4, .inputcursor = 4, .inputcap = 8, .nmatches = 1, .match_cap = 2, .current = 0, .active = 1 }, @intFromEnum(search.StateAction.clear_input));
+    const inactive_clear = st_searchstateupdate(.{ .query_len = 2, .inputmode = 0, .inputlen = 4, .inputcursor = 4, .inputcap = 8, .nmatches = 1, .match_cap = 2, .current = 0, .active = 1 }, @intFromEnum(search.StateAction.clear_input));
+    const commit_clear = st_searchstateupdate(.{ .query_len = 2, .inputmode = 1, .inputlen = 0, .inputcursor = 0, .inputcap = 8, .nmatches = 1, .match_cap = 2, .current = 0, .active = 1 }, @intFromEnum(search.StateAction.commit));
+    const commit_set = st_searchstateupdate(.{ .query_len = 2, .inputmode = 1, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 1, .match_cap = 2, .current = 0, .active = 1 }, @intFromEnum(search.StateAction.commit));
+    const cancel = st_searchstateupdate(.{ .query_len = 2, .inputmode = 1, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 1, .match_cap = 2, .current = 0, .active = 1 }, @intFromEnum(search.StateAction.cancel));
 
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.clear_input)), clear.kind);
-    try std.testing.expectEqual(@as(usize, 0), clear.inputlen);
-    try std.testing.expectEqual(@as(usize, 0), clear.inputcursor);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), inactive_clear.kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_clear)), commit_clear.kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_set)), commit_set.kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.cancel)), cancel.kind);
+    try std.testing.expectEqual(@as(usize, 0), clear.update.inputlen);
+    try std.testing.expectEqual(@as(usize, 0), clear.update.inputcursor);
+    try std.testing.expectEqual(@as(c_int, 1), clear.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 0), inactive_clear.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), commit_clear.effect.clear_query);
+    try std.testing.expectEqual(@as(c_int, 1), commit_set.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), cancel.effect.redraw);
 }
 
 test "search input edit plans guard inactive and empty cases" {
-    try std.testing.expectEqual(@as(c_int, 0), st_searchbackspaceedit("abc", 1, 3, 0).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), st_searchbackspaceedit("abc", 1, 3, 2).kind);
-    try std.testing.expectEqual(@as(c_int, 0), st_searchdeleteforwardedit("abc", 1, 3, 3).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.CursorEditKind.delete)), st_searchdeleteforwardedit("abc", 1, 3, 2).kind);
-    try std.testing.expectEqual(@as(c_int, 0), st_searchdeletewordedit("abc", 1, 3, 0).kind);
+    try std.testing.expectEqual(@as(usize, 0), st_searchcursorupdate(.{ .query_len = 0, .inputmode = 1, .inputlen = 3, .inputcursor = 0, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, "abc", @intFromEnum(search.CursorAction.backspace)).delete_end);
+    try std.testing.expectEqual(@as(usize, 1), st_searchcursorupdate(.{ .query_len = 0, .inputmode = 1, .inputlen = 3, .inputcursor = 2, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, "abc", @intFromEnum(search.CursorAction.backspace)).delete_start);
+    try std.testing.expectEqual(@as(usize, 0), st_searchcursorupdate(.{ .query_len = 0, .inputmode = 1, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, "abc", @intFromEnum(search.CursorAction.delete_forward)).delete_end);
+    try std.testing.expectEqual(@as(usize, 2), st_searchcursorupdate(.{ .query_len = 0, .inputmode = 1, .inputlen = 3, .inputcursor = 2, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, "abc", @intFromEnum(search.CursorAction.delete_forward)).delete_start);
+    try std.testing.expectEqual(@as(usize, 0), st_searchcursorupdate(.{ .query_len = 0, .inputmode = 1, .inputlen = 3, .inputcursor = 0, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, "abc", @intFromEnum(search.CursorAction.delete_word)).delete_end);
 }
 
 test "search delete plan validates range and updates length" {
@@ -974,12 +1103,12 @@ test "search delete plan validates range and updates length" {
 }
 
 test "search commit and cancel plans report actions" {
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), st_searchcommitedit(0, 1).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_clear)), st_searchcommitedit(1, 0).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.commit_set)), st_searchcommitedit(1, 3).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.cancel)), st_searchcanceledit(1).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.clear_input)), st_searchclearinputedit(1).kind);
-    try std.testing.expectEqual(@as(c_int, @intFromEnum(search.StateEditKind.none)), st_searchclearinputedit(0).kind);
+    try std.testing.expectEqual(@as(c_int, 0), st_searchstateupdate(.{ .query_len = 1, .inputmode = 0, .inputlen = 1, .inputcursor = 1, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 }, @intFromEnum(search.StateAction.commit)).effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchstateupdate(.{ .query_len = 1, .inputmode = 1, .inputlen = 0, .inputcursor = 0, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 1 }, @intFromEnum(search.StateAction.commit)).effect.clear_query);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchstateupdate(.{ .query_len = 1, .inputmode = 1, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 1 }, @intFromEnum(search.StateAction.commit)).effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchstateupdate(.{ .query_len = 1, .inputmode = 1, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 1 }, @intFromEnum(search.StateAction.cancel)).effect.redraw);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchstateupdate(.{ .query_len = 1, .inputmode = 1, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 1 }, @intFromEnum(search.StateAction.clear_input)).effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 0), st_searchstateupdate(.{ .query_len = 1, .inputmode = 0, .inputlen = 3, .inputcursor = 3, .inputcap = 8, .nmatches = 0, .match_cap = 0, .current = -1, .active = 1 }, @intFromEnum(search.StateAction.clear_input)).effect.refresh_search);
 }
 
 test "external pipe line plan handles break skip and write" {
@@ -1133,38 +1262,4 @@ test "rectangular selection checks both axes" {
 test "selection rejects inactive or alternate screen mismatch" {
     try std.testing.expectEqual(@as(c_int, 0), st_selected(1, 1, sel_empty, 0, 0, 0, 1, 0, 0, 2, 2));
     try std.testing.expectEqual(@as(c_int, 0), st_selected(1, 1, 2, 0, 1, 0, 1, 0, 0, 2, 2));
-}
-
-test "selection normalize keeps regular multiline edge columns" {
-    const bounds = st_selnormalizeplan(sel_regular, 7, 4, 2, 9);
-
-    try std.testing.expectEqual(@as(c_int, 7), bounds.nb_x);
-    try std.testing.expectEqual(@as(c_int, 4), bounds.nb_y);
-    try std.testing.expectEqual(@as(c_int, 2), bounds.ne_x);
-    try std.testing.expectEqual(@as(c_int, 9), bounds.ne_y);
-}
-
-test "selection normalize sorts same line columns" {
-    const bounds = st_selnormalizeplan(sel_regular, 8, 3, 2, 3);
-
-    try std.testing.expectEqual(@as(c_int, 2), bounds.nb_x);
-    try std.testing.expectEqual(@as(c_int, 3), bounds.nb_y);
-    try std.testing.expectEqual(@as(c_int, 8), bounds.ne_x);
-    try std.testing.expectEqual(@as(c_int, 3), bounds.ne_y);
-}
-
-test "selection normalize rectangular sorts both axes" {
-    const bounds = st_selnormalizeplan(sel_rectangular, 8, 6, 2, 3);
-
-    try std.testing.expectEqual(@as(c_int, 2), bounds.nb_x);
-    try std.testing.expectEqual(@as(c_int, 3), bounds.nb_y);
-    try std.testing.expectEqual(@as(c_int, 8), bounds.ne_x);
-    try std.testing.expectEqual(@as(c_int, 6), bounds.ne_y);
-}
-
-test "selection normalize cols adjusts regular edges" {
-    const bounds = st_selnormalizecolsplan(sel_regular, 8, 9, 5, 9, 10);
-
-    try std.testing.expectEqual(@as(c_int, 5), bounds.nb_x);
-    try std.testing.expectEqual(@as(c_int, 9), bounds.ne_x);
 }

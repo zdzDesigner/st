@@ -118,14 +118,16 @@ flowchart TD
     CMove --> SearchSet[searchset]
 
     CursorKeys[backspace/delete/move/home/end] --> CursorEdit[st_search.zig CursorEdit union]
-    CursorEdit --> ApplyEdit[st.c searchapplyedit]
+    CursorEdit --> CursorResult[st_search.zig SearchCursorResult]
+    CursorResult --> ApplyEdit[st.c searchapplycursor]
     ApplyEdit -->|delete| CDelete[st.c searchdelete memmove]
     ApplyEdit -->|move| CCursor[更新 search.inputcursor]
     CDelete --> SearchSet
     CCursor --> Redraw[redraw]
 
     StateKeys[clear/commit/cancel] --> StateEdit[st_search.zig StateEdit union]
-    StateEdit --> ApplyState[st.c searchapplystateedit]
+    StateEdit --> StateResult[st_search.zig SearchStateResult]
+    StateResult --> ApplyState[st.c searchapplystate]
     ApplyState -->|clear_input| SearchSet
     ApplyState -->|commit_set| SearchSet
     ApplyState -->|commit_clear| SearchClear[searchclear free/reset]
@@ -143,11 +145,15 @@ flowchart TD
     LinePlan --> MatchWrite[st.c 写 SearchMatch]
     MatchWrite --> MatchList[st_search.zig MatchList slice]
     MatchList --> DrawHit[searchmatch/searchcurrent]
+
+补充状态：`matches` 的扩容判定和 scan 结束后的 `nmatches/current` 归一化已都迁入 Zig；C 侧仍保留 `xrealloc` 和 `SearchMatch` 数组写入。
 ```
 
 ## Selection 子系统流程
 
 当前状态：主流程完成，后续只做局部优化或无用 ABI 删除。C 侧保留 selection 全局状态写回、`TLINE(...)` glyph 读取、delimiter 判断、clipboard 文本分配和 UTF-8 编码；Zig 侧负责 normalize、extend、scroll、snap step、选中判断和 getsel 行范围计划。
+
+补充状态：`selection` 已进入统一快照阶段，`selstart/selextend/selscroll` 改由 `SelectionSnapshot -> SelectionStateResult` 驱动，C 侧仍保留 `selsnap()` 及文本输出副作用。
 
 ```mermaid
 flowchart TD

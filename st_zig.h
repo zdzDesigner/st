@@ -381,6 +381,48 @@ typedef struct {
 } ZigSelStartPlan;
 
 typedef struct {
+	int mode;
+	int selection_type;
+	int alt;
+	int snap;
+	int ob_x;
+	int ob_y;
+	int oe_x;
+	int oe_y;
+	int nb_x;
+	int nb_y;
+	int ne_x;
+	int ne_y;
+} ZigSelectionSnapshot;
+
+typedef struct {
+	int mode;
+	int selection_type;
+	int alt;
+	int snap;
+	int ob_x;
+	int ob_y;
+	int oe_x;
+	int oe_y;
+	int nb_x;
+	int nb_y;
+	int ne_x;
+	int ne_y;
+} ZigSelectionStateUpdate;
+
+typedef struct {
+	int dirty;
+	int top;
+	int bot;
+	int clear;
+} ZigSelectionEffectPlan;
+
+typedef struct {
+	ZigSelectionStateUpdate update;
+	ZigSelectionEffectPlan effect;
+} ZigSelectionStateResult;
+
+typedef struct {
 	int x;
 	int y;
 	int wrap_x;
@@ -434,6 +476,11 @@ typedef struct {
 } ZigSearchStateEditPlan;
 
 typedef struct {
+	int run;
+	int new_scr;
+} ZigSearchJumpPlan;
+
+typedef struct {
 	int x;
 	int y;
 	int scr;
@@ -467,6 +514,22 @@ enum {
 	ST_ZIG_SEARCH_STATE_CANCEL = 4,
 };
 
+enum {
+	ST_ZIG_SEARCH_CURSOR_ACTION_BACKSPACE = 1,
+	ST_ZIG_SEARCH_CURSOR_ACTION_DELETE_FORWARD = 2,
+	ST_ZIG_SEARCH_CURSOR_ACTION_DELETE_WORD = 3,
+	ST_ZIG_SEARCH_CURSOR_ACTION_MOVE_LEFT = 4,
+	ST_ZIG_SEARCH_CURSOR_ACTION_MOVE_RIGHT = 5,
+	ST_ZIG_SEARCH_CURSOR_ACTION_HOME = 6,
+	ST_ZIG_SEARCH_CURSOR_ACTION_END = 7,
+};
+
+enum {
+	ST_ZIG_SEARCH_STATE_ACTION_CLEAR_INPUT = 1,
+	ST_ZIG_SEARCH_STATE_ACTION_COMMIT = 2,
+	ST_ZIG_SEARCH_STATE_ACTION_CANCEL = 3,
+};
+
 typedef struct {
 	int query_len;
 	int inputmode;
@@ -496,6 +559,7 @@ typedef struct {
 	int realloc_input;
 	int alloc_query;
 	int realloc_matches;
+	int reuse_matches;
 	int clear_query;
 	int clear_matches;
 	int refresh_search;
@@ -516,6 +580,23 @@ typedef struct {
 	size_t move_src;
 	size_t move_len;
 } ZigSearchInputResult;
+
+typedef struct {
+	ZigSearchStateUpdate update;
+	ZigSearchEffectPlan effect;
+	size_t delete_start;
+	size_t delete_end;
+} ZigSearchCursorResult;
+
+typedef struct {
+	ZigSearchStateUpdate update;
+	ZigSearchEffectPlan effect;
+} ZigSearchStateResult;
+
+typedef struct {
+	ZigSearchStateUpdate update;
+	ZigSearchEffectPlan effect;
+} ZigSearchScanResult;
 
 typedef struct {
 	ZigSearchStateUpdate update;
@@ -730,10 +811,11 @@ int st_tattrset(const ZigGlyph * const *, int, int, int);
 int st_tlineattrset(const ZigGlyph *, int, int);
 ZigDumpLinePlan st_tdumplineplan(int, int);
 ZigLineRange st_tsetdirtrange(int, int, int);
-ZigSelScrollPlan st_selscrollplan(int, int, int, int, int, int, int, int, int);
-ZigSelExtendPlan st_selextendplan(int, int, int, int, int, int, int, int, int, int, int, int);
 int st_selclearplan(int);
-ZigSelStartPlan st_selstartplan(int, int, int, int);
+ZigSelectionStateResult st_selstartupdate(ZigSelectionSnapshot, int, int, int, int);
+ZigSelectionStateResult st_selextendupdate(ZigSelectionSnapshot, int, int, int, int);
+ZigSelectionStateResult st_selscrollupdate(ZigSelectionSnapshot, int, int, int, int);
+ZigSelectionStateResult st_selnormalizeupdate(ZigSelectionSnapshot, int, int, int);
 int st_selsnaplinex(int, int);
 ZigSelSnapLineStep st_selsnaplinestep(int, int, int, int);
 ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
@@ -744,16 +826,10 @@ int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
 ZigSearchLinePlan st_searchlineplan(const ZigGlyph *, int, int, const uint32_t *, int, int, int, int, int);
 ZigHistoryLinePlan st_tlinehistplan(int, int, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
-ZigSearchCursorEditPlan st_searchbackspaceedit(const unsigned char *, int, size_t, size_t);
-ZigSearchCursorEditPlan st_searchdeleteforwardedit(const unsigned char *, int, size_t, size_t);
-ZigSearchCursorEditPlan st_searchdeletewordedit(const unsigned char *, int, size_t, size_t);
-ZigSearchCursorEditPlan st_searchmoveleftedit(const unsigned char *, int, size_t, size_t);
-ZigSearchCursorEditPlan st_searchmoverightedit(const unsigned char *, int, size_t, size_t);
-ZigSearchCursorEditPlan st_searchhomeedit(int);
-ZigSearchCursorEditPlan st_searchendedit(int, size_t);
-ZigSearchStateEditPlan st_searchclearinputedit(int);
-ZigSearchStateEditPlan st_searchcommitedit(int, size_t);
-ZigSearchStateEditPlan st_searchcanceledit(int);
+ZigSearchJumpPlan st_searchjumpplan(int, int, int, int, int);
+ZigSearchCursorResult st_searchcursorupdate(ZigSearchSnapshot, const unsigned char *, int);
+ZigSearchStateResult st_searchstateupdate(ZigSearchSnapshot, int);
+ZigSearchScanResult st_searchscanupdate(ZigSearchSnapshot, int, int);
 ZigSearchDeletePlan st_searchdeleteplan(size_t, size_t, size_t);
 ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
 ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
@@ -765,7 +841,5 @@ size_t st_ttywritechunk(const unsigned char *, size_t);
 int st_tprinterwrite(int);
 int st_sttyfits(size_t, size_t);
 int st_ttyreadpending(int);
-ZigSelBounds st_selnormalizeplan(int, int, int, int, int);
-ZigSelBounds st_selnormalizecolsplan(int, int, int, int, int, int);
 
 #endif
