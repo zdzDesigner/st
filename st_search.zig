@@ -1374,9 +1374,25 @@ pub fn zigSearchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int, qu
     return .{ .kind = @intFromEnum(MatchAppendKind.skip), .cap = cap, .next_x = x, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } };
 }
 
+export fn st_searchmatchlist(matches: ?[*]const SearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
+    return zigSearchmatchlist(matches, nmatches, active, current, term_scr, x, y);
+}
+
+export fn st_searchcurrentmatch(matches: ?[*]const SearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
+    return zigSearchcurrentmatch(matches, nmatches, active, current, term_scr, x, y);
+}
+
+export fn st_searchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int, query: [*]const u32, qlen: c_int, nmatches: c_int, cap: c_int, y: c_int, scr: c_int) ZigSearchLinePlan {
+    return zigSearchlineplan(line, start_x, col, query, qlen, nmatches, cap, y, scr);
+}
+
 pub fn zigSearchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
     const plan = step(active != 0, nmatches, current, direction);
     return .{ .run = boolInt(plan.run), .current = plan.current };
+}
+
+export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
+    return zigSearchstep(active, nmatches, current, direction);
 }
 
 pub fn zigSearchjumpplan(active: c_int, current: c_int, nmatches: c_int, term_scr: c_int, match_scr: c_int) ZigSearchJumpPlan {
@@ -1384,9 +1400,17 @@ pub fn zigSearchjumpplan(active: c_int, current: c_int, nmatches: c_int, term_sc
     return .{ .run = boolInt(plan.run), .new_scr = plan.new_scr };
 }
 
+export fn st_searchjumpplan(active: c_int, current: c_int, nmatches: c_int, term_scr: c_int, match_scr: c_int) ZigSearchJumpPlan {
+    return zigSearchjumpplan(active, current, nmatches, term_scr, match_scr);
+}
+
 pub fn zigSearchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).cursor(input[0..snapshot.inputlen], @enumFromInt(action));
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect), .delete_start = result.delete_start, .delete_end = result.delete_end };
+}
+
+export fn st_searchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
+    return zigSearchcursorupdate(snapshot, input, action);
 }
 
 pub fn zigSearchstateupdate(snapshot: ZigSearchSnapshot, action: c_int) ZigSearchStateResult {
@@ -1394,9 +1418,17 @@ pub fn zigSearchstateupdate(snapshot: ZigSearchSnapshot, action: c_int) ZigSearc
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect) };
 }
 
+export fn st_searchstateupdate(snapshot: ZigSearchSnapshot, action: c_int) ZigSearchStateResult {
+    return zigSearchstateupdate(snapshot, action);
+}
+
 pub fn zigSearchscanupdate(snapshot: ZigSearchSnapshot, nmatches: c_int, current: c_int) ZigSearchScanResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).scan(nmatches, current);
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect) };
+}
+
+export fn st_searchscanupdate(snapshot: ZigSearchSnapshot, nmatches: c_int, current: c_int) ZigSearchScanResult {
+    return zigSearchscanupdate(snapshot, nmatches, current);
 }
 
 pub fn zigSearchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
@@ -1404,9 +1436,17 @@ pub fn zigSearchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchD
     return .{ .run = boolInt(plan.run), .new_len = plan.new_len };
 }
 
+export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
+    return zigSearchdeleteplan(start, end, inputlen);
+}
+
 pub fn zigSearchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).prompt();
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect) };
+}
+
+export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResult {
+    return zigSearchpromptupdate(snapshot);
 }
 
 pub fn zigSearchinputupdate(snapshot: ZigSearchSnapshot, add_len: usize) ZigSearchInputResult {
@@ -1414,9 +1454,17 @@ pub fn zigSearchinputupdate(snapshot: ZigSearchSnapshot, add_len: usize) ZigSear
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect), .insert_at = result.insert_at, .move_dst = result.move_dst, .move_src = result.move_src, .move_len = result.move_len };
 }
 
+export fn st_searchinputupdate(snapshot: ZigSearchSnapshot, add_len: usize) ZigSearchInputResult {
+    return zigSearchinputupdate(snapshot, add_len);
+}
+
 pub fn zigSearchsetupdate(snapshot: ZigSearchSnapshot, query_len: usize, qlen: c_int) ZigSearchSetResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).set(query_len, qlen);
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect), .alloc_len = result.alloc_len };
+}
+
+export fn st_searchsetupdate(snapshot: ZigSearchSnapshot, query_len: usize, qlen: c_int) ZigSearchSetResult {
+    return zigSearchsetupdate(snapshot, query_len, qlen);
 }
 
 fn between(value: i32, lower: i32, upper: i32) bool {
@@ -1697,4 +1745,46 @@ test "search model input owns insertion transition" {
     try std.testing.expectEqual(@as(usize, 3), result.move_len);
     try std.testing.expectEqual(@as(usize, 5), result.update.inputlen);
     try std.testing.expectEqual(@as(usize, 3), result.update.inputcursor);
+}
+
+test "search adapter exports preserve line and match behaviour" {
+    const line = [_]ZigGlyph{
+        .{ .u = '你', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = 0, .mode = model.attr_wdummy, .fg = 0, .bg = 0 },
+        .{ .u = '好', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const query = [_]u32{ '你', '好' };
+    const plan = st_searchlineplan(&line, 0, line.len, &query, query.len, 0, 4, 3, 2);
+    const done = st_searchlineplan(&line, plan.next_x, line.len, &query, query.len, 1, 4, 3, 2);
+    const matches = [_]SearchMatch{
+        .{ .x = 5, .y = 4, .scr = 2, .len = 3 },
+        .{ .x = 1, .y = 0, .scr = 0, .len = 2 },
+    };
+
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.append)), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.match.x);
+    try std.testing.expectEqual(@as(c_int, 3), plan.match.len);
+    try std.testing.expectEqual(@as(c_int, 1), plan.next_x);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.skip)), done.kind);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchmatchlist(&matches, matches.len, 1, -1, 2, 7, 4));
+    try std.testing.expectEqual(@as(c_int, 1), st_searchcurrentmatch(&matches, matches.len, 1, 1, 0, 2, 0));
+}
+
+test "search adapter exports preserve state transitions" {
+    const input = "abc  你好";
+    const active = ZigSearchSnapshot{ .query_len = 0, .inputmode = 1, .inputlen = input.len, .inputcursor = input.len, .inputcap = 32, .nmatches = 0, .match_cap = 0, .current = -1, .active = 0 };
+    const moved = st_searchcursorupdate(active, input, @intFromEnum(CursorAction.move_left));
+    const clear = st_searchstateupdate(.{ .query_len = 2, .inputmode = 1, .inputlen = 4, .inputcursor = 4, .inputcap = 8, .nmatches = 1, .match_cap = 2, .current = 0, .active = 1 }, @intFromEnum(StateAction.clear_input));
+    const prompt = st_searchpromptupdate(.{ .query_len = 0, .inputmode = 0, .inputlen = 4, .inputcursor = 2, .inputcap = 0, .nmatches = 3, .match_cap = 8, .current = 1, .active = 1 });
+    const set = st_searchsetupdate(.{ .query_len = 1, .inputmode = 1, .inputlen = 3, .inputcursor = 2, .inputcap = 8, .nmatches = 2, .match_cap = 4, .current = 1, .active = 0 }, 6, 2);
+
+    try std.testing.expectEqual(@as(usize, 8), moved.update.inputcursor);
+    try std.testing.expectEqual(@as(c_int, 1), moved.effect.redraw);
+    try std.testing.expectEqual(@as(usize, 0), clear.update.inputlen);
+    try std.testing.expectEqual(@as(c_int, 1), clear.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), prompt.effect.alloc_input);
+    try std.testing.expectEqual(@as(c_int, 1), set.effect.alloc_query);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchstep(1, 3, 2, 1).run);
+    try std.testing.expectEqual(@as(c_int, 3), st_searchjumpplan(1, 0, 1, 0, 3).new_scr);
+    try std.testing.expectEqual(@as(c_int, 1), st_searchdeleteplan(2, 5, 9).run);
 }

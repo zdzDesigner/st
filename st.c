@@ -182,6 +182,18 @@ typedef struct {
 	int inputmode;
 } SearchState;
 
+typedef struct {
+	int query_len;
+	int active;
+	int current;
+	int inputmode;
+	size_t inputlen;
+	size_t inputcursor;
+	size_t inputcap;
+	int nmatches;
+	int match_cap;
+} SearchScalarState;
+
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
@@ -667,33 +679,77 @@ searchend(void)
 }
 
 static ZigSearchSnapshot
-searchsnapshot(void)
+zigsearchsnapshot(SearchScalarState state)
 {
 	return (ZigSearchSnapshot){
+		.query_len = state.query_len,
+		.inputmode = state.inputmode,
+		.inputlen = state.inputlen,
+		.inputcursor = state.inputcursor,
+		.inputcap = state.inputcap,
+		.nmatches = state.nmatches,
+		.match_cap = state.match_cap,
+		.current = state.current,
+		.active = state.active,
+	};
+}
+
+static void
+searchwritescalarstate(SearchScalarState state)
+{
+	search.qlen = state.query_len;
+	search.active = state.active;
+	search.current = state.current;
+	search.inputmode = state.inputmode;
+	search.inputlen = state.inputlen;
+	search.inputcursor = state.inputcursor;
+	search.inputcap = state.inputcap;
+	search.nmatches = state.nmatches;
+	search.cap = state.match_cap;
+}
+
+static SearchScalarState
+searchscalarstate(void)
+{
+	return (SearchScalarState){
 		.query_len = search.qlen,
+		.active = search.active,
+		.current = search.current,
 		.inputmode = search.inputmode,
 		.inputlen = search.inputlen,
 		.inputcursor = search.inputcursor,
 		.inputcap = search.inputcap,
 		.nmatches = search.nmatches,
 		.match_cap = search.cap,
-		.current = search.current,
-		.active = search.active,
 	};
+}
+
+static SearchScalarState
+searchscalarfromupdate(ZigSearchStateUpdate update)
+{
+	return (SearchScalarState){
+		.query_len = update.query_len,
+		.active = update.active,
+		.current = update.current,
+		.inputmode = update.inputmode,
+		.inputlen = update.inputlen,
+		.inputcursor = update.inputcursor,
+		.inputcap = update.inputcap,
+		.nmatches = update.nmatches,
+		.match_cap = update.match_cap,
+	};
+}
+
+static ZigSearchSnapshot
+searchsnapshot(void)
+{
+	return zigsearchsnapshot(searchscalarstate());
 }
 
 static void
 searchapplyupdate(ZigSearchStateUpdate update)
 {
-	search.qlen = update.query_len;
-	search.active = update.active;
-	search.current = update.current;
-	search.inputmode = update.inputmode;
-	search.inputlen = update.inputlen;
-	search.inputcursor = update.inputcursor;
-	search.inputcap = update.inputcap;
-	search.nmatches = update.nmatches;
-	search.cap = update.match_cap;
+	searchwritescalarstate(searchscalarfromupdate(update));
 }
 
 static void

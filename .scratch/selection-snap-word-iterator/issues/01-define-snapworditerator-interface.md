@@ -1,5 +1,5 @@
 Title: 定义 SnapWordIterator 纯逻辑接口
-Status: ready-for-agent
+Status: completed
 
 ## What to build
 
@@ -7,9 +7,9 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] Zig 内部新增 iterator state、reader snapshot 和 iter result 类型，能够表达 word snap 的完整多步迭代
-- [ ] 现有 delimiter break、line end、wrap stop 语义被保留，并由新的纯逻辑测试覆盖
-- [ ] 旧 `snapWordLoopStep` 如暂时保留，只作为过渡层复用新逻辑，不新增更宽的 ABI surface
+- [x] Zig 内部新增 iterator state、reader snapshot 和 iter result 类型，能够表达 word snap 的完整多步迭代
+- [x] 现有 delimiter break、line end、wrap stop 语义被保留，并由新的纯逻辑测试覆盖
+- [x] 旧 `snapWordLoopStep` 如暂时保留，只作为过渡层复用新逻辑，不新增更宽的 ABI surface
 
 ## Blocked by
 

@@ -1,5 +1,5 @@
 Title: 删除旧 word snap shim 并收窄 adapter surface
-Status: ready-for-agent
+Status: completed
 
 ## What to build
 
@@ -7,9 +7,9 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] 失效的 `st_selsnapwordplan()` 和 `st_selsnapwordloopstep()` 路径被删除，或被收缩到不再对 C 暴露
-- [ ] `st_line.zig` 与 `st_zig.h` 的 selection snap 导出面缩小，且 `abi-check` 保持通过
-- [ ] 仅验证旧 ABI 转发的 smoke tests 被删除或降级为新接口对应测试
+- [x] 失效的 `st_selsnapwordplan()` 和 `st_selsnapwordloopstep()` 路径被删除，或被收缩到不再对 C 暴露
+- [x] `st_line.zig` 与 `st_zig.h` 的 selection snap 导出面缩小，且 `abi-check` 保持通过
+- [x] 仅验证旧 ABI 转发的 smoke tests 被删除或降级为新接口对应测试
 
 ## Blocked by
 

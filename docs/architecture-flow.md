@@ -103,9 +103,9 @@ flowchart TD
 
 ## Search 子系统流程
 
-当前状态：主流程完成，近期已做多轮 ABI 瘦身，并已把 search 资源释放与 jump/redraw effect 集中到 C helper。接下来的主目标不是继续拆小 helper，而是把 `search` 作为第一批状态所有权迁移入口：读模型已进入 `SearchSnapshot -> SearchStateUpdate/SearchEffectPlan` 形态，写模型已开始通过 `SearchModel` 收口 adapter implementation，后续继续减少 C 侧逐字段写回，最后把 realloc/free/redraw 等 effect 保留在 C shim。
+当前状态：主流程完成，近期已做多轮 ABI 瘦身，并已把 search 资源释放与 jump/redraw effect 集中到 C helper。`st_search*` export 和写模型 adapter 已下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已收口到 `SearchScalarState`。接下来的主目标不是继续拆小 helper，而是把 `search` 作为第一批状态所有权迁移入口，继续决定是否把这个标量状态 seam 深化成更完整的权威状态边界。
 
-第一版契约：C 先组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；search adapter implementation 统一进入 `SearchModel`，返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 通过集中 helper 执行资源释放、jump/redraw 等副作用，并做最终写回。
+第一版契约：C 先通过 `SearchScalarState` 组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；search adapter implementation 统一进入 `SearchModel`，返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 通过集中 helper 执行资源释放、jump/redraw 等副作用，并经 `SearchScalarState` 做最终写回。
 
 ```mermaid
 flowchart TD

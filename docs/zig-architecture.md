@@ -41,7 +41,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑，并持有 selection adapter implementation。
 - `st_search.zig` 通过 `SearchModel` 承载 search 写模型入口，并保留输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
-- `st_line.zig` 作为 line/history 相关 C ABI adapter，并保留 search/selection 的过渡导出 shim；search adapter implementation 和 C 标量到 `SearchModel` 的转换已下沉到 `st_search.zig`，selection adapter implementation 已下沉到 `st_selection.zig`，`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
+- `st_line.zig` 作为 line/history 相关 C ABI adapter，并保留 selection 的过渡导出 shim；search adapter implementation、`export fn st_search*` 和 C 标量到 `SearchModel` 的转换已下沉到 `st_search.zig`，selection adapter implementation 已下沉到 `st_selection.zig`，`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
 
 ## 当前状态
 
@@ -63,7 +63,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 第一批状态所有权迁移入口选 `search`。
 - 原因：`search` 状态相对独立，已有大量纯逻辑在 Zig，近期又已删除多组小 ABI，最适合从“plan 驱动”升级到“Zig 持有状态 + effect plan”。
 - 第一阶段已让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
-- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 统一经由 `SearchModel`，下一步再减少 C 侧 `searchapplyupdate()` 的逐字段写回和资源所有权泄漏，并评估是否把 search export symbol 从 `st_line.zig` 过渡 shim 迁到独立 object。
+- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 与 `export fn st_search*` 已统一下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已集中到 `SearchScalarState` seam。下一步再决定是否继续把 search 标量状态 object 深化为更完整的权威状态边界。
 - `search` 稳定后，再复制同一策略到 `sel`，最后再推进到 `term` 主状态。
 - `sel` 当前已进入统一快照阶段：`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口；`selsnap()` 的 `SNAP_WORD` 也已切到 Zig 主导 loop，C 侧开始消费 `SelectionSnapshot -> SelectionStateResult` 与 `SnapWordIterator` request/resolve seam。
 - `selsnap()` 的 word loop 已从 `ZigSelSnapWordLoopSnapshot` 单步接口迁到 `SnapWordIterator` 两阶段接口：`st_selsnapworditerrequest` 负责返回下一读点，C 读取 glyph/line/wrap 事实后再经 `st_selsnapworditerresolve` 让 Zig 返回 accept/stop。旧 `st_selsnapwordplan`、`st_selsnapwordloopstep` ABI 已删除。
@@ -79,6 +79,11 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 字段：`active`、`current`、`inputmode`、`inputlen`、`inputcursor`、`inputcap`、`nmatches`、`match_cap`
 - 作用：承载 Zig 计算后的新状态，C 只做最终写回，不再分散逐字段修补
 - 约束：第一版不直接携带堆内存所有权；涉及 `query`、`input`、`matches` 的 buffer 变更通过 effect 描述
+
+- `SearchScalarState`
+- 字段：`query_len`、`active`、`current`、`inputmode`、`inputlen`、`inputcursor`、`inputcap`、`nmatches`、`match_cap`
+- 作用：作为 C 侧的 search 标量状态 seam，统一承载 `searchsnapshot()` 的读映射和 `searchapplyupdate()` 的写映射，避免同一组字段在多个 helper 中重复展开
+- 约束：只覆盖标量状态，不持有 `query`、`input`、`matches` 指针或其资源所有权；平台副作用与 buffer 生命周期仍留在 C
 
 - `SearchEffectPlan`
 - 字段：`alloc_input`、`realloc_input`、`alloc_query`、`realloc_matches`、`clear_query`、`clear_matches`、`refresh_search`、`redraw`、`jump`

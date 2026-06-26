@@ -1,5 +1,5 @@
 Title: 接入 selsnap 的 word loop 垂直切片
-Status: ready-for-agent
+Status: completed
 
 ## What to build
 
@@ -7,9 +7,9 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] `selsnap()` 的 `SNAP_WORD` 不再自己维护 delimiter 状态机和停止规则
-- [ ] C 侧只保留 reader/effect shim：读取 `TLINE(...)`、`tlinelen(...)`、wrap 事实并写回最终坐标
-- [ ] `zig build abi-check`、`zig build test` 和 `zig build` 通过，且行为没有已知回退
+- [x] `selsnap()` 的 `SNAP_WORD` 不再自己维护 delimiter 状态机和停止规则
+- [x] C 侧只保留 reader/effect shim：读取 `TLINE(...)`、`tlinelen(...)`、wrap 事实并写回最终坐标
+- [x] `zig build abi-check`、`zig build test` 和 `zig build` 通过，且行为没有已知回退
 
 ## Blocked by
 

@@ -1,5 +1,5 @@
 Title: 同步 Selection 架构文档
-Status: ready-for-agent
+Status: completed
 
 ## What to build
 
@@ -7,9 +7,9 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] `docs/zig-architecture.md` 更新 Selection snap 当前状态与迁移进度
-- [ ] `docs/architecture-flow.md` 更新 Selection flow，明确 word loop 已由 Zig 主导、C 只保留事实读取与副作用
-- [ ] 文档中的描述与实际代码路径一致，不再引用已删除的旧 selection snap seam
+- [x] `docs/zig-architecture.md` 更新 Selection snap 当前状态与迁移进度
+- [x] `docs/architecture-flow.md` 更新 Selection flow，明确 word loop 已由 Zig 主导、C 只保留事实读取与副作用
+- [x] 文档中的描述与实际代码路径一致，不再引用已删除的旧 selection snap seam
 
 ## Blocked by
 
