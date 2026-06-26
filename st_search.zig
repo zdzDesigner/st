@@ -1788,3 +1788,290 @@ test "search adapter exports preserve state transitions" {
     try std.testing.expectEqual(@as(c_int, 3), st_searchjumpplan(1, 0, 1, 0, 3).new_scr);
     try std.testing.expectEqual(@as(c_int, 1), st_searchdeleteplan(2, 5, 9).run);
 }
+
+test "search snapshot and state update round-trip through zig adapters" {
+    const snapshot = ZigSearchSnapshot{
+        .query_len = 3,
+        .inputmode = 1,
+        .inputlen = 5,
+        .inputcursor = 2,
+        .inputcap = 16,
+        .nmatches = 4,
+        .match_cap = 8,
+        .current = 1,
+        .active = 1,
+    };
+    const state = zigSnapshot(snapshot);
+    const update = zigStateUpdate(.{
+        .query_len = state.query_len,
+        .active = state.active,
+        .current = state.current,
+        .inputmode = state.inputmode,
+        .inputlen = state.inputlen,
+        .inputcursor = state.inputcursor,
+        .inputcap = state.inputcap,
+        .nmatches = state.nmatches,
+        .match_cap = state.match_cap,
+    });
+
+    try std.testing.expectEqual(@as(i32, 3), state.query_len);
+    try std.testing.expect(state.inputmode);
+    try std.testing.expect(state.active);
+    try std.testing.expectEqual(snapshot.query_len, update.query_len);
+    try std.testing.expectEqual(snapshot.inputlen, update.inputlen);
+    try std.testing.expectEqual(snapshot.inputcursor, update.inputcursor);
+    try std.testing.expectEqual(snapshot.match_cap, update.match_cap);
+    try std.testing.expectEqual(snapshot.active, update.active);
+}
+
+test "search scalar boundary behaviours stay stable across step jump and scan" {
+    const base = ZigSearchSnapshot{
+        .query_len = 2,
+        .inputmode = 1,
+        .inputlen = 4,
+        .inputcursor = 1,
+        .inputcap = 8,
+        .nmatches = 3,
+        .match_cap = 4,
+        .current = 2,
+        .active = 1,
+    };
+    const next = st_searchstep(base.active, base.nmatches, base.current, 1);
+    const prev = st_searchstep(base.active, base.nmatches, base.current, -1);
+    const jump = st_searchjumpplan(base.active, base.current, base.nmatches, 0, 3);
+    const scan = st_searchscanupdate(base, 3, 2);
+
+    try std.testing.expectEqual(@as(c_int, 0), next.current);
+    try std.testing.expectEqual(@as(c_int, 1), prev.current);
+    try std.testing.expectEqual(@as(c_int, 3), jump.new_scr);
+    try std.testing.expectEqual(base.nmatches, scan.update.nmatches);
+    try std.testing.expectEqual(base.current, scan.update.current);
+    try std.testing.expectEqual(base.match_cap, scan.update.match_cap);
+}
+
+test "search set keeps alloc and apply phases distinct" {
+    const snapshot = ZigSearchSnapshot{
+        .query_len = 1,
+        .inputmode = 1,
+        .inputlen = 3,
+        .inputcursor = 2,
+        .inputcap = 8,
+        .nmatches = 2,
+        .match_cap = 4,
+        .current = 1,
+        .active = 0,
+    };
+    const alloc_phase = st_searchsetupdate(snapshot, 6, 0);
+    const apply_phase = st_searchsetupdate(snapshot, 6, 2);
+
+    try std.testing.expectEqual(@as(usize, 6), alloc_phase.alloc_len);
+    try std.testing.expectEqual(@as(c_int, 1), alloc_phase.effect.alloc_query);
+    try std.testing.expectEqual(@as(c_int, 0), alloc_phase.update.active);
+    try std.testing.expectEqual(@as(c_int, 2), apply_phase.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 1), apply_phase.update.active);
+    try std.testing.expectEqual(@as(c_int, -1), apply_phase.update.current);
+    try std.testing.expectEqual(@as(c_int, 1), apply_phase.effect.clear_query);
+    try std.testing.expectEqual(@as(c_int, 1), apply_phase.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), apply_phase.effect.jump);
+}
+
+test "search set distinguishes utf8 byte length from decoded qlen" {
+    const snapshot = ZigSearchSnapshot{
+        .query_len = 0,
+        .inputmode = 1,
+        .inputlen = 0,
+        .inputcursor = 0,
+        .inputcap = 8,
+        .nmatches = 0,
+        .match_cap = 0,
+        .current = -1,
+        .active = 0,
+    };
+    const bytes = st_searchsetupdate(snapshot, 6, 0);
+    const decoded = st_searchsetupdate(snapshot, 6, 2);
+
+    try std.testing.expectEqual(@as(usize, 6), bytes.alloc_len);
+    try std.testing.expectEqual(@as(c_int, 0), bytes.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 2), decoded.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 1), decoded.update.active);
+}
+
+test "search matches boundary keeps count and cap behaviour stable" {
+    const grow = st_searchlineplan(&[_]ZigGlyph{.{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }}, 0, 1, &[_]u32{'中'}, 1, 4, 4, 3, 2);
+    const append = st_searchlineplan(&[_]ZigGlyph{.{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }}, 0, 1, &[_]u32{'中'}, 1, 3, 4, 3, 2);
+    const scan = st_searchscanupdate(.{
+        .query_len = 1,
+        .inputmode = 0,
+        .inputlen = 0,
+        .inputcursor = 0,
+        .inputcap = 0,
+        .nmatches = 3,
+        .match_cap = 4,
+        .current = 1,
+        .active = 1,
+    }, 3, 1);
+
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.grow_append)), grow.kind);
+    try std.testing.expectEqual(@as(c_int, 8), grow.cap);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.append)), append.kind);
+    try std.testing.expectEqual(@as(c_int, 3), scan.update.nmatches);
+    try std.testing.expectEqual(@as(c_int, 4), scan.update.match_cap);
+    try std.testing.expectEqual(@as(c_int, 1), scan.update.current);
+}
+
+test "search matches boundary preserves match current and jump reads" {
+    const matches = [_]SearchMatch{
+        .{ .x = 5, .y = 4, .scr = 2, .len = 3 },
+        .{ .x = 1, .y = 0, .scr = 0, .len = 2 },
+    };
+    const current = st_searchcurrentmatch(&matches, matches.len, 1, 1, 0, 2, 0);
+    const listed = st_searchmatchlist(&matches, matches.len, 1, -1, 2, 7, 4);
+    const jump = st_searchjumpplan(1, 1, matches.len, 0, matches[1].scr);
+
+    try std.testing.expectEqual(@as(c_int, 1), current);
+    try std.testing.expectEqual(@as(c_int, 1), listed);
+    try std.testing.expectEqual(@as(c_int, 0), jump.new_scr);
+}
+
+test "search input transaction keeps grow and in-place insert behaviour stable" {
+    const grow = st_searchinputupdate(.{
+        .query_len = 0,
+        .inputmode = 1,
+        .inputlen = 7,
+        .inputcursor = 3,
+        .inputcap = 8,
+        .nmatches = 0,
+        .match_cap = 0,
+        .current = -1,
+        .active = 1,
+    }, 2);
+    const in_place = st_searchinputupdate(.{
+        .query_len = 0,
+        .inputmode = 1,
+        .inputlen = 3,
+        .inputcursor = 1,
+        .inputcap = 8,
+        .nmatches = 0,
+        .match_cap = 0,
+        .current = -1,
+        .active = 1,
+    }, 2);
+
+    try std.testing.expectEqual(@as(c_int, 1), grow.effect.realloc_input);
+    try std.testing.expectEqual(@as(usize, 16), grow.update.inputcap);
+    try std.testing.expectEqual(@as(usize, 9), grow.update.inputlen);
+    try std.testing.expectEqual(@as(c_int, 0), in_place.effect.realloc_input);
+    try std.testing.expectEqual(@as(usize, 1), in_place.insert_at);
+    try std.testing.expectEqual(@as(usize, 3), in_place.move_dst);
+    try std.testing.expectEqual(@as(usize, 1), in_place.move_src);
+}
+
+test "search input transaction keeps delete and clear-input triggers stable" {
+    const deleted = st_searchcursorupdate(.{
+        .query_len = 0,
+        .inputmode = 1,
+        .inputlen = 3,
+        .inputcursor = 2,
+        .inputcap = 8,
+        .nmatches = 0,
+        .match_cap = 0,
+        .current = -1,
+        .active = 1,
+    }, "abc", @intFromEnum(CursorAction.backspace));
+    const clear = st_searchstateupdate(.{
+        .query_len = 2,
+        .inputmode = 1,
+        .inputlen = 4,
+        .inputcursor = 4,
+        .inputcap = 8,
+        .nmatches = 1,
+        .match_cap = 2,
+        .current = 0,
+        .active = 1,
+    }, @intFromEnum(StateAction.clear_input));
+    const idle_clear = st_searchstateupdate(.{
+        .query_len = 2,
+        .inputmode = 0,
+        .inputlen = 4,
+        .inputcursor = 4,
+        .inputcap = 8,
+        .nmatches = 1,
+        .match_cap = 2,
+        .current = 0,
+        .active = 1,
+    }, @intFromEnum(StateAction.clear_input));
+
+    try std.testing.expectEqual(@as(usize, 1), deleted.delete_start);
+    try std.testing.expectEqual(@as(usize, 2), deleted.delete_end);
+    try std.testing.expectEqual(@as(c_int, 1), deleted.effect.refresh_search);
+    try std.testing.expectEqual(@as(usize, 0), clear.update.inputlen);
+    try std.testing.expectEqual(@as(c_int, 1), clear.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 0), idle_clear.effect.refresh_search);
+}
+
+test "search query alloc and apply phases expose stable effects" {
+    const snapshot = ZigSearchSnapshot{
+        .query_len = 1,
+        .inputmode = 1,
+        .inputlen = 3,
+        .inputcursor = 2,
+        .inputcap = 8,
+        .nmatches = 2,
+        .match_cap = 4,
+        .current = 1,
+        .active = 0,
+    };
+    const alloc = st_searchsetupdate(snapshot, 6, 0);
+    const apply = st_searchsetupdate(snapshot, 6, 2);
+
+    try std.testing.expectEqual(@as(usize, 6), alloc.alloc_len);
+    try std.testing.expectEqual(@as(c_int, 1), alloc.effect.alloc_query);
+    try std.testing.expectEqual(@as(c_int, 0), alloc.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 2), apply.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.clear_query);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.jump);
+}
+
+test "search query phases distinguish alloc_len from decoded qlen" {
+    const snapshot = ZigSearchSnapshot{
+        .query_len = 0,
+        .inputmode = 1,
+        .inputlen = 0,
+        .inputcursor = 0,
+        .inputcap = 8,
+        .nmatches = 0,
+        .match_cap = 0,
+        .current = -1,
+        .active = 0,
+    };
+    const bytes = st_searchsetupdate(snapshot, 6, 0);
+    const decoded = st_searchsetupdate(snapshot, 6, 2);
+
+    try std.testing.expectEqual(@as(usize, 6), bytes.alloc_len);
+    try std.testing.expectEqual(@as(c_int, 0), bytes.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 2), decoded.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 1), decoded.update.active);
+}
+
+test "search query apply phase keeps replace effects stable" {
+    const snapshot = ZigSearchSnapshot{
+        .query_len = 3,
+        .inputmode = 1,
+        .inputlen = 4,
+        .inputcursor = 2,
+        .inputcap = 8,
+        .nmatches = 1,
+        .match_cap = 2,
+        .current = 0,
+        .active = 1,
+    };
+    const apply = st_searchsetupdate(snapshot, 6, 2);
+
+    try std.testing.expectEqual(@as(c_int, 2), apply.update.query_len);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.alloc_query);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.clear_query);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.refresh_search);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.redraw);
+    try std.testing.expectEqual(@as(c_int, 1), apply.effect.jump);
+}

@@ -63,7 +63,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 第一批状态所有权迁移入口选 `search`。
 - 原因：`search` 状态相对独立，已有大量纯逻辑在 Zig，近期又已删除多组小 ABI，最适合从“plan 驱动”升级到“Zig 持有状态 + effect plan”。
 - 第一阶段已让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
-- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 与 `export fn st_search*` 已统一下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已集中到 `SearchScalarState` seam。下一步再决定是否继续把 search 标量状态 object 深化为更完整的权威状态边界。
+- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 与 `export fn st_search*` 已统一下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已集中到 `SearchScalarState` seam，并开始被 `searchnext/searchprev/searchjump/searchscan/searchmatch` 等调用点消费。`input` mutation transaction 和 `query` alloc/apply phase 也都已拆出独立 seam。当前结论是：`query` ownership 与 `input` ownership 都暂不迁到 Zig，因为 decode、指针替换、`xrealloc/memmove/memcpy`、scan/jump/redraw 等关键 effect 仍主要发生在 C shim，迁移 ownership 的新增协议成本高于当前收益。
 - `search` 稳定后，再复制同一策略到 `sel`，最后再推进到 `term` 主状态。
 - `sel` 当前已进入统一快照阶段：`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口；`selsnap()` 的 `SNAP_WORD` 也已切到 Zig 主导 loop，C 侧开始消费 `SelectionSnapshot -> SelectionStateResult` 与 `SnapWordIterator` request/resolve seam。
 - `selsnap()` 的 word loop 已从 `ZigSelSnapWordLoopSnapshot` 单步接口迁到 `SnapWordIterator` 两阶段接口：`st_selsnapworditerrequest` 负责返回下一读点，C 读取 glyph/line/wrap 事实后再经 `st_selsnapworditerresolve` 让 Zig 返回 accept/stop。旧 `st_selsnapwordplan`、`st_selsnapwordloopstep` ABI 已删除。
@@ -82,13 +82,23 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 
 - `SearchScalarState`
 - 字段：`query_len`、`active`、`current`、`inputmode`、`inputlen`、`inputcursor`、`inputcap`、`nmatches`、`match_cap`
-- 作用：作为 C 侧的 search 标量状态 seam，统一承载 `searchsnapshot()` 的读映射和 `searchapplyupdate()` 的写映射，避免同一组字段在多个 helper 中重复展开
+- 作用：作为 C 侧的 search 标量状态 seam，统一承载 `searchsnapshot()` 的读映射和 `searchapplyupdate()` 的写映射，并开始作为 `searchnext/searchprev/searchjump/searchscan/searchmatch/searchbaractive` 等调用点的共享读写视图，避免同一组字段在多个 helper 中重复展开
 - 约束：只覆盖标量状态，不持有 `query`、`input`、`matches` 指针或其资源所有权；平台副作用与 buffer 生命周期仍留在 C
 
 - `SearchEffectPlan`
 - 字段：`alloc_input`、`realloc_input`、`alloc_query`、`realloc_matches`、`clear_query`、`clear_matches`、`refresh_search`、`redraw`、`jump`
 - 作用：把 realloc/free/redraw/searchscan/searchjump 这类副作用从状态更新里分离出来，C shim 只按计划执行
 - 约束：effect 只描述“做什么”，不直接持有平台资源；真正的 `xmalloc`、`xrealloc`、`free`、`redraw` 仍在 C 执行
+
+- `SearchQuerySeams`
+- 组成：`searchallocquerybuffer()` alloc phase、`searchapplydecodedquery()` apply phase、`searchapplyqueryreplace()` replace transaction
+- 作用：把 `searchset()` 拆成 alloc/decode/apply 三段事务，让 query 的分配尺度、decoded `qlen`、clear/replace/scan/jump 时序各自可验证
+- 约束：当前只拆事务，不迁 `search.query` ownership；`Rune *query` 指针和 free 生命周期仍留在 C
+
+- `SearchInputSeams`
+- 组成：`SearchInputState`、`searchapplyinputinsert()`、`searchapplyinputdelete()`、`searchapplyinputclear()`
+- 作用：把 input 的 grow/insert/delete/clear 事务和 `searchset()` 触发条件收口到可验证的 transaction seam
+- 约束：当前只拆事务，不迁 `search.input` ownership；`char *input` 指针和 `xmalloc/xrealloc/free` 生命周期仍留在 C
 
 ### 第一批接入点
 

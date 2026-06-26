@@ -103,9 +103,9 @@ flowchart TD
 
 ## Search 子系统流程
 
-当前状态：主流程完成，近期已做多轮 ABI 瘦身，并已把 search 资源释放与 jump/redraw effect 集中到 C helper。`st_search*` export 和写模型 adapter 已下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已收口到 `SearchScalarState`。接下来的主目标不是继续拆小 helper，而是把 `search` 作为第一批状态所有权迁移入口，继续决定是否把这个标量状态 seam 深化成更完整的权威状态边界。
+当前状态：主流程完成，近期已做多轮 ABI 瘦身，并已把 search 资源释放与 jump/redraw effect 集中到 C helper。`st_search*` export 和写模型 adapter 已下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已收口到 `SearchScalarState`，并开始被 `searchnext/searchprev/searchjump/searchscan/searchmatch` 等调用点消费。`input` mutation transaction 与 `query` alloc/apply phase 也已经拆出独立 seam。当前结论是：`query` ownership 暂不迁移，优先保持 C 持有指针与生命周期，把收益集中在事务收口和 effect 时序稳定上。
 
-第一版契约：C 先通过 `SearchScalarState` 组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；search adapter implementation 统一进入 `SearchModel`，返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 通过集中 helper 执行资源释放、jump/redraw 等副作用，并经 `SearchScalarState` 做最终写回。
+第一版契约：C 先通过 `SearchScalarState` 组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；search adapter implementation 统一进入 `SearchModel`，返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 通过集中 helper 执行资源释放、jump/redraw 等副作用，并经 `SearchScalarState` 做最终写回。对于 `query`，C 继续持有 `Rune *` 指针和 free 生命周期，当前只通过 alloc/apply phase seam 收口事务，不做 ownership 迁移。
 
 ```mermaid
 flowchart TD

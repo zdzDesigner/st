@@ -194,10 +194,36 @@ typedef struct {
 	int match_cap;
 } SearchScalarState;
 
+typedef struct {
+	int active;
+	size_t len;
+	size_t cursor;
+	size_t cap;
+} SearchInputState;
+
+typedef struct {
+	int count;
+	int cap;
+} SearchMatchesState;
+
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
 static void ttywriteraw(const char *, size_t);
+static SearchScalarState searchscalarstate(void);
+static void searchwritescalarstate(SearchScalarState);
+static ZigSearchSnapshot zigsearchsnapshot(SearchScalarState);
+static SearchScalarState searchscalarfromupdate(ZigSearchStateUpdate);
+static SearchInputState searchinputstate(void);
+static void searchwriteinputstate(SearchInputState);
+static void searchapplyqueryreplace(Rune *, ZigSearchSetResult);
+static SearchMatchesState searchmatchesstate(void);
+static void searchwritematchesstate(SearchMatchesState);
+static void searchapplyinputinsert(ZigSearchInputResult, const char *, size_t);
+static void searchapplyinputdelete(size_t, size_t);
+static void searchapplyinputclear(ZigSearchStateResult);
+static Rune *searchallocquerybuffer(size_t);
+static void searchapplydecodedquery(size_t, int, Rune *);
 
 static void csidump(void);
 static void csihandle(void);
@@ -517,15 +543,25 @@ selected(int x, int y)
 int
 searchmatch(int x, int y)
 {
+	SearchMatchesState matches;
+	SearchScalarState state;
+
+	state = searchscalarstate();
+	matches = searchmatchesstate();
 	return st_searchmatchlist((const ZigSearchMatch *)search.matches,
-		search.nmatches, search.active, search.current, term.scr, x, y);
+		matches.count, state.active, state.current, term.scr, x, y);
 }
 
 int
 searchcurrent(int x, int y)
 {
+	SearchMatchesState matches;
+	SearchScalarState state;
+
+	state = searchscalarstate();
+	matches = searchmatchesstate();
 	return st_searchcurrentmatch((const ZigSearchMatch *)search.matches,
-		search.nmatches, search.active, search.current, term.scr, x, y);
+		matches.count, state.active, state.current, term.scr, x, y);
 }
 
 void
@@ -539,13 +575,16 @@ searchclear(const Arg *arg)
 int
 searchinputactive(void)
 {
-	return search.inputmode;
+	return searchscalarstate().inputmode;
 }
 
 int
 searchbaractive(void)
 {
-	return search.inputmode || search.active;
+	SearchScalarState state;
+
+	state = searchscalarstate();
+	return state.inputmode || state.active;
 }
 
 const char *
@@ -557,20 +596,25 @@ searchinputtext(void)
 size_t
 searchinputcursor(void)
 {
-	return search.inputcursor;
+	return searchscalarstate().inputcursor;
 }
 
 void
 searchnext(const Arg *arg)
 {
+	SearchMatchesState matches;
+	SearchScalarState state;
 	ZigSearchStepPlan plan;
 
 	(void)arg;
 	searchscan();
-	plan = st_searchstep(search.active, search.nmatches, search.current, 1);
+	state = searchscalarstate();
+	matches = searchmatchesstate();
+	plan = st_searchstep(state.active, matches.count, state.current, 1);
 	if (!plan.run)
 		return;
-	search.current = plan.current;
+	state.current = plan.current;
+	searchwritescalarstate(state);
 	searchjump();
 	redraw();
 }
@@ -578,14 +622,19 @@ searchnext(const Arg *arg)
 void
 searchprev(const Arg *arg)
 {
+	SearchMatchesState matches;
+	SearchScalarState state;
 	ZigSearchStepPlan plan;
 
 	(void)arg;
 	searchscan();
-	plan = st_searchstep(search.active, search.nmatches, search.current, -1);
+	state = searchscalarstate();
+	matches = searchmatchesstate();
+	plan = st_searchstep(state.active, matches.count, state.current, -1);
 	if (!plan.run)
 		return;
-	search.current = plan.current;
+	state.current = plan.current;
+	searchwritescalarstate(state);
 	searchjump();
 	redraw();
 }
@@ -593,13 +642,15 @@ searchprev(const Arg *arg)
 void
 searchprompt(const Arg *arg)
 {
+	SearchInputState input;
 	ZigSearchPromptResult result;
 
 	(void)arg;
 	result = st_searchpromptupdate(searchsnapshot());
 	searchapplyupdate(result.update);
+	input = searchinputstate();
 	if (result.effect.alloc_input) {
-		search.input = xmalloc(search.inputcap);
+		search.input = xmalloc(input.cap);
 	}
 	search.input[0] = '\0';
 	searchapplyvieweffect(result.effect);
@@ -613,21 +664,7 @@ searchinput(const char *text, size_t len)
 	result = st_searchinputupdate(searchsnapshot(), len);
 	if (!result.effect.refresh_search)
 		return;
-
-	/* Zig 只规划输入视图更新，真正的 realloc/memmove/memcpy 仍在 C shim 执行。 */
-	searchapplyupdate(result.update);
-
-	if (result.effect.realloc_input) {
-		search.input = xrealloc(search.input, search.inputcap);
-	}
-	/* move_len 包含结尾的 '\0'，这样插入后 C 只需要补写新字节，
-	 * 原有尾部和字符串终止符会一起被后移。 */
-	memmove(search.input + result.move_dst,
-		search.input + result.move_src,
-		result.move_len);
-	memcpy(search.input + result.insert_at, text, len);
-	search.input[search.inputlen] = '\0';
-	searchset(search.input);
+	searchapplyinputinsert(result, text, len);
 }
 
 void
@@ -740,6 +777,42 @@ searchscalarfromupdate(ZigSearchStateUpdate update)
 	};
 }
 
+static SearchInputState
+searchinputstate(void)
+{
+	return (SearchInputState){
+		.active = search.inputmode,
+		.len = search.inputlen,
+		.cursor = search.inputcursor,
+		.cap = search.inputcap,
+	};
+}
+
+static void
+searchwriteinputstate(SearchInputState state)
+{
+	search.inputmode = state.active;
+	search.inputlen = state.len;
+	search.inputcursor = state.cursor;
+	search.inputcap = state.cap;
+}
+
+static SearchMatchesState
+searchmatchesstate(void)
+{
+	return (SearchMatchesState){
+		.count = search.nmatches,
+		.cap = search.cap,
+	};
+}
+
+static void
+searchwritematchesstate(SearchMatchesState state)
+{
+	search.nmatches = state.count;
+	search.cap = state.cap;
+}
+
 static ZigSearchSnapshot
 searchsnapshot(void)
 {
@@ -775,6 +848,90 @@ searchapplyvieweffect(ZigSearchEffectPlan effect)
 }
 
 static void
+searchapplyqueryreplace(Rune *runes, ZigSearchSetResult result)
+{
+	/* query 指针本体仍由 C 持有，但替换时序收口到单一 helper，
+	 * 避免 searchset() 同时展开 free/replace/scan/jump 的细节。 */
+	searchapplyresourceeffect(result.effect);
+	search.query = runes;
+	searchapplyupdate(result.update);
+	if (result.effect.refresh_search)
+		searchscan();
+	searchapplyvieweffect(result.effect);
+}
+
+static Rune *
+searchallocquerybuffer(size_t query_len)
+{
+	ZigSearchSetResult result;
+
+	result = st_searchsetupdate(searchsnapshot(), query_len, 0);
+	return xmalloc(result.alloc_len * sizeof(Rune));
+}
+
+static void
+searchapplydecodedquery(size_t query_len, int qlen, Rune *runes)
+{
+	ZigSearchSetResult result;
+
+	result = st_searchsetupdate(searchsnapshot(), query_len, qlen);
+	searchapplyqueryreplace(runes, result);
+}
+
+static void
+searchapplyinputinsert(ZigSearchInputResult result, const char *text, size_t len)
+{
+	SearchInputState input;
+
+	searchapplyupdate(result.update);
+	input = searchinputstate();
+	if (result.effect.realloc_input) {
+		search.input = xrealloc(search.input, input.cap);
+	}
+	memmove(search.input + result.move_dst,
+		search.input + result.move_src,
+		result.move_len);
+	memcpy(search.input + result.insert_at, text, len);
+	search.input[input.len] = '\0';
+	searchset(search.input);
+}
+
+static void
+searchapplyinputdelete(size_t start, size_t end)
+{
+	SearchInputState input;
+	ZigSearchDeletePlan plan;
+
+	input = searchinputstate();
+	plan = st_searchdeleteplan(start, end, input.len);
+	if (!plan.run)
+		return;
+	memmove(search.input + start, search.input + end, input.len - end + 1);
+	input.len = plan.new_len;
+	searchwriteinputstate(input);
+}
+
+static void
+searchapplyinputclear(ZigSearchStateResult result)
+{
+	SearchInputState input;
+
+	searchapplyupdate(result.update);
+	searchapplyresourceeffect(result.effect);
+	input = searchinputstate();
+	if (search.input && input.len == 0)
+		search.input[0] = '\0';
+	if (result.effect.clear_query && input.cap == 0) {
+		free(search.input);
+		search.input = NULL;
+	}
+	if (result.effect.refresh_search)
+		searchset(search.input ? search.input : "");
+	else
+		searchapplyvieweffect(result.effect);
+}
+
+static void
 searchresetstate(void)
 {
 	free(search.query);
@@ -792,7 +949,7 @@ searchapplycursor(int action)
 	result = st_searchcursorupdate(searchsnapshot(),
 		(const unsigned char *)searchinputtext(), action);
 	if (result.delete_start != result.delete_end)
-		searchdelete(result.delete_start, result.delete_end);
+		searchapplyinputdelete(result.delete_start, result.delete_end);
 	searchapplyupdate(result.update);
 	if (result.effect.refresh_search)
 		searchset(search.input);
@@ -803,25 +960,31 @@ searchapplycursor(int action)
 size_t
 searchprevchar(size_t cursor)
 {
+	SearchInputState input;
 	size_t next;
 
+	input = searchinputstate();
 	if (cursor == 0)
 		return 0;
 	next = cursor - 1;
 	while (next > 0 && (((unsigned char)search.input[next] & 0xc0) == 0x80))
 		next--;
+	if (next > input.len)
+		return input.len;
 	return next;
 }
 
 size_t
 searchnextchar(size_t cursor)
 {
+	SearchInputState input;
 	size_t next;
 
-	if (cursor >= search.inputlen)
-		return search.inputlen;
+	input = searchinputstate();
+	if (cursor >= input.len)
+		return input.len;
 	next = cursor + 1;
-	while (next < search.inputlen && (((unsigned char)search.input[next] & 0xc0) == 0x80))
+	while (next < input.len && (((unsigned char)search.input[next] & 0xc0) == 0x80))
 		next++;
 	return next;
 }
@@ -829,13 +992,7 @@ searchnextchar(size_t cursor)
 void
 searchdelete(size_t start, size_t end)
 {
-	ZigSearchDeletePlan plan;
-
-	plan = st_searchdeleteplan(start, end, search.inputlen);
-	if (!plan.run)
-		return;
-	memmove(search.input + start, search.input + end, search.inputlen - end + 1);
-	search.inputlen = plan.new_len;
+	searchapplyinputdelete(start, end);
 }
 
 void
@@ -856,18 +1013,7 @@ searchapplystate(int action)
 	ZigSearchStateResult result;
 
 	result = st_searchstateupdate(searchsnapshot(), action);
-	searchapplyupdate(result.update);
-	searchapplyresourceeffect(result.effect);
-	if (search.input && search.inputlen == 0)
-		search.input[0] = '\0';
-	if (result.effect.clear_query && search.inputcap == 0) {
-		free(search.input);
-		search.input = NULL;
-	}
-	if (result.effect.refresh_search)
-		searchset(search.input ? search.input : "");
-	else
-		searchapplyvieweffect(result.effect);
+	searchapplyinputclear(result);
 }
 
 void
@@ -877,45 +1023,36 @@ searchset(const char *query)
 	size_t len, off, step;
 	int qlen = 0;
 	Rune *runes;
-	ZigSearchSetResult result;
 
 	len = strlen(query);
-	/* 第一次调用只拿分配尺度，UTF-8 decode 仍由 C 执行，避免这一批同时迁资源和解码。 */
-	result = st_searchsetupdate(searchsnapshot(), len, 0);
-	runes = xmalloc(result.alloc_len * sizeof(*runes));
+	runes = searchallocquerybuffer(len);
 	for (off = 0; off < len; off += step) {
 		step = utf8decode(query + off, &rune, len - off);
 		if (step == 0)
 			break;
 		runes[qlen++] = rune;
 	}
-
-	result = st_searchsetupdate(searchsnapshot(), len, qlen);
-	/* 第二次调用基于 decoded qlen 生成最终状态和 effect，C 只负责执行释放/扫描/跳转。 */
-	searchapplyresourceeffect(result.effect);
-	/* query 指针本体仍由 C 持有，但 active/current/qlen 等“状态决策”已交给 Zig。 */
-	search.query = runes;
-	searchapplyupdate(result.update);
-	if (result.effect.refresh_search)
-		/* 当前 effect 语义里，refresh_search 表示“需要重新计算匹配集合”。 */
-		searchscan();
-	/* jump 只在 searchset 这类会改变 current/active 的路径上触发。 */
-	searchapplyvieweffect(result.effect);
+	searchapplydecodedquery(len, qlen, runes);
 }
 
 void
 searchscan(void)
 {
 	int y, scr, oldcurrent;
+	SearchMatchesState matches;
+	SearchScalarState state;
 	ZigSearchScanResult result;
 
 	/* scan 会重建整份 matches 数组。
 	 * 先记住旧 current，扫描结束后再决定保留旧索引、回退到 0，还是置为 -1。 */
-	oldcurrent = search.current;
-	if (search.matches && search.cap > 0)
-		search.nmatches = 0;
-	search.nmatches = 0;
-	if (!search.active || search.qlen <= 0)
+	state = searchscalarstate();
+	matches = searchmatchesstate();
+	oldcurrent = state.current;
+	if (search.matches && matches.cap > 0)
+		matches.count = 0;
+	matches.count = 0;
+	searchwritematchesstate(matches);
+	if (!state.active || state.query_len <= 0)
 		return;
 
 	for (y = 0; y < term.row; ++y) {
@@ -927,7 +1064,8 @@ searchscan(void)
 
 	/* matches 重新生成后的 current/nmatches 收口也交给 Zig，
 	 * C 只保留数组写入和最终状态落回。 */
-	result = st_searchscanupdate(searchsnapshot(), search.nmatches, oldcurrent);
+	matches = searchmatchesstate();
+	result = st_searchscanupdate(searchsnapshot(), matches.count, oldcurrent);
 	searchapplyresourceeffect(result.effect);
 	searchapplyupdate(result.update);
 }
@@ -936,27 +1074,33 @@ void
 searchscanline(Line line, int scr, int y)
 {
 	int x;
+	SearchMatchesState matches;
+	SearchScalarState state;
 	SearchMatch *match;
 	ZigSearchLinePlan plan;
 
+	matches = searchmatchesstate();
+	state = searchscalarstate();
 	/* Zig 负责告诉 C：当前位置是否命中、是否需要扩容、下一次应从哪里继续扫描。
 	 * C 只负责真正扩容 matches 并把命中的 SearchMatch 写进数组。 */
 	for (x = 0;; x = plan.next_x) {
 		plan = st_searchlineplan((const ZigGlyph *)line, x, term.col,
-			search.query, search.qlen, search.nmatches, search.cap, y, scr);
+			search.query, state.query_len, matches.count, matches.cap, y, scr);
 		if (plan.kind == ST_ZIG_SEARCH_APPEND_SKIP)
 			break;
 
 		if (plan.kind == ST_ZIG_SEARCH_APPEND_GROW) {
-			search.cap = plan.cap;
+			matches.cap = plan.cap;
+			searchwritematchesstate(matches);
 			search.matches = xrealloc(search.matches,
-				search.cap * sizeof(*search.matches));
+				matches.cap * sizeof(*search.matches));
 		}
-		match = &search.matches[search.nmatches++];
+		match = &search.matches[matches.count++];
 		match->x = plan.match.x;
 		match->y = plan.match.y;
 		match->scr = plan.match.scr;
 		match->len = plan.match.len;
+		searchwritematchesstate(matches);
 	}
 }
 
@@ -970,15 +1114,19 @@ void
 searchjump(void)
 {
 	SearchMatch *match;
+	SearchMatchesState matches;
+	SearchScalarState state;
 	ZigSearchJumpPlan plan;
 
 	/* jump 不负责重算匹配，只消费当前 search.current。
 	 * 如果当前匹配在不同的 scrollback 层，就把 term.scr 切过去并整体标脏。 */
-	if (!search.active || search.current < 0 || search.current >= search.nmatches)
+	matches = searchmatchesstate();
+	state = searchscalarstate();
+	if (!state.active || state.current < 0 || state.current >= matches.count)
 		return;
 
-	match = &search.matches[search.current];
-	plan = st_searchjumpplan(search.active, search.current, search.nmatches,
+	match = &search.matches[state.current];
+	plan = st_searchjumpplan(state.active, state.current, matches.count,
 		term.scr, match->scr);
 	if (plan.run && term.scr != plan.new_scr) {
 		term.scr = plan.new_scr;
