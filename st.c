@@ -238,6 +238,8 @@ static void searchscanline(Line, int, int);
 static Line searchhistline(int);
 static ZigSearchSnapshot searchsnapshot(void);
 static void searchapplyupdate(ZigSearchStateUpdate);
+static void searchapplyresourceeffect(ZigSearchEffectPlan);
+static void searchapplyvieweffect(ZigSearchEffectPlan);
 static void searchresetstate(void);
 static void searchapplycursor(int);
 static void searchapplystate(int);
@@ -588,8 +590,7 @@ searchprompt(const Arg *arg)
 		search.input = xmalloc(search.inputcap);
 	}
 	search.input[0] = '\0';
-	if (result.effect.redraw)
-		redraw();
+	searchapplyvieweffect(result.effect);
 }
 
 void
@@ -696,6 +697,28 @@ searchapplyupdate(ZigSearchStateUpdate update)
 }
 
 static void
+searchapplyresourceeffect(ZigSearchEffectPlan effect)
+{
+	if (effect.clear_query) {
+		free(search.query);
+		search.query = NULL;
+	}
+	if (effect.clear_matches) {
+		free(search.matches);
+		search.matches = NULL;
+	}
+}
+
+static void
+searchapplyvieweffect(ZigSearchEffectPlan effect)
+{
+	if (effect.jump)
+		searchjump();
+	if (effect.redraw)
+		redraw();
+}
+
+static void
 searchresetstate(void)
 {
 	free(search.query);
@@ -717,8 +740,8 @@ searchapplycursor(int action)
 	searchapplyupdate(result.update);
 	if (result.effect.refresh_search)
 		searchset(search.input);
-	else if (result.effect.redraw)
-		redraw();
+	else
+		searchapplyvieweffect(result.effect);
 }
 
 size_t
@@ -778,14 +801,7 @@ searchapplystate(int action)
 
 	result = st_searchstateupdate(searchsnapshot(), action);
 	searchapplyupdate(result.update);
-	if (result.effect.clear_query) {
-		free(search.query);
-		search.query = NULL;
-	}
-	if (result.effect.clear_matches) {
-		free(search.matches);
-		search.matches = NULL;
-	}
+	searchapplyresourceeffect(result.effect);
 	if (search.input && search.inputlen == 0)
 		search.input[0] = '\0';
 	if (result.effect.clear_query && search.inputcap == 0) {
@@ -794,8 +810,8 @@ searchapplystate(int action)
 	}
 	if (result.effect.refresh_search)
 		searchset(search.input ? search.input : "");
-	else if (result.effect.redraw)
-		redraw();
+	else
+		searchapplyvieweffect(result.effect);
 }
 
 void
@@ -820,19 +836,15 @@ searchset(const char *query)
 
 	result = st_searchsetupdate(searchsnapshot(), len, qlen);
 	/* 第二次调用基于 decoded qlen 生成最终状态和 effect，C 只负责执行释放/扫描/跳转。 */
-	if (result.effect.clear_query)
-		free(search.query);
+	searchapplyresourceeffect(result.effect);
 	/* query 指针本体仍由 C 持有，但 active/current/qlen 等“状态决策”已交给 Zig。 */
 	search.query = runes;
 	searchapplyupdate(result.update);
 	if (result.effect.refresh_search)
 		/* 当前 effect 语义里，refresh_search 表示“需要重新计算匹配集合”。 */
 		searchscan();
-	if (result.effect.jump)
-		/* jump 只在 searchset 这类会改变 current/active 的路径上触发。 */
-		searchjump();
-	if (result.effect.redraw)
-		redraw();
+	/* jump 只在 searchset 这类会改变 current/active 的路径上触发。 */
+	searchapplyvieweffect(result.effect);
 }
 
 void
@@ -860,10 +872,7 @@ searchscan(void)
 	/* matches 重新生成后的 current/nmatches 收口也交给 Zig，
 	 * C 只保留数组写入和最终状态落回。 */
 	result = st_searchscanupdate(searchsnapshot(), search.nmatches, oldcurrent);
-	if (result.effect.clear_matches) {
-		free(search.matches);
-		search.matches = NULL;
-	}
+	searchapplyresourceeffect(result.effect);
 	searchapplyupdate(result.update);
 }
 
@@ -924,12 +933,12 @@ searchjump(void)
 void
 selsnap(int *x, int *y, int direction)
 {
-	int newx, newy;
 	int delim, prevdelim, linelen, wrap_allowed;
 	Rune rune, prevrune;
 	Glyph *gp;
-	ZigSelSnapWordPlan word_plan;
+	ZigSelSnapWordIterRequest word_request;
 	ZigSelSnapWordStep word_step;
+	ZigSelSnapWordReaderSnapshot word_reader;
 	ZigSelSnapLineStep line_step;
 
 	switch (sel.snap) {
@@ -941,28 +950,26 @@ selsnap(int *x, int *y, int direction)
 		prevrune = TLINE(*y)[*x].u;
 		prevdelim = ISDELIM(prevrune);
 		for (;;) {
-			word_plan = st_selsnapwordplan(*x, *y, direction,
-				term.col, term.row);
-			newx = word_plan.x;
-			newy = word_plan.y;
-			wrap_allowed = !word_plan.wrapped ||
-				(word_plan.in_bounds &&
-				(TLINE(word_plan.wrap_y)[word_plan.wrap_x].mode & ATTR_WRAP));
-			if (word_plan.in_bounds) {
-				gp = &TLINE(newy)[newx];
-				delim = ISDELIM(gp->u);
-				linelen = tlinelen(newy);
-				rune = gp->u;
-			} else {
-				delim = prevdelim;
-				linelen = 0;
-				rune = prevrune;
-			}
-			word_step = st_selsnapwordloopstep(newx, newy,
-				word_plan.wrap_x, word_plan.wrap_y, word_plan.wrapped,
-				word_plan.in_bounds, wrap_allowed, linelen,
-				word_plan.in_bounds ? gp->mode : 0, delim, prevdelim,
-				rune, prevrune);
+			word_request = st_selsnapworditerrequest(*x, *y, direction,
+				term.col, term.row, prevdelim, prevrune);
+			if (word_request.action == ST_ZIG_SEL_SNAP_WORD_ITER_STOP)
+				break;
+
+			wrap_allowed = !word_request.wrapped ||
+				(TLINE(word_request.wrap_y)[word_request.wrap_x].mode & ATTR_WRAP);
+			gp = &TLINE(word_request.y)[word_request.x];
+			delim = ISDELIM(gp->u);
+			linelen = tlinelen(word_request.y);
+			rune = gp->u;
+			word_reader = (ZigSelSnapWordReaderSnapshot){
+				.wrap_allowed = wrap_allowed,
+				.linelen = linelen,
+				.mode = gp->mode,
+				.delim = delim,
+				.rune = rune,
+			};
+			word_step = st_selsnapworditerresolve(word_request, prevdelim,
+				prevrune, word_reader);
 			if (word_step.action == ST_ZIG_SEL_SNAP_WORD_BREAK)
 				break;
 
@@ -1150,13 +1157,13 @@ stty(char **args)
 	char cmd[_POSIX_ARG_MAX], **p, *q, *s;
 	size_t n, siz;
 
-	if (!st_sttyfits((n = strlen(stty_args)), sizeof(cmd)))
+	if (!((n = strlen(stty_args)) < sizeof(cmd)))
 		die("incorrect stty parameters\n");
 	memcpy(cmd, stty_args, n);
 	q = cmd + n;
 	siz = sizeof(cmd) - n;
 	for (p = args; p && (s = *p); ++p) {
-		if (!st_sttyfits((n = strlen(s)), siz))
+		if (!((n = strlen(s)) < siz))
 			die("stty parameter length too long\n");
 		*q++ = ' ';
 		memcpy(q, s, n);
@@ -1249,7 +1256,7 @@ ttyread(void)
 		written = twrite(buf, buflen, 0);
 		buflen -= written;
 		/* keep any incomplete UTF-8 byte sequence for the next call */
-		if (st_ttyreadpending(buflen))
+		if (buflen > 0)
 			memmove(buf, buf + written, buflen);
 		return ret;
 	}
@@ -1316,7 +1323,7 @@ ttywriteraw(const char *s, size_t n)
 			 * default of 256. This seems to be a reasonable value
 			 * for a serial line. Bigger values might clog the I/O.
 			 */
-			if ((r = write(cmdfd, s, st_ttywritecount(n, lim))) < 0)
+			if ((r = write(cmdfd, s, n < lim ? n : lim)) < 0)
 				goto write_error;
 			if (r < n) {
 				/*
@@ -1516,7 +1523,7 @@ tscrolldown(int orig, int n, int copyhist)
 		term.line[i-n] = temp;
 	}
 
-	if (st_tscrollselplan(term.scr))
+	if (term.scr == 0)
 		selscroll(orig, n);
 }
 
@@ -1549,7 +1556,7 @@ tscrollup(int orig, int n, int copyhist)
 		term.line[i+n] = temp;
 	}
 
-	if (st_tscrollselplan(term.scr))
+	if (term.scr == 0)
 		selscroll(orig, -n);
 }
 
@@ -1608,7 +1615,7 @@ csiparse(void)
 	ZigCsiParse parsed;
 
 	parsed = st_csiparse((const unsigned char *)csiescseq.buf, csiescseq.len);
-	csiescseq.priv = st_csiprivbool(parsed.priv);
+	csiescseq.priv = parsed.priv != 0;
 	csiescseq.narg = parsed.narg;
 	memcpy(csiescseq.arg, parsed.arg, sizeof(parsed.arg));
 	csiescseq.mode[0] = parsed.mode[0];
@@ -2284,7 +2291,7 @@ sendbreak(const Arg *arg)
 void
 tprinter(char *s, size_t len)
 {
-	if (st_tprinterwrite(iofd) && xwrite(iofd, s, len) < 0) {
+	if (iofd != -1 && xwrite(iofd, s, len) < 0) {
 		perror("Error writing to output file");
 		close(iofd);
 		iofd = -1;
@@ -2376,7 +2383,7 @@ tdectest(char c)
 {
 	int x, y;
 
-	if (st_tdectest(c)) { /* DEC screen alignment test. */
+	if (c == '8') { /* DEC screen alignment test. */
 		for (x = 0; x < term.col; ++x) {
 			for (y = 0; y < term.row; ++y)
 				tsetchar('E', &term.c.attr, x, y);

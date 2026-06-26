@@ -34,202 +34,26 @@ const ZigLineRange = extern struct {
     bot: c_int,
 };
 
-const ZigSelScrollPlan = extern struct {
-    action: c_int,
-    ob_y: c_int,
-    oe_y: c_int,
-};
+const ZigSelectionSnapshot = selection.ZigSelectionSnapshot;
+const ZigSelectionStateResult = selection.ZigSelectionStateResult;
+const ZigSelSnapWordStep = selection.ZigSelSnapWordStep;
+const ZigSelSnapWordIterRequest = selection.ZigSelSnapWordIterRequest;
+const ZigSelSnapWordReaderSnapshot = selection.ZigSelSnapWordReaderSnapshot;
+const ZigSelSnapLineStep = selection.ZigSelSnapLineStep;
+const ZigGetSelExecPlan = selection.ZigGetSelExecPlan;
 
-const ZigSelExtendPlan = extern struct {
-    dirty: c_int,
-    top: c_int,
-    bot: c_int,
-    mode: c_int,
-};
-
-const ZigSelStartPlan = extern struct {
-    mode: c_int,
-    sel_type: c_int,
-    alt: c_int,
-    snap: c_int,
-    x: c_int,
-    y: c_int,
-    final_mode: c_int,
-};
-
-const ZigSelectionSnapshot = extern struct {
-    mode: c_int,
-    selection_type: c_int,
-    alt: c_int,
-    snap: c_int,
-    ob_x: c_int,
-    ob_y: c_int,
-    oe_x: c_int,
-    oe_y: c_int,
-    nb_x: c_int,
-    nb_y: c_int,
-    ne_x: c_int,
-    ne_y: c_int,
-};
-
-const ZigSelectionStateUpdate = extern struct {
-    mode: c_int,
-    selection_type: c_int,
-    alt: c_int,
-    snap: c_int,
-    ob_x: c_int,
-    ob_y: c_int,
-    oe_x: c_int,
-    oe_y: c_int,
-    nb_x: c_int,
-    nb_y: c_int,
-    ne_x: c_int,
-    ne_y: c_int,
-};
-
-const ZigSelectionEffectPlan = extern struct {
-    dirty: c_int,
-    top: c_int,
-    bot: c_int,
-    clear: c_int,
-};
-
-const ZigSelectionStateResult = extern struct {
-    update: ZigSelectionStateUpdate,
-    effect: ZigSelectionEffectPlan,
-};
-
-const ZigSelSnapWordPlan = extern struct {
-    x: c_int,
-    y: c_int,
-    wrap_x: c_int,
-    wrap_y: c_int,
-    wrapped: c_int,
-    in_bounds: c_int,
-};
-
-const ZigSelSnapWordStep = extern struct {
-    action: c_int,
-    x: c_int,
-    y: c_int,
-    prevdelim: c_int,
-    prevrune: u32,
-};
-
-const ZigSelSnapLineStep = extern struct {
-    action: c_int,
-    y: c_int,
-};
-
-const ZigGetSelExecPlan = extern struct {
-    empty: c_int,
-    start_x: c_int,
-    last_index: c_int,
-    newline: c_int,
-    bufsize: c_int,
-};
-
-const ZigSearchStepPlan = extern struct {
-    run: c_int,
-    current: c_int,
-};
-
-const ZigSearchJumpPlan = extern struct {
-    run: c_int,
-    new_scr: c_int,
-};
-
-const ZigSearchDeletePlan = extern struct {
-    run: c_int,
-    new_len: usize,
-};
-
+const ZigSearchStepPlan = search.ZigSearchStepPlan;
+const ZigSearchJumpPlan = search.ZigSearchJumpPlan;
+const ZigSearchDeletePlan = search.ZigSearchDeletePlan;
 const ZigSearchMatch = search.SearchMatch;
-
-const ZigSearchLinePlan = extern struct {
-    kind: c_int,
-    cap: c_int,
-    next_x: c_int,
-    match: ZigSearchMatch,
-};
-
-const ZigSearchSnapshot = extern struct {
-    // 这组 extern struct 是 C shim 与 Zig search 领域模型之间的新主边界。
-    // 第一版只承载可复制的状态标量，避免一开始就把内存所有权一起迁过去。
-    query_len: c_int,
-    inputmode: c_int,
-    inputlen: usize,
-    inputcursor: usize,
-    inputcap: usize,
-    nmatches: c_int,
-    match_cap: c_int,
-    current: c_int,
-    active: c_int,
-};
-
-const ZigSearchStateUpdate = extern struct {
-    // Zig 算出的下一状态；C 只负责最终写回到 SearchState。
-    query_len: c_int,
-    active: c_int,
-    current: c_int,
-    inputmode: c_int,
-    inputlen: usize,
-    inputcursor: usize,
-    inputcap: usize,
-    nmatches: c_int,
-    match_cap: c_int,
-};
-
-const ZigSearchEffectPlan = extern struct {
-    // effect 只描述副作用类型，不直接表达平台细节。
-    alloc_input: c_int,
-    realloc_input: c_int,
-    alloc_query: c_int,
-    realloc_matches: c_int,
-    reuse_matches: c_int,
-    clear_query: c_int,
-    clear_matches: c_int,
-    refresh_search: c_int,
-    redraw: c_int,
-    jump: c_int,
-};
-
-const ZigSearchPromptResult = extern struct {
-    update: ZigSearchStateUpdate,
-    effect: ZigSearchEffectPlan,
-};
-
-const ZigSearchInputResult = extern struct {
-    update: ZigSearchStateUpdate,
-    effect: ZigSearchEffectPlan,
-    insert_at: usize,
-    move_dst: usize,
-    move_src: usize,
-    move_len: usize,
-};
-
-const ZigSearchCursorResult = extern struct {
-    update: ZigSearchStateUpdate,
-    effect: ZigSearchEffectPlan,
-    delete_start: usize,
-    delete_end: usize,
-};
-
-const ZigSearchStateResult = extern struct {
-    update: ZigSearchStateUpdate,
-    effect: ZigSearchEffectPlan,
-};
-
-const ZigSearchScanResult = extern struct {
-    update: ZigSearchStateUpdate,
-    effect: ZigSearchEffectPlan,
-};
-
-const ZigSearchSetResult = extern struct {
-    update: ZigSearchStateUpdate,
-    effect: ZigSearchEffectPlan,
-    alloc_len: usize,
-};
+const ZigSearchLinePlan = search.ZigSearchLinePlan;
+const ZigSearchSnapshot = search.ZigSearchSnapshot;
+const ZigSearchPromptResult = search.ZigSearchPromptResult;
+const ZigSearchInputResult = search.ZigSearchInputResult;
+const ZigSearchCursorResult = search.ZigSearchCursorResult;
+const ZigSearchStateResult = search.ZigSearchStateResult;
+const ZigSearchScanResult = search.ZigSearchScanResult;
+const ZigSearchSetResult = search.ZigSearchSetResult;
 
 const ZigExternalPipePlan = extern struct {
     kind: c_int,
@@ -254,10 +78,6 @@ const sel_snap_word_break = @intFromEnum(selection.SnapWordAction.stop);
 const sel_snap_word_accept = @intFromEnum(selection.SnapWordAction.accept);
 const sel_snap_line_stop = @intFromEnum(selection.SnapLineAction.stop);
 const sel_snap_line_move = @intFromEnum(selection.SnapLineAction.move);
-const search_action_none = @intFromEnum(search.Action.none);
-const search_action_clear = @intFromEnum(search.Action.clear);
-const search_action_set = @intFromEnum(search.Action.set);
-const search_action_redraw = @intFromEnum(search.Action.redraw);
 const externalpipe_break = @intFromEnum(line_core.ExternalPipeLineKind.break_line);
 const externalpipe_skip = @intFromEnum(line_core.ExternalPipeLineKind.skip);
 const externalpipe_write = @intFromEnum(line_core.ExternalPipeLineKind.write);
@@ -295,28 +115,23 @@ export fn st_tsetdirtrange(top: c_int, bot: c_int, row: c_int) ZigLineRange {
 }
 
 export fn st_selclearplan(ob_x: c_int) c_int {
-    return boolInt(selection.shouldClear(ob_x));
+    return selection.zigSelclearplan(ob_x);
 }
 
 export fn st_selstartupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelectionStateResult {
-    const result = selection.startResult(selectionSnapshot(snapshot), .{ .x = col, .y = row }, snap, alt_screen != 0);
-    return selectionStateResult(result);
+    return selection.zigSelstartupdate(snapshot, col, row, snap, alt_screen);
 }
 
 export fn st_selextendupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, sel_type: c_int, done: c_int) ZigSelectionStateResult {
-    const result = selection.extendResult(selectionSnapshot(snapshot), .{ .x = col, .y = row }, selectionType(sel_type), done != 0);
-    return selectionStateResult(result);
+    return selection.zigSelextendupdate(snapshot, col, row, sel_type, done);
 }
 
 export fn st_selscrollupdate(snapshot: ZigSelectionSnapshot, orig: c_int, top: c_int, bot: c_int, delta: c_int) ZigSelectionStateResult {
-    const state = selectionSnapshot(snapshot);
-    const result = selection.scrollResult(state, .{ .start = state.nb, .end = state.ne }, orig, top, bot, delta);
-    return selectionStateResult(result);
+    return selection.zigSelscrollupdate(snapshot, orig, top, bot, delta);
 }
 
 export fn st_selnormalizeupdate(snapshot: ZigSelectionSnapshot, col: c_int, start_len: c_int, end_len: c_int) ZigSelectionStateResult {
-    const result = selection.normalizeResult(selectionSnapshot(snapshot), col, start_len, end_len);
-    return selectionStateResult(result);
+    return selection.zigSelnormalizeupdate(snapshot, col, start_len, end_len);
 }
 
 export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
@@ -324,80 +139,31 @@ export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
 }
 
 export fn st_selsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int) ZigSelSnapLineStep {
-    const step = selection.snapLineStep(y, direction, row, wrapped != 0);
-    return switch (step) {
-        .stop => |next_y| .{ .action = sel_snap_line_stop, .y = next_y },
-        .move => |next_y| .{ .action = sel_snap_line_move, .y = next_y },
-    };
+    return selection.zigSelsnaplinestep(y, direction, row, wrapped);
 }
 
-export fn st_selsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int) ZigSelSnapWordPlan {
-    const plan = selection.snapWordPlan(.{ .x = x, .y = y }, direction, .{ .cols = col, .rows = row });
-    return .{
-        .x = plan.point.x,
-        .y = plan.point.y,
-        .wrap_x = plan.wrap_point.x,
-        .wrap_y = plan.wrap_point.y,
-        .wrapped = boolInt(plan.wrapped),
-        .in_bounds = boolInt(plan.in_bounds),
-    };
+export fn st_selsnapworditerrequest(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int, prevdelim: c_int, prevrune: u32) ZigSelSnapWordIterRequest {
+    return selection.zigSelsnapworditerrequest(x, y, direction, col, row, prevdelim, prevrune);
 }
 
-export fn st_selsnapwordloopstep(x: c_int, y: c_int, wrap_x: c_int, wrap_y: c_int, wrapped: c_int, in_bounds: c_int, wrap_allowed: c_int, linelen: c_int, mode: c_ushort, delim: c_int, prevdelim: c_int, rune: u32, prevrune: u32) ZigSelSnapWordStep {
-    const step = selection.snapWordLoopStep(
-        .{
-            .point = .{ .x = x, .y = y },
-            .wrap_point = .{ .x = wrap_x, .y = wrap_y },
-            .wrapped = wrapped != 0,
-            .in_bounds = in_bounds != 0,
-        },
-        wrap_allowed != 0,
-        linelen,
-        mode,
-        delim,
-        .{ .delim = prevdelim, .rune = prevrune },
-        rune,
-    );
-    return switch (step) {
-        .stop => |prev| .{ .action = sel_snap_word_break, .x = x, .y = y, .prevdelim = prev.delim, .prevrune = prev.rune },
-        .accept => |accepted| .{ .action = sel_snap_word_accept, .x = accepted.point.x, .y = accepted.point.y, .prevdelim = accepted.prev.delim, .prevrune = accepted.prev.rune },
-    };
+export fn st_selsnapworditerresolve(request: ZigSelSnapWordIterRequest, prevdelim: c_int, prevrune: u32, reader: ZigSelSnapWordReaderSnapshot) ZigSelSnapWordStep {
+    return selection.zigSelsnapworditerresolve(request, prevdelim, prevrune, reader);
 }
 
 export fn st_selected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
-    const selection_type = selectionType(sel_type);
-    const bounds = selection.Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
-    const active = mode != sel_empty and ob_x != -1;
-    return boolInt(selection.isSelected(.{ .x = x, .y = y }, active, sel_alt == alt_screen, selection_type, bounds));
+    return selection.zigSelected(x, y, mode, ob_x, sel_alt, alt_screen, sel_type, nb_x, nb_y, ne_x, ne_y);
 }
 
 export fn st_searchmatchlist(matches: ?[*]const ZigSearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
-    const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
-    const items = if (count == 0) &[_]ZigSearchMatch{} else (matches orelse return 0)[0..count];
-    return boolInt(search.matchListContains(items, active != 0, current, term_scr, x, y));
+    return search.zigSearchmatchlist(matches, nmatches, active, current, term_scr, x, y);
 }
 
 export fn st_searchcurrentmatch(matches: ?[*]const ZigSearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
-    const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
-    const items = if (count == 0) &[_]ZigSearchMatch{} else (matches orelse return 0)[0..count];
-    return boolInt(search.matchListCurrent(items, active != 0, current, term_scr, x, y));
+    return search.zigSearchcurrentmatch(matches, nmatches, active, current, term_scr, x, y);
 }
 
 export fn st_searchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int, query: [*]const u32, qlen: c_int, nmatches: c_int, cap: c_int, y: c_int, scr: c_int) ZigSearchLinePlan {
-    const glyphs = line[0..@intCast(col)];
-    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
-    const last_x = search.scanLineLastStart(linelen, qlen);
-    var x = start_x;
-    while (x <= last_x) : (x += 1) {
-        const match_len = search.lineMatch(ZigGlyph, glyphs, x, linelen, query[0..@intCast(qlen)], col);
-        const plan = search.appendMatch(match_len, nmatches, cap, x, y, scr);
-        switch (plan) {
-            .skip => {},
-            .append => |match| return .{ .kind = @intFromEnum(search.MatchAppendKind.append), .cap = cap, .next_x = x + 1, .match = match },
-            .grow_append => |grow| return .{ .kind = @intFromEnum(search.MatchAppendKind.grow_append), .cap = grow.cap, .next_x = x + 1, .match = grow.match },
-        }
-    }
-    return .{ .kind = @intFromEnum(search.MatchAppendKind.skip), .cap = cap, .next_x = x, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } };
+    return search.zigSearchlineplan(@ptrCast(line), start_x, col, query, qlen, nmatches, cap, y, scr);
 }
 
 export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
@@ -406,140 +172,27 @@ export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLin
 }
 
 export fn st_searchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
-    const plan = search.step(active != 0, nmatches, current, direction);
-    return .{
-        .run = boolInt(plan.run),
-        .current = plan.current,
-    };
+    return search.zigSearchstep(active, nmatches, current, direction);
 }
 
 export fn st_searchjumpplan(active: c_int, current: c_int, nmatches: c_int, term_scr: c_int, match_scr: c_int) ZigSearchJumpPlan {
-    const plan = search.jumpPlan(active != 0, current, nmatches, term_scr, match_scr);
-    return .{ .run = boolInt(plan.run), .new_scr = plan.new_scr };
+    return search.zigSearchjumpplan(active, current, nmatches, term_scr, match_scr);
 }
 
 export fn st_searchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
-    const result = search.cursorResult(.{
-        .query_len = snapshot.query_len,
-        .inputmode = snapshot.inputmode != 0,
-        .inputlen = snapshot.inputlen,
-        .inputcursor = snapshot.inputcursor,
-        .inputcap = snapshot.inputcap,
-        .nmatches = snapshot.nmatches,
-        .match_cap = snapshot.match_cap,
-        .current = snapshot.current,
-        .active = snapshot.active != 0,
-    }, input[0..snapshot.inputlen], @enumFromInt(action));
-    return .{
-        .update = .{
-            .query_len = result.update.query_len,
-            .active = boolInt(result.update.active),
-            .current = result.update.current,
-            .inputmode = boolInt(result.update.inputmode),
-            .inputlen = result.update.inputlen,
-            .inputcursor = result.update.inputcursor,
-            .inputcap = result.update.inputcap,
-            .nmatches = result.update.nmatches,
-            .match_cap = result.update.match_cap,
-        },
-        .effect = .{
-            .alloc_input = boolInt(result.effect.alloc_input),
-            .realloc_input = boolInt(result.effect.realloc_input),
-            .alloc_query = boolInt(result.effect.alloc_query),
-            .realloc_matches = boolInt(result.effect.realloc_matches),
-            .reuse_matches = boolInt(result.effect.reuse_matches),
-            .clear_query = boolInt(result.effect.clear_query),
-            .clear_matches = boolInt(result.effect.clear_matches),
-            .refresh_search = boolInt(result.effect.refresh_search),
-            .redraw = boolInt(result.effect.redraw),
-            .jump = boolInt(result.effect.jump),
-        },
-        .delete_start = result.delete_start,
-        .delete_end = result.delete_end,
-    };
+    return search.zigSearchcursorupdate(snapshot, input, action);
 }
 
 export fn st_searchstateupdate(snapshot: ZigSearchSnapshot, action: c_int) ZigSearchStateResult {
-    const result = search.stateResult(.{
-        .query_len = snapshot.query_len,
-        .inputmode = snapshot.inputmode != 0,
-        .inputlen = snapshot.inputlen,
-        .inputcursor = snapshot.inputcursor,
-        .inputcap = snapshot.inputcap,
-        .nmatches = snapshot.nmatches,
-        .match_cap = snapshot.match_cap,
-        .current = snapshot.current,
-        .active = snapshot.active != 0,
-    }, @enumFromInt(action));
-    return .{
-        .update = .{
-            .query_len = result.update.query_len,
-            .active = boolInt(result.update.active),
-            .current = result.update.current,
-            .inputmode = boolInt(result.update.inputmode),
-            .inputlen = result.update.inputlen,
-            .inputcursor = result.update.inputcursor,
-            .inputcap = result.update.inputcap,
-            .nmatches = result.update.nmatches,
-            .match_cap = result.update.match_cap,
-        },
-        .effect = .{
-            .alloc_input = boolInt(result.effect.alloc_input),
-            .realloc_input = boolInt(result.effect.realloc_input),
-            .alloc_query = boolInt(result.effect.alloc_query),
-            .realloc_matches = boolInt(result.effect.realloc_matches),
-            .reuse_matches = boolInt(result.effect.reuse_matches),
-            .clear_query = boolInt(result.effect.clear_query),
-            .clear_matches = boolInt(result.effect.clear_matches),
-            .refresh_search = boolInt(result.effect.refresh_search),
-            .redraw = boolInt(result.effect.redraw),
-            .jump = boolInt(result.effect.jump),
-        },
-    };
+    return search.zigSearchstateupdate(snapshot, action);
 }
 
 export fn st_searchscanupdate(snapshot: ZigSearchSnapshot, nmatches: c_int, current: c_int) ZigSearchScanResult {
-    const result = search.scanResult(.{
-        .query_len = snapshot.query_len,
-        .inputmode = snapshot.inputmode != 0,
-        .inputlen = snapshot.inputlen,
-        .inputcursor = snapshot.inputcursor,
-        .inputcap = snapshot.inputcap,
-        .nmatches = snapshot.nmatches,
-        .match_cap = snapshot.match_cap,
-        .current = snapshot.current,
-        .active = snapshot.active != 0,
-    }, nmatches, current);
-    return .{
-        .update = .{
-            .query_len = result.update.query_len,
-            .active = boolInt(result.update.active),
-            .current = result.update.current,
-            .inputmode = boolInt(result.update.inputmode),
-            .inputlen = result.update.inputlen,
-            .inputcursor = result.update.inputcursor,
-            .inputcap = result.update.inputcap,
-            .nmatches = result.update.nmatches,
-            .match_cap = result.update.match_cap,
-        },
-        .effect = .{
-            .alloc_input = boolInt(result.effect.alloc_input),
-            .realloc_input = boolInt(result.effect.realloc_input),
-            .alloc_query = boolInt(result.effect.alloc_query),
-            .realloc_matches = boolInt(result.effect.realloc_matches),
-            .reuse_matches = boolInt(result.effect.reuse_matches),
-            .clear_query = boolInt(result.effect.clear_query),
-            .clear_matches = boolInt(result.effect.clear_matches),
-            .refresh_search = boolInt(result.effect.refresh_search),
-            .redraw = boolInt(result.effect.redraw),
-            .jump = boolInt(result.effect.jump),
-        },
-    };
+    return search.zigSearchscanupdate(snapshot, nmatches, current);
 }
 
 export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
-    const plan = search.deletePlan(start, end, inputlen);
-    return .{ .run = boolInt(plan.run), .new_len = plan.new_len };
+    return search.zigSearchdeleteplan(start, end, inputlen);
 }
 
 export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPipePlan {
@@ -554,156 +207,19 @@ export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPi
 }
 
 export fn st_searchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResult {
-    // adapter 只做 extern struct <-> 领域 struct 转换，避免把字段写回规则散落在 C。
-    const result = search.promptResult(.{
-        .query_len = snapshot.query_len,
-        .inputmode = snapshot.inputmode != 0,
-        .inputlen = snapshot.inputlen,
-        .inputcursor = snapshot.inputcursor,
-        .inputcap = snapshot.inputcap,
-        .nmatches = snapshot.nmatches,
-        .match_cap = snapshot.match_cap,
-        .current = snapshot.current,
-        .active = snapshot.active != 0,
-    });
-    return .{
-        .update = .{
-            .query_len = result.update.query_len,
-            .active = boolInt(result.update.active),
-            .current = result.update.current,
-            .inputmode = boolInt(result.update.inputmode),
-            .inputlen = result.update.inputlen,
-            .inputcursor = result.update.inputcursor,
-            .inputcap = result.update.inputcap,
-            .nmatches = result.update.nmatches,
-            .match_cap = result.update.match_cap,
-        },
-        .effect = .{
-            .alloc_input = boolInt(result.effect.alloc_input),
-            .realloc_input = boolInt(result.effect.realloc_input),
-            .alloc_query = boolInt(result.effect.alloc_query),
-            .realloc_matches = boolInt(result.effect.realloc_matches),
-            .reuse_matches = boolInt(result.effect.reuse_matches),
-            .clear_query = boolInt(result.effect.clear_query),
-            .clear_matches = boolInt(result.effect.clear_matches),
-            .refresh_search = boolInt(result.effect.refresh_search),
-            .redraw = boolInt(result.effect.redraw),
-            .jump = boolInt(result.effect.jump),
-        },
-    };
+    return search.zigSearchpromptupdate(snapshot);
 }
 
 export fn st_searchinputupdate(snapshot: ZigSearchSnapshot, add_len: usize) ZigSearchInputResult {
-    // 输入插入的位移细节由 Zig 计算，C 继续执行真实内存移动。
-    const result = search.inputResult(.{
-        .query_len = snapshot.query_len,
-        .inputmode = snapshot.inputmode != 0,
-        .inputlen = snapshot.inputlen,
-        .inputcursor = snapshot.inputcursor,
-        .inputcap = snapshot.inputcap,
-        .nmatches = snapshot.nmatches,
-        .match_cap = snapshot.match_cap,
-        .current = snapshot.current,
-        .active = snapshot.active != 0,
-    }, add_len);
-    return .{
-        .update = .{
-            .query_len = result.update.query_len,
-            .active = boolInt(result.update.active),
-            .current = result.update.current,
-            .inputmode = boolInt(result.update.inputmode),
-            .inputlen = result.update.inputlen,
-            .inputcursor = result.update.inputcursor,
-            .inputcap = result.update.inputcap,
-            .nmatches = result.update.nmatches,
-            .match_cap = result.update.match_cap,
-        },
-        .effect = .{
-            .alloc_input = boolInt(result.effect.alloc_input),
-            .realloc_input = boolInt(result.effect.realloc_input),
-            .alloc_query = boolInt(result.effect.alloc_query),
-            .realloc_matches = boolInt(result.effect.realloc_matches),
-            .reuse_matches = boolInt(result.effect.reuse_matches),
-            .clear_query = boolInt(result.effect.clear_query),
-            .clear_matches = boolInt(result.effect.clear_matches),
-            .refresh_search = boolInt(result.effect.refresh_search),
-            .redraw = boolInt(result.effect.redraw),
-            .jump = boolInt(result.effect.jump),
-        },
-        .insert_at = result.insert_at,
-        .move_dst = result.move_dst,
-        .move_src = result.move_src,
-        .move_len = result.move_len,
-    };
+    return search.zigSearchinputupdate(snapshot, add_len);
 }
 
 export fn st_searchsetupdate(snapshot: ZigSearchSnapshot, query_len: usize, qlen: c_int) ZigSearchSetResult {
-    // set 路径分两段调用：第一次拿 alloc_len，decode 后再带 qlen 生成最终状态/effect。
-    const result = search.setResult(.{
-        .query_len = snapshot.query_len,
-        .inputmode = snapshot.inputmode != 0,
-        .inputlen = snapshot.inputlen,
-        .inputcursor = snapshot.inputcursor,
-        .inputcap = snapshot.inputcap,
-        .nmatches = snapshot.nmatches,
-        .match_cap = snapshot.match_cap,
-        .current = snapshot.current,
-        .active = snapshot.active != 0,
-    }, query_len, qlen);
-    return .{
-        .update = .{
-            .query_len = result.update.query_len,
-            .active = boolInt(result.update.active),
-            .current = result.update.current,
-            .inputmode = boolInt(result.update.inputmode),
-            .inputlen = result.update.inputlen,
-            .inputcursor = result.update.inputcursor,
-            .inputcap = result.update.inputcap,
-            .nmatches = result.update.nmatches,
-            .match_cap = result.update.match_cap,
-        },
-        .effect = .{
-            .alloc_input = boolInt(result.effect.alloc_input),
-            .realloc_input = boolInt(result.effect.realloc_input),
-            .alloc_query = boolInt(result.effect.alloc_query),
-            .realloc_matches = boolInt(result.effect.realloc_matches),
-            .reuse_matches = boolInt(result.effect.reuse_matches),
-            .clear_query = boolInt(result.effect.clear_query),
-            .clear_matches = boolInt(result.effect.clear_matches),
-            .refresh_search = boolInt(result.effect.refresh_search),
-            .redraw = boolInt(result.effect.redraw),
-            .jump = boolInt(result.effect.jump),
-        },
-        .alloc_len = result.alloc_len,
-    };
+    return search.zigSearchsetupdate(snapshot, query_len, qlen);
 }
 
 export fn st_getselexecplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int, line: [*]const ZigGlyph, utf_siz: c_int) ZigGetSelExecPlan {
-    const selection_type = selectionType(sel_type);
-    const bounds = selection.Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
-    const bufsize = selection.getBufferSize(col, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, utf_siz);
-    const glyphs = line[0..@intCast(col)];
-    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
-
-    if (linelen == 0) {
-        return .{ .empty = 1, .start_x = 0, .last_index = -1, .newline = 1, .bufsize = bufsize };
-    }
-
-    const line_plan = selection.getLinePlan(selection_type, bounds, y, col);
-    const start_x = line_plan.start_x;
-    var last_index = selection.getLastX(line_plan.last_x, linelen);
-    while (last_index >= start_x and glyphs[@intCast(last_index)].u == ' ') {
-        last_index -= 1;
-    }
-
-    const last_mode: c_ushort = if (last_index >= start_x) glyphs[@intCast(last_index)].mode else 0;
-    return .{
-        .empty = if (last_index < start_x) 1 else 0,
-        .start_x = start_x,
-        .last_index = last_index,
-        .newline = boolInt(selection.needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, line_plan.last_x, linelen, last_mode, selection_type)),
-        .bufsize = bufsize,
-    };
+    return selection.zigGetselexecplan(sel_type, nb_x, nb_y, ne_x, ne_y, y, col, @ptrCast(line), utf_siz);
 }
 
 fn attrMask(attr: c_int) c_ushort {
@@ -712,54 +228,6 @@ fn attrMask(attr: c_int) c_ushort {
 
 fn boolInt(value: bool) c_int {
     return if (value) 1 else 0;
-}
-
-fn selectionType(value: c_int) selection.SelectionType {
-    return if (value == sel_rectangular) .rectangular else .regular;
-}
-
-fn selectionMode(value: c_int) selection.SelectionMode {
-    if (value == sel_empty) return .empty;
-    if (value == 0) return .idle;
-    return .ready;
-}
-
-fn selectionSnapshot(snapshot: ZigSelectionSnapshot) selection.SelectionSnapshot {
-    return .{
-        .mode = selectionMode(snapshot.mode),
-        .selection_type = selectionType(snapshot.selection_type),
-        .alt = snapshot.alt != 0,
-        .snap = snapshot.snap,
-        .ob = .{ .x = snapshot.ob_x, .y = snapshot.ob_y },
-        .oe = .{ .x = snapshot.oe_x, .y = snapshot.oe_y },
-        .nb = .{ .x = snapshot.nb_x, .y = snapshot.nb_y },
-        .ne = .{ .x = snapshot.ne_x, .y = snapshot.ne_y },
-    };
-}
-
-fn selectionStateResult(result: selection.SelectionStateResult) ZigSelectionStateResult {
-    return .{
-        .update = .{
-            .mode = @intFromEnum(result.update.mode),
-            .selection_type = @intFromEnum(result.update.selection_type),
-            .alt = boolInt(result.update.alt),
-            .snap = result.update.snap,
-            .ob_x = result.update.ob.x,
-            .ob_y = result.update.ob.y,
-            .oe_x = result.update.oe.x,
-            .oe_y = result.update.oe.y,
-            .nb_x = result.update.nb.x,
-            .nb_y = result.update.nb.y,
-            .ne_x = result.update.ne.x,
-            .ne_y = result.update.ne.y,
-        },
-        .effect = .{
-            .dirty = boolInt(result.effect.dirty),
-            .top = result.effect.top,
-            .bot = result.effect.bot,
-            .clear = boolInt(result.effect.clear),
-        },
-    };
 }
 
 test "line length ignores trailing spaces" {
@@ -914,28 +382,6 @@ test "selection line snap x chooses edge by direction" {
     try std.testing.expectEqual(@as(c_int, sel_snap_line_stop), st_selsnaplinestep(3, 1, 5, 0).action);
 }
 
-test "selection word snap plans wrapped coordinates" {
-    const forward = st_selsnapwordplan(9, 2, 1, 10, 5);
-    try std.testing.expectEqual(@as(c_int, 0), forward.x);
-    try std.testing.expectEqual(@as(c_int, 3), forward.y);
-    try std.testing.expectEqual(@as(c_int, 9), forward.wrap_x);
-    try std.testing.expectEqual(@as(c_int, 2), forward.wrap_y);
-    try std.testing.expectEqual(@as(c_int, 1), forward.wrapped);
-    try std.testing.expectEqual(@as(c_int, 1), forward.in_bounds);
-
-    const backward = st_selsnapwordplan(0, 2, -1, 10, 5);
-    try std.testing.expectEqual(@as(c_int, 9), backward.x);
-    try std.testing.expectEqual(@as(c_int, 1), backward.y);
-    try std.testing.expectEqual(@as(c_int, 9), backward.wrap_x);
-    try std.testing.expectEqual(@as(c_int, 1), backward.wrap_y);
-    try std.testing.expectEqual(@as(c_int, 1), backward.wrapped);
-}
-
-test "selection word snap reports row overflow" {
-    const plan = st_selsnapwordplan(0, 0, -1, 10, 5);
-    try std.testing.expectEqual(@as(c_int, 0), plan.in_bounds);
-}
-
 test "selection word snap break follows delimiter state" {
     const prev = selection.SnapPrev{ .delim = 0, .rune = 'a' };
     try std.testing.expect(selection.snapWordBreak(0, 1, prev, ','));
@@ -946,20 +392,21 @@ test "selection word snap break follows delimiter state" {
     try std.testing.expect(!selection.snapWordPastLine(4, 5));
 }
 
-test "selection word snap step accepts and updates previous glyph" {
-    const step = st_selsnapwordloopstep(3, 2, 2, 2, 0, 1, 1, 6, 0, 0, 0, 'b', 'a');
+test "selection word snap iterator adapter requests read and resolves accept" {
+    const request = st_selsnapworditerrequest(2, 2, 1, 10, 5, 0, 'a');
+    try std.testing.expectEqual(@as(c_int, 1), request.action);
+    try std.testing.expectEqual(@as(c_int, 3), request.x);
+
+    const step = st_selsnapworditerresolve(request, 0, 'a', .{
+        .wrap_allowed = 1,
+        .linelen = 6,
+        .mode = 0,
+        .delim = 0,
+        .rune = 'b',
+    });
     try std.testing.expectEqual(@as(c_int, sel_snap_word_accept), step.action);
     try std.testing.expectEqual(@as(c_int, 3), step.x);
-    try std.testing.expectEqual(@as(c_int, 2), step.y);
-    try std.testing.expectEqual(@as(c_int, 0), step.prevdelim);
     try std.testing.expectEqual(@as(u32, 'b'), step.prevrune);
-}
-
-test "selection word snap step breaks on line end or delimiter" {
-    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(6, 2, 2, 2, 0, 1, 1, 6, 0, 0, 0, 'b', 'a').action);
-    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(3, 2, 2, 2, 0, 1, 1, 6, 0, 1, 0, ',', 'a').action);
-    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(0, -1, 0, -1, 1, 0, 1, 0, 0, 0, 0, 'a', 'a').action);
-    try std.testing.expectEqual(@as(c_int, sel_snap_word_break), st_selsnapwordloopstep(0, 3, 9, 2, 1, 1, 0, 6, 0, 0, 0, 'b', 'a').action);
 }
 
 test "search line plan skips dummy cells and returns next match" {

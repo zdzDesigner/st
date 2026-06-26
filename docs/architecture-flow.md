@@ -103,9 +103,9 @@ flowchart TD
 
 ## Search 子系统流程
 
-当前状态：主流程完成，近期已做多轮 ABI 瘦身。接下来的主目标不是继续拆小 helper，而是把 `search` 作为第一批状态所有权迁移入口：先迁读模型，再迁写模型，最后把 realloc/free/redraw 等 effect 保留在 C shim。
+当前状态：主流程完成，近期已做多轮 ABI 瘦身，并已把 search 资源释放与 jump/redraw effect 集中到 C helper。接下来的主目标不是继续拆小 helper，而是把 `search` 作为第一批状态所有权迁移入口：读模型已进入 `SearchSnapshot -> SearchStateUpdate/SearchEffectPlan` 形态，写模型已开始通过 `SearchModel` 收口 adapter implementation，后续继续减少 C 侧逐字段写回，最后把 realloc/free/redraw 等 effect 保留在 C shim。
 
-第一版契约：C 先组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；Zig 返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 只执行内存、副作用和最终写回。
+第一版契约：C 先组装 `SearchSnapshot`，把 `query/input/matches` 作为切片或指针单独传给 Zig；search adapter implementation 统一进入 `SearchModel`，返回 `SearchStateUpdate` 和 `SearchEffectPlan`，C 通过集中 helper 执行资源释放、jump/redraw 等副作用，并做最终写回。
 
 ```mermaid
 flowchart TD
@@ -151,9 +151,9 @@ flowchart TD
 
 ## Selection 子系统流程
 
-当前状态：主流程完成，后续只做局部优化或无用 ABI 删除。C 侧保留 selection 全局状态写回、`TLINE(...)` glyph 读取、delimiter 判断、clipboard 文本分配和 UTF-8 编码；Zig 侧负责 normalize、extend、scroll、snap step、选中判断和 getsel 行范围计划。
+当前状态：主流程完成，后续只做局部优化或无用 ABI 删除。C 侧保留 selection 全局状态写回、`TLINE(...)` glyph 读取、clipboard 文本分配和 UTF-8 编码；Zig 侧负责 normalize、extend、scroll、word snap loop 控制、选中判断和 getsel 行范围计划。
 
-补充状态：`selection` 已进入统一快照阶段，`selstart/selextend/selscroll` 改由 `SelectionSnapshot -> SelectionStateResult` 驱动，C 侧仍保留 `selsnap()` 及文本输出副作用。
+补充状态：`selection` 已进入统一快照阶段，`selstart/selextend/selscroll` 改由 `SelectionSnapshot -> SelectionStateResult` 驱动；`selsnap()` 的 `SNAP_WORD` 路径现已改为 `SnapWordIterator` 两阶段 seam：Zig 先返回 `read/stop` 请求，C 只读取 glyph、line length 和 wrap 事实，再回填给 Zig 获取 `accept/stop` 结果。旧 `st_selsnapwordplan`、`st_selsnapwordloopstep` 已删除。
 
 ```mermaid
 flowchart TD
@@ -161,14 +161,15 @@ flowchart TD
     Extend[selextend] --> ExtendPlan[st_selection.zig extendPlan]
     Scroll[selscroll] --> ScrollPlan[st_selection.zig scrollPlan]
     Normalize[selnormalize] --> Bounds[st_selection.zig normalize / normalizeColumns]
-    Snap[selsnap] --> SnapPlan[st_selection.zig snapWordPlan / snapWordStep / snapLineX]
+    Snap[selsnap] --> SnapPlan[st_selection.zig SnapWordIterator / snapLineX]
     GetSel[getsel] --> GetLine[st_line.zig GetSelExecPlan]
 
     StartPlan --> CState[st.c 更新 sel]
     ExtendPlan --> CState
     ScrollPlan --> CState
     Bounds --> CState
-    SnapPlan --> CTLine[st.c 读取 TLINE 和 word delimiter]
+    SnapPlan --> CRead[st.c 读取 TLINE / tlinelen / wrap 事实]
+    CRead --> SnapPlan
     GetLine --> CCopy[st.c utf8encode / malloc / 返回 selection 文本]
 ```
 
@@ -219,10 +220,10 @@ flowchart LR
 ```
 
 - **Search 第一优先级**：主流程纯逻辑已稳定，且小 ABI 已大幅收薄；下一步开始定义 `SearchSnapshot`、`SearchStateUpdate` 和 `SearchEffectPlan`，让 Zig 逐步接管 `search` 读写模型。
-- **Selection 定版**：主流程完成，`getsel` 已合并为 `st_getselexecplan`，line snap step 和 word snap loop step 已 plan 化；C 侧只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
+- **Selection 定版**：主流程完成，`getsel` 已合并为 `st_getselexecplan`，line snap step 和 word snap loop step 已 plan 化，selection adapter implementation 已下沉到 `st_selection.zig`；C 侧只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
 - **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
 - **Draw 收口**：draw frame gate、cursor 调整和 draw region dirty 扫描已迁移为 Zig plan；C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链。
 - **CSI 聚合**：`csihandle` 已改为 `ZigCsiExecPlan` 顶层分发，六个旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除；C 继续执行真实副作用。
 - **ExternalPipe 聚合**：行长度、write/skip、lastpos 和 wrap newline 已合并为 `st_externalpipeplan`；C 继续负责 `tlinehist`、`utf8encode` 和 `xwrite`。
-- **ABI 瘦身**：`st_zig.h` 仍只保留 C shim 实际调用入口；已清理多轮旧 `st_plan*` 和 search/mode/strhandle 小 helper。后续新增边界优先是 snapshot/update/effect 结构，而不是新的零碎 `st_*` 导出。
+- **ABI 瘦身**：`st_zig.h` 仍只保留 C shim 实际调用入口；已清理多轮旧 `st_plan*`、search/mode/strhandle 小 helper，以及 `st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool` 等 pass-through exports。后续新增边界优先是 snapshot/update/effect 结构，而不是新的零碎 `st_*` 导出。
 - **验证要求**：每批迁移后执行 `zig fmt`、`zig build abi-check`、`zig build test`、`zig build`；提交或发布前补 `timeout 5 ./zig-out/bin/st`。

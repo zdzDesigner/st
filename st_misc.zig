@@ -34,56 +34,11 @@ const TtyWrite = struct {
     }
 };
 
-export fn st_tdectest(c: c_char) c_int {
-    return if (c == '8') 1 else 0;
-}
-
-export fn st_ttywritecount(n: usize, limit: usize) usize {
-    return if (n < limit) n else limit;
-}
-
 export fn st_ttywritechunk(input: [*]const u8, len: usize) usize {
     return (TtyWrite{ .input = input[0..len] }).chunk();
-}
-
-export fn st_tprinterwrite(iofd: c_int) c_int {
-    return if (iofd != -1) 1 else 0;
-}
-
-export fn st_sttyfits(len: usize, available: usize) c_int {
-    return if (len < available) 1 else 0;
-}
-
-export fn st_ttyreadpending(buflen: c_int) c_int {
-    return if (buflen > 0) 1 else 0;
-}
-
-test "dectest only accepts alignment selector" {
-    try std.testing.expectEqual(@as(c_int, 1), st_tdectest('8'));
-    try std.testing.expectEqual(@as(c_int, 0), st_tdectest('7'));
-}
-
-test "tty write count clamps to limit" {
-    try std.testing.expectEqual(@as(usize, 12), st_ttywritecount(12, 256));
-    try std.testing.expectEqual(@as(usize, 256), st_ttywritecount(300, 256));
 }
 
 test "tty write chunk stops at carriage return" {
     try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc\rdef", 7));
     try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc", 3));
-}
-
-test "printer write requires open fd" {
-    try std.testing.expectEqual(@as(c_int, 0), st_tprinterwrite(-1));
-    try std.testing.expectEqual(@as(c_int, 1), st_tprinterwrite(3));
-}
-
-test "stty length must leave room for terminator" {
-    try std.testing.expectEqual(@as(c_int, 1), st_sttyfits(3, 4));
-    try std.testing.expectEqual(@as(c_int, 0), st_sttyfits(4, 4));
-}
-
-test "tty read pending follows buffered byte count" {
-    try std.testing.expectEqual(@as(c_int, 0), st_ttyreadpending(0));
-    try std.testing.expectEqual(@as(c_int, 1), st_ttyreadpending(2));
 }

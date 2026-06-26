@@ -441,6 +441,39 @@ typedef struct {
 
 typedef struct {
 	int action;
+	int x;
+	int y;
+	int wrap_x;
+	int wrap_y;
+	int wrapped;
+} ZigSelSnapWordIterRequest;
+
+typedef struct {
+	int wrap_allowed;
+	int linelen;
+	unsigned short mode;
+	int delim;
+	uint32_t rune;
+} ZigSelSnapWordReaderSnapshot;
+
+typedef struct {
+	int x;
+	int y;
+	int wrap_x;
+	int wrap_y;
+	int wrapped;
+	int in_bounds;
+	int wrap_allowed;
+	int linelen;
+	unsigned short mode;
+	int delim;
+	int prevdelim;
+	uint32_t rune;
+	uint32_t prevrune;
+} ZigSelSnapWordLoopSnapshot;
+
+typedef struct {
+	int action;
 	int y;
 } ZigSelSnapLineStep;
 
@@ -633,6 +666,11 @@ enum {
 };
 
 enum {
+	ST_ZIG_SEL_SNAP_WORD_ITER_STOP = 0,
+	ST_ZIG_SEL_SNAP_WORD_ITER_READ = 1,
+};
+
+enum {
 	ST_ZIG_SEL_SNAP_LINE_STOP = 0,
 	ST_ZIG_SEL_SNAP_LINE_MOVE = 1,
 };
@@ -766,7 +804,6 @@ char *st_base64dec(const char *);
 ZigUtf8Decode st_utf8decode(const unsigned char *, size_t);
 size_t st_utf8encode(uint32_t, unsigned char *);
 ZigCsiParse st_csiparse(const unsigned char *, size_t);
-int st_csiprivbool(char);
 ZigCsiExecPlan st_csiexecplan(char, char, char, const int *, int, int, int, int, int);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
@@ -781,14 +818,12 @@ ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 int st_tlineinregion(int, int, int);
 ZigScrollPlan st_tscrollplan(int, int, int, int, int, int, int, int);
-int st_tscrollselplan(int);
 ZigKScrollPlan st_kscrolldownplan(int, int, int);
 ZigKScrollPlan st_kscrollupplan(int, int, int, int);
 ZigScrollRegion st_tsetscroll(int, int, int);
 ZigResizeExecPlan st_tresizeexecplan(const int *, int, int, int, int, int, int, int);
 ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
-int st_tdectest(char);
 ZigModePlan st_modeplan(int, int, int, int);
 int st_tdefutf8(int, char);
 int st_tdeftran(char);
@@ -818,8 +853,8 @@ ZigSelectionStateResult st_selscrollupdate(ZigSelectionSnapshot, int, int, int, 
 ZigSelectionStateResult st_selnormalizeupdate(ZigSelectionSnapshot, int, int, int);
 int st_selsnaplinex(int, int);
 ZigSelSnapLineStep st_selsnaplinestep(int, int, int, int);
-ZigSelSnapWordPlan st_selsnapwordplan(int, int, int, int, int);
-ZigSelSnapWordStep st_selsnapwordloopstep(int, int, int, int, int, int, int, int, unsigned short, int, int, uint32_t, uint32_t);
+ZigSelSnapWordIterRequest st_selsnapworditerrequest(int, int, int, int, int, int, uint32_t);
+ZigSelSnapWordStep st_selsnapworditerresolve(ZigSelSnapWordIterRequest, int, uint32_t, ZigSelSnapWordReaderSnapshot);
 int st_selected(int, int, int, int, int, int, int, int, int, int, int);
 int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
@@ -836,10 +871,6 @@ ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
 ZigSearchInputResult st_searchinputupdate(ZigSearchSnapshot, size_t);
 ZigSearchSetResult st_searchsetupdate(ZigSearchSnapshot, size_t, int);
 ZigGetSelExecPlan st_getselexecplan(int, int, int, int, int, int, int, const ZigGlyph *, int);
-size_t st_ttywritecount(size_t, size_t);
 size_t st_ttywritechunk(const unsigned char *, size_t);
-int st_tprinterwrite(int);
-int st_sttyfits(size_t, size_t);
-int st_ttyreadpending(int);
 
 #endif

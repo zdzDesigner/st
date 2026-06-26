@@ -4,7 +4,124 @@
 //! [定位]: 承载 selection 相关纯逻辑，C adapter 只负责转换 extern struct。
 
 const std = @import("std");
+const line_core = @import("st_line_core.zig");
 const model = @import("term_model.zig");
+
+pub const ZigGlyph = extern struct {
+    u: u32,
+    mode: c_ushort,
+    fg: u32,
+    bg: u32,
+};
+
+pub const ZigSelectionSnapshot = extern struct {
+    mode: c_int,
+    selection_type: c_int,
+    alt: c_int,
+    snap: c_int,
+    ob_x: c_int,
+    ob_y: c_int,
+    oe_x: c_int,
+    oe_y: c_int,
+    nb_x: c_int,
+    nb_y: c_int,
+    ne_x: c_int,
+    ne_y: c_int,
+};
+
+pub const ZigSelectionStateUpdate = extern struct {
+    mode: c_int,
+    selection_type: c_int,
+    alt: c_int,
+    snap: c_int,
+    ob_x: c_int,
+    ob_y: c_int,
+    oe_x: c_int,
+    oe_y: c_int,
+    nb_x: c_int,
+    nb_y: c_int,
+    ne_x: c_int,
+    ne_y: c_int,
+};
+
+pub const ZigSelectionEffectPlan = extern struct {
+    dirty: c_int,
+    top: c_int,
+    bot: c_int,
+    clear: c_int,
+};
+
+pub const ZigSelectionStateResult = extern struct {
+    update: ZigSelectionStateUpdate,
+    effect: ZigSelectionEffectPlan,
+};
+
+pub const ZigSelSnapWordPlan = extern struct {
+    x: c_int,
+    y: c_int,
+    wrap_x: c_int,
+    wrap_y: c_int,
+    wrapped: c_int,
+    in_bounds: c_int,
+};
+
+pub const ZigSelSnapWordStep = extern struct {
+    action: c_int,
+    x: c_int,
+    y: c_int,
+    prevdelim: c_int,
+    prevrune: u32,
+};
+
+pub const ZigSelSnapWordIterRequest = extern struct {
+    action: c_int,
+    x: c_int,
+    y: c_int,
+    wrap_x: c_int,
+    wrap_y: c_int,
+    wrapped: c_int,
+};
+
+pub const ZigSelSnapWordReaderSnapshot = extern struct {
+    wrap_allowed: c_int,
+    linelen: c_int,
+    mode: c_ushort,
+    delim: c_int,
+    rune: u32,
+};
+
+pub const ZigSelSnapWordLoopSnapshot = extern struct {
+    x: c_int,
+    y: c_int,
+    wrap_x: c_int,
+    wrap_y: c_int,
+    wrapped: c_int,
+    in_bounds: c_int,
+    wrap_allowed: c_int,
+    linelen: c_int,
+    mode: c_ushort,
+    delim: c_int,
+    prevdelim: c_int,
+    rune: u32,
+    prevrune: u32,
+};
+
+pub const ZigSelSnapLineStep = extern struct {
+    action: c_int,
+    y: c_int,
+};
+
+pub const ZigGetSelExecPlan = extern struct {
+    empty: c_int,
+    start_x: c_int,
+    last_index: c_int,
+    newline: c_int,
+    bufsize: c_int,
+};
+
+fn boolInt(value: bool) c_int {
+    return if (value) 1 else 0;
+}
 
 pub const SnapPrev = struct {
     delim: i32,
@@ -142,6 +259,11 @@ pub const SnapWordAction = enum(i32) {
     accept = 1,
 };
 
+pub const SnapWordIterAction = enum(i32) {
+    stop = 0,
+    read = 1,
+};
+
 pub const SnapLineAction = enum(i32) {
     stop = 0,
     move = 1,
@@ -166,6 +288,154 @@ pub const SnapWordLoopStep = union(SnapWordAction) {
         point: model.Point,
         prev: SnapPrev,
     },
+};
+
+pub const SnapWordReaderSnapshot = struct {
+    wrap_allowed: bool,
+    linelen: i32,
+    mode: u16,
+    delim: i32,
+    rune: model.Rune,
+};
+
+pub const SnapWordIteratorState = struct {
+    point: model.Point,
+    prev: SnapPrev,
+    direction: i32,
+    size: model.Size,
+};
+
+pub const SnapWordIterRequest = union(enum) {
+    stop: SnapPrev,
+    read: struct {
+        plan: SnapWordPlan,
+        prev: SnapPrev,
+    },
+};
+
+pub const SnapWordIterResult = union(enum) {
+    stop: SnapPrev,
+    accept: struct {
+        point: model.Point,
+        prev: SnapPrev,
+    },
+};
+
+pub const SnapWordIterator = struct {
+    state: SnapWordIteratorState,
+
+    pub fn request(self: SnapWordIterator) SnapWordIterRequest {
+        const plan = snapWordPlan(self.state.point, self.state.direction, self.state.size);
+        if (!plan.in_bounds) return .{ .stop = self.state.prev };
+        return .{ .read = .{ .plan = plan, .prev = self.state.prev } };
+    }
+
+    pub fn resolve(iter_request: SnapWordIterRequest, reader: SnapWordReaderSnapshot) SnapWordIterResult {
+        return switch (iter_request) {
+            .stop => |prev| .{ .stop = prev },
+            .read => |pending| {
+                if (pending.plan.wrapped and !reader.wrap_allowed) return .{ .stop = pending.prev };
+                return switch (snapWordStep(pending.plan.point, reader.linelen, reader.mode, reader.delim, pending.prev, reader.rune)) {
+                    .stop => |prev| .{ .stop = prev },
+                    .accept => |accepted| .{ .accept = .{ .point = accepted.point, .prev = accepted.prev } },
+                };
+            },
+        };
+    }
+};
+
+pub fn zigSelsnapworditerrequest(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int, prevdelim: c_int, prevrune: u32) ZigSelSnapWordIterRequest {
+    const request = (SnapWordIterator{ .state = .{
+        .point = .{ .x = x, .y = y },
+        .prev = .{ .delim = prevdelim, .rune = prevrune },
+        .direction = direction,
+        .size = .{ .cols = col, .rows = row },
+    } }).request();
+    return switch (request) {
+        .stop => .{
+            .action = @intFromEnum(SnapWordIterAction.stop),
+            .x = x,
+            .y = y,
+            .wrap_x = x,
+            .wrap_y = y,
+            .wrapped = 0,
+        },
+        .read => |pending| .{
+            .action = @intFromEnum(SnapWordIterAction.read),
+            .x = pending.plan.point.x,
+            .y = pending.plan.point.y,
+            .wrap_x = pending.plan.wrap_point.x,
+            .wrap_y = pending.plan.wrap_point.y,
+            .wrapped = boolInt(pending.plan.wrapped),
+        },
+    };
+}
+
+pub fn zigSelsnapworditerresolve(request: ZigSelSnapWordIterRequest, prevdelim: c_int, prevrune: u32, reader: ZigSelSnapWordReaderSnapshot) ZigSelSnapWordStep {
+    const iter_request: SnapWordIterRequest = if (request.action == @intFromEnum(SnapWordIterAction.read))
+        .{ .read = .{ .plan = .{
+            .point = .{ .x = request.x, .y = request.y },
+            .wrap_point = .{ .x = request.wrap_x, .y = request.wrap_y },
+            .wrapped = request.wrapped != 0,
+            .in_bounds = true,
+        }, .prev = .{ .delim = prevdelim, .rune = prevrune } } }
+    else
+        .{ .stop = .{ .delim = prevdelim, .rune = prevrune } };
+
+    const result = SnapWordIterator.resolve(iter_request, .{
+        .wrap_allowed = reader.wrap_allowed != 0,
+        .linelen = reader.linelen,
+        .mode = reader.mode,
+        .delim = reader.delim,
+        .rune = reader.rune,
+    });
+    return switch (result) {
+        .stop => |prev| .{ .action = @intFromEnum(SnapWordAction.stop), .x = request.x, .y = request.y, .prevdelim = prev.delim, .prevrune = prev.rune },
+        .accept => |accepted| .{ .action = @intFromEnum(SnapWordAction.accept), .x = accepted.point.x, .y = accepted.point.y, .prevdelim = accepted.prev.delim, .prevrune = accepted.prev.rune },
+    };
+}
+
+pub const SnapWordLoop = struct {
+    plan: SnapWordPlan,
+    wrap_allowed: bool,
+    linelen: i32,
+    mode: u16,
+    delim: i32,
+    prev: SnapPrev,
+    rune: model.Rune,
+
+    pub fn fromZig(snapshot: ZigSelSnapWordLoopSnapshot) SnapWordLoop {
+        return .{
+            .plan = .{
+                .point = .{ .x = snapshot.x, .y = snapshot.y },
+                .wrap_point = .{ .x = snapshot.wrap_x, .y = snapshot.wrap_y },
+                .wrapped = snapshot.wrapped != 0,
+                .in_bounds = snapshot.in_bounds != 0,
+            },
+            .wrap_allowed = snapshot.wrap_allowed != 0,
+            .linelen = snapshot.linelen,
+            .mode = snapshot.mode,
+            .delim = snapshot.delim,
+            .prev = .{ .delim = snapshot.prevdelim, .rune = snapshot.prevrune },
+            .rune = snapshot.rune,
+        };
+    }
+
+    pub fn step(self: SnapWordLoop) SnapWordLoopStep {
+        return switch (SnapWordIterator.resolve(if (!self.plan.in_bounds)
+            .{ .stop = self.prev }
+        else
+            .{ .read = .{ .plan = self.plan, .prev = self.prev } }, .{
+            .wrap_allowed = self.wrap_allowed,
+            .linelen = self.linelen,
+            .mode = self.mode,
+            .delim = self.delim,
+            .rune = self.rune,
+        })) {
+            .stop => |prev| .{ .stop = prev },
+            .accept => |accepted| .{ .accept = .{ .point = accepted.point, .prev = accepted.prev } },
+        };
+    }
 };
 
 pub fn snapLineX(direction: i32, col: i32) i32 {
@@ -364,6 +634,126 @@ pub fn isSelected(point: model.Point, active: bool, alt_matches: bool, selection
     return bounds.contains(point, active, alt_matches, selection_type);
 }
 
+pub fn zigSelectionMode(value: c_int) SelectionMode {
+    if (value == @intFromEnum(SelectionMode.empty)) return .empty;
+    if (value == 0) return .idle;
+    return .ready;
+}
+
+pub fn zigSelectionType(value: c_int) SelectionType {
+    return if (value == @intFromEnum(SelectionType.rectangular)) .rectangular else .regular;
+}
+
+pub fn zigSelectionSnapshot(snapshot: ZigSelectionSnapshot) SelectionSnapshot {
+    return .{
+        .mode = zigSelectionMode(snapshot.mode),
+        .selection_type = zigSelectionType(snapshot.selection_type),
+        .alt = snapshot.alt != 0,
+        .snap = snapshot.snap,
+        .ob = .{ .x = snapshot.ob_x, .y = snapshot.ob_y },
+        .oe = .{ .x = snapshot.oe_x, .y = snapshot.oe_y },
+        .nb = .{ .x = snapshot.nb_x, .y = snapshot.nb_y },
+        .ne = .{ .x = snapshot.ne_x, .y = snapshot.ne_y },
+    };
+}
+
+pub fn zigSelectionStateResult(result: SelectionStateResult) ZigSelectionStateResult {
+    return .{
+        .update = .{
+            .mode = @intFromEnum(result.update.mode),
+            .selection_type = @intFromEnum(result.update.selection_type),
+            .alt = boolInt(result.update.alt),
+            .snap = result.update.snap,
+            .ob_x = result.update.ob.x,
+            .ob_y = result.update.ob.y,
+            .oe_x = result.update.oe.x,
+            .oe_y = result.update.oe.y,
+            .nb_x = result.update.nb.x,
+            .nb_y = result.update.nb.y,
+            .ne_x = result.update.ne.x,
+            .ne_y = result.update.ne.y,
+        },
+        .effect = .{
+            .dirty = boolInt(result.effect.dirty),
+            .top = result.effect.top,
+            .bot = result.effect.bot,
+            .clear = boolInt(result.effect.clear),
+        },
+    };
+}
+
+pub fn zigSelclearplan(ob_x: c_int) c_int {
+    return boolInt(shouldClear(ob_x));
+}
+
+pub fn zigSelstartupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelectionStateResult {
+    return zigSelectionStateResult(startResult(zigSelectionSnapshot(snapshot), .{ .x = col, .y = row }, snap, alt_screen != 0));
+}
+
+pub fn zigSelextendupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, sel_type: c_int, done: c_int) ZigSelectionStateResult {
+    return zigSelectionStateResult(extendResult(zigSelectionSnapshot(snapshot), .{ .x = col, .y = row }, zigSelectionType(sel_type), done != 0));
+}
+
+pub fn zigSelscrollupdate(snapshot: ZigSelectionSnapshot, orig: c_int, top: c_int, bot: c_int, delta: c_int) ZigSelectionStateResult {
+    const state = zigSelectionSnapshot(snapshot);
+    return zigSelectionStateResult(scrollResult(state, .{ .start = state.nb, .end = state.ne }, orig, top, bot, delta));
+}
+
+pub fn zigSelnormalizeupdate(snapshot: ZigSelectionSnapshot, col: c_int, start_len: c_int, end_len: c_int) ZigSelectionStateResult {
+    return zigSelectionStateResult(normalizeResult(zigSelectionSnapshot(snapshot), col, start_len, end_len));
+}
+
+pub fn zigSelsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int) ZigSelSnapLineStep {
+    return switch (snapLineStep(y, direction, row, wrapped != 0)) {
+        .stop => |next_y| .{ .action = @intFromEnum(SnapLineAction.stop), .y = next_y },
+        .move => |next_y| .{ .action = @intFromEnum(SnapLineAction.move), .y = next_y },
+    };
+}
+
+pub fn zigSelsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int) ZigSelSnapWordPlan {
+    const plan = snapWordPlan(.{ .x = x, .y = y }, direction, .{ .cols = col, .rows = row });
+    return .{ .x = plan.point.x, .y = plan.point.y, .wrap_x = plan.wrap_point.x, .wrap_y = plan.wrap_point.y, .wrapped = boolInt(plan.wrapped), .in_bounds = boolInt(plan.in_bounds) };
+}
+
+pub fn zigSelsnapwordloopstep(snapshot: ZigSelSnapWordLoopSnapshot) ZigSelSnapWordStep {
+    const step = SnapWordLoop.fromZig(snapshot).step();
+    return switch (step) {
+        .stop => |prev| .{ .action = @intFromEnum(SnapWordAction.stop), .x = snapshot.x, .y = snapshot.y, .prevdelim = prev.delim, .prevrune = prev.rune },
+        .accept => |accepted| .{ .action = @intFromEnum(SnapWordAction.accept), .x = accepted.point.x, .y = accepted.point.y, .prevdelim = accepted.prev.delim, .prevrune = accepted.prev.rune },
+    };
+}
+
+pub fn zigSelected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
+    const selection_type = zigSelectionType(sel_type);
+    const bounds = Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
+    return boolInt(isSelected(.{ .x = x, .y = y }, zigSelectionMode(mode) != .empty and ob_x != -1, sel_alt == alt_screen, selection_type, bounds));
+}
+
+pub fn zigGetselexecplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int, line: [*]const ZigGlyph, utf_siz: c_int) ZigGetSelExecPlan {
+    const selection_type = zigSelectionType(sel_type);
+    const bounds = Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
+    const bufsize = getBufferSize(col, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, utf_siz);
+    const glyphs = line[0..@intCast(col)];
+    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
+    if (linelen == 0) return .{ .empty = 1, .start_x = 0, .last_index = -1, .newline = 1, .bufsize = bufsize };
+
+    const line_plan = getLinePlan(selection_type, bounds, y, col);
+    const start_x = line_plan.start_x;
+    var last_index = getLastX(line_plan.last_x, linelen);
+    while (last_index >= start_x and glyphs[@intCast(last_index)].u == ' ') {
+        last_index -= 1;
+    }
+
+    const last_mode: c_ushort = if (last_index >= start_x) glyphs[@intCast(last_index)].mode else 0;
+    return .{
+        .empty = if (last_index < start_x) 1 else 0,
+        .start_x = start_x,
+        .last_index = last_index,
+        .newline = boolInt(needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, line_plan.last_x, linelen, last_mode, selection_type)),
+        .bufsize = bufsize,
+    };
+}
+
 pub fn snapWordPlan(point: model.Point, direction: i32, size: model.Size) SnapWordPlan {
     var next = model.Point{ .x = point.x + direction, .y = point.y };
     var wrapped = false;
@@ -403,8 +793,16 @@ pub fn snapWordStep(point: model.Point, linelen: i32, mode: u16, delim: i32, pre
 }
 
 pub fn snapWordLoopStep(plan: SnapWordPlan, wrap_allowed: bool, linelen: i32, mode: u16, delim: i32, prev: SnapPrev, rune: model.Rune) SnapWordLoopStep {
-    if (!plan.in_bounds or (plan.wrapped and !wrap_allowed)) return .{ .stop = prev };
-    return switch (snapWordStep(plan.point, linelen, mode, delim, prev, rune)) {
+    return switch (SnapWordIterator.resolve(if (!plan.in_bounds)
+        .{ .stop = prev }
+    else
+        .{ .read = .{ .plan = plan, .prev = prev } }, .{
+        .wrap_allowed = wrap_allowed,
+        .linelen = linelen,
+        .mode = mode,
+        .delim = delim,
+        .rune = rune,
+    })) {
         .stop => |stopped| .{ .stop = stopped },
         .accept => |accepted| .{ .accept = .{ .point = accepted.point, .prev = accepted.prev } },
     };
@@ -570,6 +968,175 @@ test "snap word loop step stops on bounds and wrap" {
 
     const wrapped = SnapWordPlan{ .point = .{ .x = 0, .y = 3 }, .wrap_point = .{ .x = 9, .y = 2 }, .wrapped = true, .in_bounds = true };
     try std.testing.expectEqual(SnapWordAction.stop, switch (snapWordLoopStep(wrapped, false, 6, 0, 0, prev, 'b')) {
+        .accept => SnapWordAction.accept,
+        .stop => SnapWordAction.stop,
+    });
+}
+
+test "snap word iterator requests next point and updates previous glyph" {
+    const request = (SnapWordIterator{ .state = .{
+        .point = .{ .x = 2, .y = 2 },
+        .prev = .{ .delim = 0, .rune = 'a' },
+        .direction = 1,
+        .size = .{ .cols = 10, .rows = 5 },
+    } }).request();
+
+    switch (request) {
+        .stop => try std.testing.expect(false),
+        .read => |pending| {
+            try std.testing.expectEqual(model.Point{ .x = 3, .y = 2 }, pending.plan.point);
+            const result = SnapWordIterator.resolve(request, .{
+                .wrap_allowed = true,
+                .linelen = 6,
+                .mode = 0,
+                .delim = 0,
+                .rune = 'b',
+            });
+            switch (result) {
+                .stop => try std.testing.expect(false),
+                .accept => |accepted| {
+                    try std.testing.expectEqual(model.Point{ .x = 3, .y = 2 }, accepted.point);
+                    try std.testing.expectEqual(@as(i32, 0), accepted.prev.delim);
+                    try std.testing.expectEqual(@as(model.Rune, 'b'), accepted.prev.rune);
+                },
+            }
+        },
+    }
+}
+
+test "zig snap word iterator adapter returns read request" {
+    const request = zigSelsnapworditerrequest(2, 2, 1, 10, 5, 0, 'a');
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SnapWordIterAction.read)), request.action);
+    try std.testing.expectEqual(@as(c_int, 3), request.x);
+    try std.testing.expectEqual(@as(c_int, 2), request.y);
+}
+
+test "zig snap word iterator adapter resolves reader facts" {
+    const request = zigSelsnapworditerrequest(2, 2, 1, 10, 5, 0, 'a');
+    const step = zigSelsnapworditerresolve(request, 0, 'a', .{
+        .wrap_allowed = 1,
+        .linelen = 6,
+        .mode = 0,
+        .delim = 0,
+        .rune = 'b',
+    });
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SnapWordAction.accept)), step.action);
+    try std.testing.expectEqual(@as(c_int, 3), step.x);
+    try std.testing.expectEqual(@as(u32, 'b'), step.prevrune);
+}
+
+test "snap word iterator stops on delimiter change after accept" {
+    const size = model.Size{ .cols = 10, .rows = 5 };
+    const first_request = (SnapWordIterator{ .state = .{
+        .point = .{ .x = 2, .y = 2 },
+        .prev = .{ .delim = 0, .rune = 'a' },
+        .direction = 1,
+        .size = size,
+    } }).request();
+    const first_result = SnapWordIterator.resolve(first_request, .{
+        .wrap_allowed = true,
+        .linelen = 6,
+        .mode = 0,
+        .delim = 0,
+        .rune = 'b',
+    });
+
+    const accepted = switch (first_result) {
+        .accept => |value| value,
+        .stop => unreachable,
+    };
+
+    const second_request = (SnapWordIterator{ .state = .{
+        .point = accepted.point,
+        .prev = accepted.prev,
+        .direction = 1,
+        .size = size,
+    } }).request();
+    const second_result = SnapWordIterator.resolve(second_request, .{
+        .wrap_allowed = true,
+        .linelen = 6,
+        .mode = 0,
+        .delim = 1,
+        .rune = ',',
+    });
+
+    switch (second_result) {
+        .accept => try std.testing.expect(false),
+        .stop => |prev| {
+            try std.testing.expectEqual(@as(i32, 0), prev.delim);
+            try std.testing.expectEqual(@as(model.Rune, 'b'), prev.rune);
+        },
+    }
+}
+
+test "snap word iterator stops on wrapped read when wrap is disallowed" {
+    const request = (SnapWordIterator{ .state = .{
+        .point = .{ .x = 9, .y = 2 },
+        .prev = .{ .delim = 0, .rune = 'a' },
+        .direction = 1,
+        .size = .{ .cols = 10, .rows = 5 },
+    } }).request();
+
+    switch (request) {
+        .stop => try std.testing.expect(false),
+        .read => |pending| {
+            try std.testing.expect(pending.plan.wrapped);
+            try std.testing.expectEqual(model.Point{ .x = 0, .y = 3 }, pending.plan.point);
+        },
+    }
+
+    const result = SnapWordIterator.resolve(request, .{
+        .wrap_allowed = false,
+        .linelen = 6,
+        .mode = 0,
+        .delim = 0,
+        .rune = 'b',
+    });
+    switch (result) {
+        .accept => try std.testing.expect(false),
+        .stop => |prev| {
+            try std.testing.expectEqual(@as(i32, 0), prev.delim);
+            try std.testing.expectEqual(@as(model.Rune, 'a'), prev.rune);
+        },
+    }
+}
+
+test "snap word iterator stops immediately when next point is out of bounds" {
+    const request = (SnapWordIterator{ .state = .{
+        .point = .{ .x = 0, .y = 0 },
+        .prev = .{ .delim = 0, .rune = 'a' },
+        .direction = -1,
+        .size = .{ .cols = 10, .rows = 5 },
+    } }).request();
+
+    switch (request) {
+        .read => unreachable,
+        .stop => |prev| {
+            try std.testing.expectEqual(@as(i32, 0), prev.delim);
+            try std.testing.expectEqual(@as(model.Rune, 'a'), prev.rune);
+        },
+    }
+}
+
+test "snap word loop module converts C snapshot" {
+    const loop = SnapWordLoop.fromZig(.{
+        .x = 3,
+        .y = 2,
+        .wrap_x = 2,
+        .wrap_y = 2,
+        .wrapped = 0,
+        .in_bounds = 1,
+        .wrap_allowed = 1,
+        .linelen = 6,
+        .mode = 0,
+        .delim = 0,
+        .prevdelim = 0,
+        .rune = 'b',
+        .prevrune = 'a',
+    });
+
+    const step = loop.step();
+    try std.testing.expectEqual(SnapWordAction.accept, switch (step) {
         .accept => SnapWordAction.accept,
         .stop => SnapWordAction.stop,
     });

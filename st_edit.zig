@@ -135,10 +135,6 @@ export fn st_tscrollplan(n: c_int, orig: c_int, bot: c_int, scr: c_int, histsize
     return (LineRegion{ .top = orig, .bot = bot }).scroll(n, scr, histsize, scroll_up != 0, copyhist != 0, histi);
 }
 
-export fn st_tscrollselplan(scr: c_int) c_int {
-    return if (scr == 0) 1 else 0;
-}
-
 export fn st_kscrolldownplan(n: c_int, row: c_int, scr: c_int) ZigKScrollPlan {
     return (KeyboardScroll{ .n = n, .row = row, .scr = scr, .histsize = 0 }).down();
 }
@@ -193,11 +189,6 @@ test "scroll down plan wraps history head backward" {
     const plan = st_tscrollplan(1, 0, 9, 0, 100, 0, 1, 0);
 
     try std.testing.expectEqual(@as(c_int, 99), plan.new_histi);
-}
-
-test "scroll selection sync only runs on live screen" {
-    try std.testing.expectEqual(@as(c_int, 1), st_tscrollselplan(0));
-    try std.testing.expectEqual(@as(c_int, 0), st_tscrollselplan(3));
 }
 
 test "keyboard scroll down clamps to current scroll" {

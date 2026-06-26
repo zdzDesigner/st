@@ -32,16 +32,16 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_cursor.zig` 通过 `CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载移动 clamp、换行、draw cursor、IME spot 更新判断和保存/恢复规划。
 - `st_erase.zig` 通过 `ClearRect` 承载清理矩形归一化。
 - `st_mode.zig` 通过 `ModeParam`、`Utf8Selector`、`CharsetSelector`、`AltScreen` 承载 mode、UTF-8、charset、alternate screen swap 和 cursor save/load 参数分类；alternate screen 位切换由 C executor 本地完成。
-- `st_misc.zig` 通过 `TtyWrite` 承载 tty write chunk、printer、stty 和 DEC test 辅助规划。
+- `st_misc.zig` 通过 `TtyWrite` 承载 tty write chunk 辅助规划；printer、stty、tty pending 和 DEC test 这类一行比较已回退到 C 调用点。
 - `st_strhandle.zig` 通过 `StringSequence`、`StringAction` 承载字符串序列启动、OSC/DCS action 分类、参数存在性和 OSC 52 运行判断。
 - `st_strparse.zig` 通过 `StringParser` 承载 OSC/DCS 参数边界扫描。
 - `st_putc_decode.zig` 通过 `RuneInput`、`ControlWriter` 承载 rune 解码和控制字符显示规划。
 - `st_control_esc.zig` 通过 `EscSequence`、`ControlSequence` 承载 ESC/control 字节到纯 plan 的决策逻辑。
 - `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`InputControlPlan`、`InputEscPlan`、`InputEscFlowPlan` 承载字符写入、STR 收集和 input 主线计划，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
-- `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑。
-- `st_search.zig` 承载 search 输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
-- `st_line.zig` 作为 line、selection、search/history 相关 C ABI adapter，并集中处理 C 标量到 Zig enum/bool/value object 的薄转换；`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
+- `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑，并持有 selection adapter implementation。
+- `st_search.zig` 通过 `SearchModel` 承载 search 写模型入口，并保留输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
+- `st_line.zig` 作为 line/history 相关 C ABI adapter，并保留 search/selection 的过渡导出 shim；search adapter implementation 和 C 标量到 `SearchModel` 的转换已下沉到 `st_search.zig`，selection adapter implementation 已下沉到 `st_selection.zig`，`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
 
 ## 当前状态
 
@@ -49,22 +49,24 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_line.zig`、`st_attr.zig`、`st_setchar.zig` 等 C 入口较多的文件仍允许保留 adapter helper，但新领域逻辑应继续下沉到内部类型方法，并避免形成新的长期 shim API。
 - `st_zig.h` 与 Zig `export fn st_*` 符号集合已核对一致；当前仍是唯一公开 ABI，但定位已经调整为过渡兼容层。
 - `ST_ZIG_*` 只暴露当前 C shim 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
-- Search 和 Selection 主流程已完成首轮迁移定版；近期工作以 ABI 瘦身为主，已把一批 search/mode/strhandle 小 helper 回退到 C shim。本阶段重点不再是继续细碎删 helper，而是开始把状态所有权从 C 迁到 Zig。
+- Search 和 Selection 主流程已完成首轮迁移定版；近期工作以 ABI 瘦身和 effect 执行收口为主，已把一批 search/mode/strhandle 小 helper 回退到 C shim，并把 search 的资源释放与 jump/redraw effect 集中到 C 侧 helper。本阶段重点不再是继续细碎删 helper，而是开始把状态所有权从 C 迁到 Zig。
 - Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
 - Search 扫描已完成聚合：`searchscanline` 改用 `st_searchlineplan`，扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
-- Selection 输出已完成首批聚合：`getsel` 改用 `st_getselexecplan`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除。
+- Selection 输出已完成首批聚合：`getsel` 改用 `st_getselexecplan`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 已从 `st_line.zig` 下沉到 `st_selection.zig`。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
+- 已删除一批 deletion test 通过的 pass-through ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`。
 
 ## 第一批迁移入口
 
 - 第一批状态所有权迁移入口选 `search`。
 - 原因：`search` 状态相对独立，已有大量纯逻辑在 Zig，近期又已删除多组小 ABI，最适合从“plan 驱动”升级到“Zig 持有状态 + effect plan”。
-- 第一阶段先让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
-- 第二阶段再让 Zig 接管 `search` 的写模型：C 不再分散写 `search.active`、`search.current`、`search.inputlen`、`search.inputcursor`、`search.query` 元信息，只执行 realloc/free/redraw 等副作用。
+- 第一阶段已让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
+- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 统一经由 `SearchModel`，下一步再减少 C 侧 `searchapplyupdate()` 的逐字段写回和资源所有权泄漏，并评估是否把 search export symbol 从 `st_line.zig` 过渡 shim 迁到独立 object。
 - `search` 稳定后，再复制同一策略到 `sel`，最后再推进到 `term` 主状态。
-- `sel` 当前已进入统一快照阶段：`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口，C 侧开始消费 `SelectionSnapshot -> SelectionStateResult`，但 `selsnap()` 仍留在 C 侧。
+- `sel` 当前已进入统一快照阶段：`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口；`selsnap()` 的 `SNAP_WORD` 也已切到 Zig 主导 loop，C 侧开始消费 `SelectionSnapshot -> SelectionStateResult` 与 `SnapWordIterator` request/resolve seam。
+- `selsnap()` 的 word loop 已从 `ZigSelSnapWordLoopSnapshot` 单步接口迁到 `SnapWordIterator` 两阶段接口：`st_selsnapworditerrequest` 负责返回下一读点，C 读取 glyph/line/wrap 事实后再经 `st_selsnapworditerresolve` 让 Zig 返回 accept/stop。旧 `st_selsnapwordplan`、`st_selsnapwordloopstep` ABI 已删除。
 
 ### 第一版结构
 
@@ -85,10 +87,10 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 
 ### 第一批接入点
 
-- `searchprompt()`：最适合先切到 `SearchSnapshot -> PromptUpdate + alloc_input effect`
-- `searchinput()`：适合切到 `SearchSnapshot + input bytes -> SearchStateUpdate + realloc_input effect`
-- `searchset()`：适合切到 `SearchSnapshot + decoded query -> SearchStateUpdate + alloc_query/realloc_matches/jump/redraw effect`
-- `searchapplycursor()` / `searchapplystate()`：第二批已收口，C 侧先构造 `SearchSnapshot`，再消费 `SearchCursorResult` / `SearchStateResult`，只执行 delete/free/redraw 等副作用
+- `searchprompt()`：已切到 `SearchSnapshot -> PromptUpdate + alloc_input effect`，C 只执行输入 buffer 分配和 redraw effect。
+- `searchinput()`：已切到 `SearchSnapshot + input bytes -> SearchStateUpdate + realloc_input effect`，C 只执行 realloc/memmove/memcpy 后触发 `searchset()`。
+- `searchset()`：已切到 `SearchSnapshot + decoded query -> SearchStateUpdate + alloc_query/jump/redraw effect`，C 只执行 UTF-8 decode、query 指针替换、scan/jump/redraw。
+- `searchapplycursor()` / `searchapplystate()`：已收口到 `SearchCursorResult` / `SearchStateResult`，C 侧先构造 `SearchSnapshot`，再消费 update/effect，只执行 delete/free/redraw 等副作用。
 
 ## 完成定义
 
