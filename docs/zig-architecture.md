@@ -53,7 +53,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
-- Search 扫描已完成聚合：`searchscanline` 改用 `st_searchlineplan`，扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
+- Search 扫描已完成聚合：`searchscanline` 改用 `st_searchscanlineiter`，scan line 的 `x/nmatches/cap/y/scr` loop state 与 append/grow/stop 决策集中到 Zig；扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlineplan`、`st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
 - Selection 输出已完成首批聚合：`getsel` 改用 snapshot 形态的 `st_getselexecplan`，`selected` 改用 snapshot 形态的 `st_selected`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 与 export 已从 `st_line.zig` 下沉到 `st_selection.zig`。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 - 已删除一批 deletion test 通过的 pass-through ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`。
@@ -63,7 +63,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 第一批状态所有权迁移入口选 `search`。
 - 原因：`search` 状态相对独立，已有大量纯逻辑在 Zig，近期又已删除多组小 ABI，最适合从“plan 驱动”升级到“Zig 持有状态 + effect plan”。
 - 第一阶段已让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
-- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 与 `export fn st_search*` 已统一下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已集中到 `SearchScalarState` seam，并开始被 `searchnext/searchprev/searchjump/searchscan/searchmatch` 等调用点消费。`input` mutation transaction 和 `query` alloc/apply phase 也都已拆出独立 seam。当前结论是：`query` ownership 与 `input` ownership 都暂不迁到 Zig，因为 decode、指针替换、`xrealloc/memmove/memcpy`、scan/jump/redraw 等关键 effect 仍主要发生在 C shim，迁移 ownership 的新增协议成本高于当前收益。
+- 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 与 `export fn st_search*` 已统一下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已集中到 `SearchScalarState` seam，并开始被 `searchnext/searchprev/searchjump/searchscan/searchmatch` 等调用点消费。`input` mutation transaction、`query` alloc/apply phase 和 `SearchScanIterator` scan line transaction 都已拆出独立 seam。当前结论是：`query`、`input` 与 `matches` ownership 都暂不迁到 Zig，因为 decode、指针替换、`xrealloc/memmove/memcpy`、scan/jump/redraw、match 数组写入等关键 effect 仍主要发生在 C shim，迁移 ownership 的新增协议成本高于当前收益。
 - `search` 稳定后，再复制同一策略到 `sel`，最后再推进到 `term` 主状态。
 - `sel` 当前已进入统一快照阶段：`SelectionModel` 已收口 start/extend/normalize/scroll/selected/getsel 状态决策，`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口；C 侧的 `selectionsnapshot()` / `selectionapplystate()` 已集中承载 Selection 状态读写映射，调用点不再重复展开 `sel` 字段；当前不迁 `sel` ownership，因为 `selsnap()` 仍依赖 C 侧 `TLINE(...)` / delimiter 读取，`getsel()` 仍由 C 执行 malloc、UTF-8 编码和 clipboard 输出。
 - `selsnap()` 的 word loop 已从 `ZigSelSnapWordLoopSnapshot` 单步接口迁到 `SnapWordIterator` 两阶段接口：`st_selsnapworditerrequest` 负责返回下一读点，C 读取 glyph/line/wrap 事实后再经 `st_selsnapworditerresolve` 让 Zig 返回 accept/stop。旧 `st_selsnapwordplan`、`st_selsnapwordloopstep` ABI 已删除。
@@ -99,6 +99,11 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 组成：`SearchInputState`、`searchapplyinputinsert()`、`searchapplyinputdelete()`、`searchapplyinputclear()`
 - 作用：把 input 的 grow/insert/delete/clear 事务和 `searchset()` 触发条件收口到可验证的 transaction seam
 - 约束：当前只拆事务，不迁 `search.input` ownership；`char *input` 指针和 `xmalloc/xrealloc/free` 生命周期仍留在 C
+
+- `SearchScanIteratorSeam`
+- 组成：`ZigSearchScanLineState`、`ZigSearchScanLineStep`、`st_searchscanlineiter()`
+- 作用：把 scan line 的 `x/nmatches/cap/y/scr` loop state、append/grow/stop 决策和 `SearchMatch` 值对象生成收口到 Zig iterator seam
+- 约束：当前只拆 scan transaction，不迁 `search.matches` ownership；`SearchMatch *matches` 指针、`xrealloc/free` 和数组写入仍留在 C
 
 ### 第一批接入点
 

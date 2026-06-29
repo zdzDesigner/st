@@ -29,13 +29,6 @@ pub const ZigSearchDeletePlan = extern struct {
     new_len: usize,
 };
 
-pub const ZigSearchLinePlan = extern struct {
-    kind: c_int,
-    cap: c_int,
-    next_x: c_int,
-    match: SearchMatch,
-};
-
 pub const ZigSearchSnapshot = extern struct {
     query_len: c_int,
     inputmode: c_int,
@@ -110,6 +103,20 @@ pub const ZigSearchSetResult = extern struct {
     alloc_len: usize,
 };
 
+pub const ZigSearchScanLineState = extern struct {
+    x: c_int,
+    nmatches: c_int,
+    cap: c_int,
+    y: c_int,
+    scr: c_int,
+};
+
+pub const ZigSearchScanLineStep = extern struct {
+    kind: c_int,
+    state: ZigSearchScanLineState,
+    match: SearchMatch,
+};
+
 fn boolInt(value: bool) c_int {
     return if (value) 1 else 0;
 }
@@ -124,6 +131,52 @@ pub const StepPlan = struct {
 pub const DeletePlan = struct {
     run: bool,
     new_len: usize,
+};
+
+pub const SearchScanLineState = struct {
+    x: i32,
+    nmatches: i32,
+    cap: i32,
+    y: i32,
+    scr: i32,
+};
+
+pub const SearchScanLineStep = struct {
+    kind: MatchAppendKind,
+    state: SearchScanLineState,
+    match: SearchMatch,
+};
+
+pub const SearchScanIterator = struct {
+    state: SearchScanLineState,
+
+    pub fn step(self: SearchScanIterator, comptime T: type, glyphs: []const T, query: []const u32, cols: i32) SearchScanLineStep {
+        const linelen = (line_core.Line(T){ .glyphs = glyphs, .cols = cols }).length();
+        const last_x = scanLineLastStart(linelen, @intCast(query.len));
+        var x = self.state.x;
+        while (x <= last_x) : (x += 1) {
+            const match_len = lineMatch(T, glyphs, x, linelen, query, cols);
+            const plan = appendMatch(match_len, self.state.nmatches, self.state.cap, x, self.state.y, self.state.scr);
+            switch (plan) {
+                .skip => {},
+                .append => |match| return .{
+                    .kind = .append,
+                    .state = .{ .x = x + 1, .nmatches = self.state.nmatches + 1, .cap = self.state.cap, .y = self.state.y, .scr = self.state.scr },
+                    .match = match,
+                },
+                .grow_append => |grow| return .{
+                    .kind = .grow_append,
+                    .state = .{ .x = x + 1, .nmatches = self.state.nmatches + 1, .cap = grow.cap, .y = self.state.y, .scr = self.state.scr },
+                    .match = grow.match,
+                },
+            }
+        }
+        return .{
+            .kind = .skip,
+            .state = .{ .x = x, .nmatches = self.state.nmatches, .cap = self.state.cap, .y = self.state.y, .scr = self.state.scr },
+            .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 },
+        };
+    }
 };
 
 // insert 描述一次插入对 buffer 视图的影响。
@@ -1345,6 +1398,18 @@ pub fn zigEffectPlan(effect: SearchEffectPlan) ZigSearchEffectPlan {
     };
 }
 
+fn zigSearchScanLineState(state: ZigSearchScanLineState) SearchScanLineState {
+    return .{ .x = state.x, .nmatches = state.nmatches, .cap = state.cap, .y = state.y, .scr = state.scr };
+}
+
+fn zigSearchScanLineStep(scan_step: SearchScanLineStep) ZigSearchScanLineStep {
+    return .{
+        .kind = @intFromEnum(scan_step.kind),
+        .state = .{ .x = scan_step.state.x, .nmatches = scan_step.state.nmatches, .cap = scan_step.state.cap, .y = scan_step.state.y, .scr = scan_step.state.scr },
+        .match = scan_step.match,
+    };
+}
+
 pub fn zigSearchmatchlist(matches: ?[*]const SearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
     const count: usize = if (nmatches > 0) @intCast(nmatches) else 0;
     const items = if (count == 0) &[_]SearchMatch{} else (matches orelse return 0)[0..count];
@@ -1357,21 +1422,10 @@ pub fn zigSearchcurrentmatch(matches: ?[*]const SearchMatch, nmatches: c_int, ac
     return boolInt(matchListCurrent(items, active != 0, current, term_scr, x, y));
 }
 
-pub fn zigSearchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int, query: [*]const u32, qlen: c_int, nmatches: c_int, cap: c_int, y: c_int, scr: c_int) ZigSearchLinePlan {
+pub fn zigSearchscanlineiter(line: [*]const ZigGlyph, col: c_int, query: [*]const u32, qlen: c_int, state: ZigSearchScanLineState) ZigSearchScanLineStep {
     const glyphs = line[0..@intCast(col)];
-    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
-    const last_x = scanLineLastStart(linelen, qlen);
-    var x = start_x;
-    while (x <= last_x) : (x += 1) {
-        const match_len = lineMatch(ZigGlyph, glyphs, x, linelen, query[0..@intCast(qlen)], col);
-        const plan = appendMatch(match_len, nmatches, cap, x, y, scr);
-        switch (plan) {
-            .skip => {},
-            .append => |match| return .{ .kind = @intFromEnum(MatchAppendKind.append), .cap = cap, .next_x = x + 1, .match = match },
-            .grow_append => |grow| return .{ .kind = @intFromEnum(MatchAppendKind.grow_append), .cap = grow.cap, .next_x = x + 1, .match = grow.match },
-        }
-    }
-    return .{ .kind = @intFromEnum(MatchAppendKind.skip), .cap = cap, .next_x = x, .match = .{ .x = 0, .y = 0, .scr = 0, .len = 0 } };
+    const scan_step = (SearchScanIterator{ .state = zigSearchScanLineState(state) }).step(ZigGlyph, glyphs, query[0..@intCast(qlen)], col);
+    return zigSearchScanLineStep(scan_step);
 }
 
 export fn st_searchmatchlist(matches: ?[*]const SearchMatch, nmatches: c_int, active: c_int, current: c_int, term_scr: c_int, x: c_int, y: c_int) c_int {
@@ -1382,8 +1436,8 @@ export fn st_searchcurrentmatch(matches: ?[*]const SearchMatch, nmatches: c_int,
     return zigSearchcurrentmatch(matches, nmatches, active, current, term_scr, x, y);
 }
 
-export fn st_searchlineplan(line: [*]const ZigGlyph, start_x: c_int, col: c_int, query: [*]const u32, qlen: c_int, nmatches: c_int, cap: c_int, y: c_int, scr: c_int) ZigSearchLinePlan {
-    return zigSearchlineplan(line, start_x, col, query, qlen, nmatches, cap, y, scr);
+export fn st_searchscanlineiter(line: [*]const ZigGlyph, col: c_int, query: [*]const u32, qlen: c_int, state: ZigSearchScanLineState) ZigSearchScanLineStep {
+    return zigSearchscanlineiter(line, col, query, qlen, state);
 }
 
 pub fn zigSearchstep(active: c_int, nmatches: c_int, current: c_int, direction: c_int) ZigSearchStepPlan {
@@ -1754,8 +1808,8 @@ test "search adapter exports preserve line and match behaviour" {
         .{ .u = '好', .mode = 0, .fg = 0, .bg = 0 },
     };
     const query = [_]u32{ '你', '好' };
-    const plan = st_searchlineplan(&line, 0, line.len, &query, query.len, 0, 4, 3, 2);
-    const done = st_searchlineplan(&line, plan.next_x, line.len, &query, query.len, 1, 4, 3, 2);
+    const plan = st_searchscanlineiter(&line, line.len, &query, query.len, .{ .x = 0, .nmatches = 0, .cap = 4, .y = 3, .scr = 2 });
+    const done = st_searchscanlineiter(&line, line.len, &query, query.len, plan.state);
     const matches = [_]SearchMatch{
         .{ .x = 5, .y = 4, .scr = 2, .len = 3 },
         .{ .x = 1, .y = 0, .scr = 0, .len = 2 },
@@ -1764,7 +1818,8 @@ test "search adapter exports preserve line and match behaviour" {
     try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.append)), plan.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.match.x);
     try std.testing.expectEqual(@as(c_int, 3), plan.match.len);
-    try std.testing.expectEqual(@as(c_int, 1), plan.next_x);
+    try std.testing.expectEqual(@as(c_int, 1), plan.state.x);
+    try std.testing.expectEqual(@as(c_int, 1), plan.state.nmatches);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.skip)), done.kind);
     try std.testing.expectEqual(@as(c_int, 1), st_searchmatchlist(&matches, matches.len, 1, -1, 2, 7, 4));
     try std.testing.expectEqual(@as(c_int, 1), st_searchcurrentmatch(&matches, matches.len, 1, 1, 0, 2, 0));
@@ -1897,8 +1952,8 @@ test "search set distinguishes utf8 byte length from decoded qlen" {
 }
 
 test "search matches boundary keeps count and cap behaviour stable" {
-    const grow = st_searchlineplan(&[_]ZigGlyph{.{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }}, 0, 1, &[_]u32{'中'}, 1, 4, 4, 3, 2);
-    const append = st_searchlineplan(&[_]ZigGlyph{.{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }}, 0, 1, &[_]u32{'中'}, 1, 3, 4, 3, 2);
+    const grow = st_searchscanlineiter(&[_]ZigGlyph{.{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }}, 1, &[_]u32{'中'}, 1, .{ .x = 0, .nmatches = 4, .cap = 4, .y = 3, .scr = 2 });
+    const append = st_searchscanlineiter(&[_]ZigGlyph{.{ .u = '中', .mode = 0, .fg = 0, .bg = 0 }}, 1, &[_]u32{'中'}, 1, .{ .x = 0, .nmatches = 3, .cap = 4, .y = 3, .scr = 2 });
     const scan = st_searchscanupdate(.{
         .query_len = 1,
         .inputmode = 0,
@@ -1912,8 +1967,10 @@ test "search matches boundary keeps count and cap behaviour stable" {
     }, 3, 1);
 
     try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.grow_append)), grow.kind);
-    try std.testing.expectEqual(@as(c_int, 8), grow.cap);
+    try std.testing.expectEqual(@as(c_int, 8), grow.state.cap);
+    try std.testing.expectEqual(@as(c_int, 5), grow.state.nmatches);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(MatchAppendKind.append)), append.kind);
+    try std.testing.expectEqual(@as(c_int, 4), append.state.nmatches);
     try std.testing.expectEqual(@as(c_int, 3), scan.update.nmatches);
     try std.testing.expectEqual(@as(c_int, 4), scan.update.match_cap);
     try std.testing.expectEqual(@as(c_int, 1), scan.update.current);

@@ -140,13 +140,13 @@ flowchart TD
     Update --> Scan[searchscan]
     Effect --> CEffects[xmalloc/xrealloc/free/redraw/searchjump]
     CEffects --> Scan
-    Scan --> LinePlan[st_line.zig SearchLinePlan]
+    Scan --> LinePlan[st_search.zig SearchScanIterator]
     LinePlan -->|grow_append| MatchRealloc[st.c xrealloc matches]
     LinePlan --> MatchWrite[st.c 写 SearchMatch]
     MatchWrite --> MatchList[st_search.zig MatchList slice]
     MatchList --> DrawHit[searchmatch/searchcurrent]
 
-补充状态：`matches` 的扩容判定和 scan 结束后的 `nmatches/current` 归一化已都迁入 Zig；C 侧仍保留 `xrealloc` 和 `SearchMatch` 数组写入。
+补充状态：`matches` 的扩容判定、scan line loop state 和 scan 结束后的 `nmatches/current` 归一化已都迁入 Zig；C 侧仍保留 `xrealloc` 和 `SearchMatch` 数组写入。当前不迁 `matches` ownership，因为 pointer 生命周期和真实数组写入仍是 C shim 的自然 effect。
 ```
 
 ## Selection 子系统流程

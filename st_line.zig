@@ -30,7 +30,6 @@ const ZigSearchStepPlan = search.ZigSearchStepPlan;
 const ZigSearchJumpPlan = search.ZigSearchJumpPlan;
 const ZigSearchDeletePlan = search.ZigSearchDeletePlan;
 const ZigSearchMatch = search.SearchMatch;
-const ZigSearchLinePlan = search.ZigSearchLinePlan;
 const ZigSearchSnapshot = search.ZigSearchSnapshot;
 const ZigSearchPromptResult = search.ZigSearchPromptResult;
 const ZigSearchInputResult = search.ZigSearchInputResult;

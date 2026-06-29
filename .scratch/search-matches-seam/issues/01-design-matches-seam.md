@@ -21,7 +21,7 @@ Status: completed
 ## Proposed slices
 
 1. 引入 `SearchMatchesState`，让 `searchscan/searchscanline/searchjump/searchmatch/searchcurrent` 优先消费 `count/cap` 视图。
-2. 为 `SearchMatchesState` 和 `st_searchscanupdate/st_searchlineplan` 补边界测试。
+2. 为 `SearchMatchesState` 和 `st_searchscanupdate/st_searchscanlineiter` 补边界测试。
 3. 只有当 count/cap seam 稳定且明显减少复杂度时，再评估是否需要更深的 `matches` object seam。
 4. 默认不迁移 `matches` ownership；只有 deletion test 证明指针 ownership 留在 C 造成了持续复杂度时才继续。
 

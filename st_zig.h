@@ -514,11 +514,18 @@ typedef struct {
 } ZigSearchMatch;
 
 typedef struct {
-	int kind;
+	int x;
+	int nmatches;
 	int cap;
-	int next_x;
+	int y;
+	int scr;
+} ZigSearchScanLineState;
+
+typedef struct {
+	int kind;
+	ZigSearchScanLineState state;
 	ZigSearchMatch match;
-} ZigSearchLinePlan;
+} ZigSearchScanLineStep;
 
 enum {
 	ST_ZIG_SEARCH_APPEND_SKIP = 0,
@@ -851,7 +858,7 @@ ZigSelSnapWordStep st_selsnapworditerresolve(ZigSelSnapWordIterRequest, int, uin
 int st_selected(ZigSelectionSnapshot, int, int, int);
 int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
-ZigSearchLinePlan st_searchlineplan(const ZigGlyph *, int, int, const uint32_t *, int, int, int, int, int);
+ZigSearchScanLineStep st_searchscanlineiter(const ZigGlyph *, int, const uint32_t *, int, ZigSearchScanLineState);
 ZigHistoryLinePlan st_tlinehistplan(int, int, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
 ZigSearchJumpPlan st_searchjumpplan(int, int, int, int, int);

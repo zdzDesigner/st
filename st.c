@@ -1032,30 +1032,41 @@ searchscanline(Line line, int scr, int y)
 	SearchMatchesState matches;
 	SearchScalarState state;
 	SearchMatch *match;
-	ZigSearchLinePlan plan;
+	ZigSearchScanLineState scanstate;
+	ZigSearchScanLineStep step;
 
 	matches = searchmatchesstate();
 	state = searchscalarstate();
-	/* Zig 负责告诉 C：当前位置是否命中、是否需要扩容、下一次应从哪里继续扫描。
-	 * C 只负责真正扩容 matches 并把命中的 SearchMatch 写进数组。 */
-	for (x = 0;; x = plan.next_x) {
-		plan = st_searchlineplan((const ZigGlyph *)line, x, term.col,
-			search.query, state.query_len, matches.count, matches.cap, y, scr);
-		if (plan.kind == ST_ZIG_SEARCH_APPEND_SKIP)
+	scanstate = (ZigSearchScanLineState){
+		.x = 0,
+		.nmatches = matches.count,
+		.cap = matches.cap,
+		.y = y,
+		.scr = scr,
+	};
+	/* Zig 持有 scan line iterator state 和 append/grow/stop 决策。
+	 * C 只执行真实扩容与 SearchMatch 数组写入。 */
+	for (;;) {
+		x = scanstate.nmatches;
+		step = st_searchscanlineiter((const ZigGlyph *)line, term.col,
+			search.query, state.query_len, scanstate);
+		if (step.kind == ST_ZIG_SEARCH_APPEND_SKIP)
 			break;
 
-		if (plan.kind == ST_ZIG_SEARCH_APPEND_GROW) {
-			matches.cap = plan.cap;
+		if (step.kind == ST_ZIG_SEARCH_APPEND_GROW) {
+			matches.cap = step.state.cap;
 			searchwritematchesstate(matches);
 			search.matches = xrealloc(search.matches,
 				matches.cap * sizeof(*search.matches));
 		}
-		match = &search.matches[matches.count++];
-		match->x = plan.match.x;
-		match->y = plan.match.y;
-		match->scr = plan.match.scr;
-		match->len = plan.match.len;
+		match = &search.matches[x];
+		match->x = step.match.x;
+		match->y = step.match.y;
+		match->scr = step.match.scr;
+		match->len = step.match.len;
+		matches.count = step.state.nmatches;
 		searchwritematchesstate(matches);
+		scanstate = step.state;
 	}
 }
 
