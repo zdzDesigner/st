@@ -29,7 +29,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`ExternalPipe`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
 - `st_state.zig` 通过 `ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 scroll region、resize、reset、tab 和 clear rect 规划。
 - `st_edit.zig` 通过 `TextSpan`、`LineRegion`、`KeyboardScroll` 承载行内搬移、区域滚动、历史环形指针和键盘滚动规划。
-- `st_cursor.zig` 通过 `CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`CursorStore` 承载移动 clamp、换行、draw cursor、IME spot 更新判断和保存/恢复规划。
+- `st_cursor.zig` 通过 `CursorMove`、`CursorLine`、`CursorOrigin`、`DrawCursor`、`DrawExecPlan`、`CursorStore` 承载移动 clamp、换行、draw frame/region 执行规划、IME spot 更新判断和保存/恢复规划。
 - `st_erase.zig` 通过 `ClearRect` 承载清理矩形归一化。
 - `st_mode.zig` 通过 `ModeParam`、`Utf8Selector`、`CharsetSelector`、`AltScreen` 承载 mode、UTF-8、charset、alternate screen swap、mouse mode、origin 和 simple bit/xsetmode action 分类；`1049/47/1047/1048` 的 cursor/clear/swap action 顺序、mouse mode 的 pointer/clear/set action，以及 origin/simple bit action 已由 Zig plan 承载，C executor 只执行 `tcursor`、`tclearregion`、`tswapscreen`、`xsetpointermotion`、`xsetmode`、`tmoveato`、bit write 等副作用。
 - `st_misc.zig` 通过 `TtyWrite` 承载 tty write chunk 辅助规划；printer、stty、tty pending 和 DEC test 这类一行比较已回退到 C 调用点。
@@ -49,8 +49,8 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_line.zig`、`st_attr.zig`、`st_setchar.zig` 等 C 入口较多的文件仍允许保留 adapter helper，但新领域逻辑应继续下沉到内部类型方法，并避免形成新的长期 shim API。
 - `st_zig.h` 与 Zig `export fn st_*` 符号集合已核对一致；当前仍是唯一公开 ABI，但定位已经调整为过渡兼容层。
 - `ST_ZIG_*` 只暴露当前 C shim 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
-- Search 和 Selection 主流程已完成首轮迁移定版；近期工作以 ABI 瘦身和 effect 执行收口为主，已把一批 search/mode/strhandle 小 helper 回退到 C shim，并把 search 的资源释放与 jump/redraw effect 集中到 C 侧 helper。本阶段重点不再是继续细碎删 helper，而是开始把状态所有权从 C 迁到 Zig。
-- Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 frame/region plan 驱动的副作用调用链。
+- Search 和 Selection 主流程已完成首轮迁移定版；近期工作以 ABI 瘦身和 effect 执行收口为主，已把一批 search/mode/strhandle 小 helper 回退到 C shim，并把 search 的资源释放、refresh-search 分支和 jump/redraw effect 集中到 C 侧 helper。本阶段重点不再是继续细碎删 helper，而是开始把状态所有权从 C 迁到 Zig。
+- Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 `ZigDrawExecPlan` 驱动的 frame/region 副作用调用链，旧 `st_drawframeplan` ABI 已删除。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - Mode actions 已完成前三条低风险切片：alternate screen / cursor save-load 路径不再依赖 C fallthrough 表达顺序，mouse mode 路径不再由 C 重复维护 pointer/clear/set 顺序，origin/visibility/simple bit action 也不再让 C 持有 `set/!set` 规则；`ZigModePlan` 返回 action fields，C 继续执行真实副作用和 `allowaltscreen` gate。unknown diagnostics 仍保留在 C。
 - Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
@@ -58,7 +58,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - Selection 输出已完成首批聚合：`getsel` 改用 snapshot 形态的 `st_getselexecplan`，`selected` 改用 snapshot 形态的 `st_selected`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 与 export 已从 `st_line.zig` 下沉到 `st_selection.zig`。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`，并按 deletion test 保留在 `st_line.zig`，因为它直接复用 `VisualLine` 与 line wrap 语义；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 - `st_line.zig` 剩余 exports 已完成 deletion test：line length、tab、attr scan、dump、dirty range 和 external pipe 都仍承载 line 领域规则；当前不再继续机械拆分 line adapter。
-- 已删除一批 deletion test 通过的 pass-through ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_tmoveato_y`、`st_tlineinregion`。
+- 已删除一批 deletion test 通过的 pass-through/obsolete ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_tmoveato_y`、`st_tlineinregion`、`st_tdefutf8`、`st_tdeftran`、`st_ttywritechunk`、`st_drawframeplan`。
 
 ## 第一批迁移入口
 

@@ -100,6 +100,18 @@ typedef struct {
 } ZigDrawFramePlan;
 
 typedef struct {
+	int search_scan;
+	int cx;
+	int ocx;
+	int ocy;
+	int cursor_active;
+	int imspot_active;
+	int region_draw;
+	int region_y;
+	int region_next_y;
+} ZigDrawExecPlan;
+
+typedef struct {
 	int action;
 	int slot;
 } ZigCursorStorePlan;
@@ -850,7 +862,7 @@ ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigCursorMove st_tmoveto(int, int, int, int, int, int, int);
 ZigNewlinePlan st_tnewline(int, int, int, int, int);
 ZigNewlinePlan st_treverseindex(int, int, int);
-ZigDrawFramePlan st_drawframeplan(int, int, int, int, int, int, int, int, const ZigGlyph * const *);
+ZigDrawExecPlan st_drawexecplan(int, int, int, int, int, int, int, int, const ZigGlyph * const *, const int *, int, int);
 ZigDrawRegionPlan st_drawregionplan(const int *, int, int);
 ZigCursorStorePlan st_tcursorplan(int, int);
 ZigEditMove st_tdeletechar(int, int, int);
@@ -863,8 +875,6 @@ ZigResizeExecPlan st_tresizeexecplan(const int *, int, int, int, int, int, int, 
 ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
 ZigModePlan st_modeplan(int, int, int, int);
-int st_tdefutf8(int, char);
-int st_tdeftran(char);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrSequence st_tstrsequence(unsigned char, int);
 ZigStrHandlePlan st_strhandleplan(char, int, int, int);
@@ -909,6 +919,5 @@ ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
 ZigSearchInputResult st_searchinputupdate(ZigSearchSnapshot, size_t);
 ZigSearchSetResult st_searchsetupdate(ZigSearchSnapshot, size_t, int);
 ZigGetSelExecPlan st_getselexecplan(ZigSelectionSnapshot, int, int, const ZigGlyph *, int);
-size_t st_ttywritechunk(const unsigned char *, size_t);
 
 #endif

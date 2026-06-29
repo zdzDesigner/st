@@ -258,6 +258,7 @@ static void tscrolldown(int, int, int);
 static void tsetattr(int *, int);
 static void tsetchar(Rune, Glyph *, int, int);
 static void tsetdirt(int, int);
+static void termapplydirtyrange(ZigLineRange);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
@@ -278,6 +279,7 @@ static ZigSearchSnapshot searchsnapshot(void);
 static void searchapplyupdate(ZigSearchStateUpdate);
 static void searchapplyresourceeffect(ZigSearchEffectPlan);
 static void searchapplyvieweffect(ZigSearchEffectPlan);
+static void searchapplyfloweffect(ZigSearchEffectPlan);
 static void searchresetstate(void);
 static void searchapplycursor(int);
 static void searchapplystate(int);
@@ -289,6 +291,7 @@ static void searchdelete(size_t, size_t);
 static ZigSelectionSnapshot selectionsnapshot(void);
 static void selectionapplystate(ZigSelectionStateUpdate);
 static void selectionapplybounds(ZigSelectionStateUpdate);
+static void selectionapplyresult(ZigSelectionStateResult);
 
 static void selnormalize(void);
 static void selscroll(int, int);
@@ -409,9 +412,7 @@ selstart(int col, int row, int snap)
 	selclear();
 	result = st_selstartupdate(selectionsnapshot(), col, row, snap,
 		IS_SET(MODE_ALTSCREEN));
-	selectionapplystate(result.update);
-	if (result.effect.dirty)
-		tsetdirt(result.effect.top, result.effect.bot);
+	selectionapplyresult(result);
 }
 
 void
@@ -426,9 +427,7 @@ selextend(int col, int row, int type, int done)
 		return;
 	}
 	result = st_selextendupdate(selectionsnapshot(), col, row, type, done);
-	selectionapplystate(result.update);
-	if (result.effect.dirty)
-		tsetdirt(result.effect.top, result.effect.bot);
+	selectionapplyresult(result);
 }
 
 void
@@ -487,6 +486,14 @@ selectionapplybounds(ZigSelectionStateUpdate update)
 	sel.nb.y = update.nb_y;
 	sel.ne.x = update.ne_x;
 	sel.ne.y = update.ne_y;
+}
+
+static void
+selectionapplyresult(ZigSelectionStateResult result)
+{
+	selectionapplystate(result.update);
+	if (result.effect.dirty)
+		tsetdirt(result.effect.top, result.effect.bot);
 }
 
 int
@@ -803,6 +810,15 @@ searchapplyvieweffect(ZigSearchEffectPlan effect)
 }
 
 static void
+searchapplyfloweffect(ZigSearchEffectPlan effect)
+{
+	if (effect.refresh_search)
+		searchset(search.input ? search.input : "");
+	else
+		searchapplyvieweffect(effect);
+}
+
+static void
 searchapplyqueryreplace(Rune *runes, ZigSearchSetResult result)
 {
 	/* query 指针本体仍由 C 持有，但替换时序收口到单一 helper，
@@ -880,10 +896,7 @@ searchapplyinputclear(ZigSearchStateResult result)
 		free(search.input);
 		search.input = NULL;
 	}
-	if (result.effect.refresh_search)
-		searchset(search.input ? search.input : "");
-	else
-		searchapplyvieweffect(result.effect);
+	searchapplyfloweffect(result.effect);
 }
 
 static void
@@ -906,10 +919,7 @@ searchapplycursor(int action)
 	if (result.delete_start != result.delete_end)
 		searchapplyinputdelete(result.delete_start, result.delete_end);
 	searchapplyupdate(result.update);
-	if (result.effect.refresh_search)
-		searchset(search.input);
-	else
-		searchapplyvieweffect(result.effect);
+	searchapplyfloweffect(result.effect);
 }
 
 size_t
@@ -1454,7 +1464,9 @@ ttywrite(const char *s, size_t n, int may_echo)
 			next = s + 1;
 			ttywriteraw("\r\n", 2);
 		} else {
-			next = s + st_ttywritechunk((const unsigned char *)s, n);
+			next = s;
+			while ((size_t)(next - s) < n && *next != '\r')
+				next++;
 			ttywriteraw(s, next - s);
 		}
 		n -= next - s;
@@ -1549,14 +1561,18 @@ tattrset(int attr)
 void
 tsetdirt(int top, int bot)
 {
-	int i;
 	ZigLineRange range;
 
 	range = st_tsetdirtrange(top, bot, term.row);
-	top = range.top;
-	bot = range.bot;
+	termapplydirtyrange(range);
+}
 
-	for (i = top; i <= bot; i++)
+static void
+termapplydirtyrange(ZigLineRange range)
+{
+	int i;
+
+	for (i = range.top; i <= range.bot; i++)
 		term.dirty[i] = 1;
 }
 
@@ -2523,7 +2539,14 @@ tputtab(int n)
 void
 tdefutf8(char ascii)
 {
-	term.mode = st_tdefutf8(term.mode, ascii);
+	switch (ascii) {
+	case 'G':
+		term.mode |= MODE_UTF8;
+		break;
+	case '@':
+		term.mode &= ~MODE_UTF8;
+		break;
+	}
 }
 
 void
@@ -2531,7 +2554,17 @@ tdeftran(char ascii)
 {
 	int charset;
 
-	charset = st_tdeftran(ascii);
+	switch (ascii) {
+	case '0':
+		charset = CS_GRAPHIC0;
+		break;
+	case 'B':
+		charset = CS_USA;
+		break;
+	default:
+		charset = -1;
+		break;
+	}
 	if (charset < 0) {
 		fprintf(stderr, "esc unhandled charset: ESC ( %c\n", ascii);
 	} else {
@@ -2969,13 +3002,13 @@ void
 draw(void)
 {
 	int cursor_x = term.c.x;
-	ZigDrawFramePlan frame;
+	ZigDrawExecPlan frame;
 
 	if (!xstartdraw())
 		return;
-	frame = st_drawframeplan(search.active, term.scr, cursor_x, term.c.y,
+	frame = st_drawexecplan(search.active, term.scr, cursor_x, term.c.y,
 		term.ocx, term.ocy, term.col, term.row,
-		(const ZigGlyph * const *)term.line);
+		(const ZigGlyph * const *)term.line, term.dirty, 0, term.row);
 	if (frame.search_scan)
 		searchscan();
 
@@ -2983,7 +3016,8 @@ draw(void)
 	term.ocx = frame.ocx;
 	term.ocy = frame.ocy;
 
-	drawregion(0, 0, term.col, term.row);
+	if (frame.region_draw)
+		drawregion(0, frame.region_y, term.col, term.row);
 	if (frame.cursor_active)
 		xdrawcursor(cursor_x, term.c.y, term.line[term.c.y][cursor_x],
 				term.ocx, term.ocy, term.line[term.ocy][term.ocx],

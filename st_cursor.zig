@@ -54,6 +54,18 @@ pub const ZigDrawFramePlan = extern struct {
     imspot_active: c_int,
 };
 
+pub const ZigDrawExecPlan = extern struct {
+    search_scan: c_int,
+    cx: c_int,
+    ocx: c_int,
+    ocy: c_int,
+    cursor_active: c_int,
+    imspot_active: c_int,
+    region_draw: c_int,
+    region_y: c_int,
+    region_next_y: c_int,
+};
+
 pub const ZigCursorStorePlan = extern struct {
     action: c_int,
     slot: c_int,
@@ -201,7 +213,7 @@ export fn st_treverseindex(x: c_int, y: c_int, top: c_int) ZigNewlinePlan {
     return (CursorLine{ .x = x, .y = y, .top = top, .bot = top }).reverseIndex();
 }
 
-export fn st_drawframeplan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
+fn drawFramePlan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
     const cursor = (DrawCursor(ZigGlyph){ .cx = cx, .current_y = current_y, .ocx = ocx, .ocy = ocy, .col = col, .row = row, .lines = lines[0..@intCast(row)] }).plan();
     return .{
         .search_scan = if (search_active != 0) 1 else 0,
@@ -210,6 +222,22 @@ export fn st_drawframeplan(search_active: c_int, scr: c_int, cx: c_int, current_
         .ocy = cursor.ocy,
         .cursor_active = if (scr == 0) 1 else 0,
         .imspot_active = if (ocx != cursor.cx or ocy != current_y) 1 else 0,
+    };
+}
+
+export fn st_drawexecplan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph, dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawExecPlan {
+    const frame = drawFramePlan(search_active, scr, cx, current_y, ocx, ocy, col, row, lines);
+    const region = (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y1, .end_y = y2 }).plan();
+    return .{
+        .search_scan = frame.search_scan,
+        .cx = frame.cx,
+        .ocx = frame.ocx,
+        .ocy = frame.ocy,
+        .cursor_active = frame.cursor_active,
+        .imspot_active = frame.imspot_active,
+        .region_draw = region.draw,
+        .region_y = region.y,
+        .region_next_y = region.next_y,
     };
 }
 
@@ -280,7 +308,7 @@ test "draw cursor plan clamps old cursor and adjusts dummy cells" {
         .{ .u = '试', .mode = attr_wdummy, .fg = 0, .bg = 0 },
     };
     const lines = [_][*]const ZigGlyph{ &row0, &row1 };
-    const plan = st_drawframeplan(1, 0, 1, 1, 9, 0, 2, 2, &lines);
+    const plan = drawFramePlan(1, 0, 1, 1, 9, 0, 2, 2, &lines);
 
     try std.testing.expectEqual(@as(c_int, 1), plan.search_scan);
     try std.testing.expectEqual(@as(c_int, 0), plan.cx);
@@ -302,10 +330,24 @@ test "draw region plan finds next dirty line" {
     try std.testing.expectEqual(@as(c_int, 4), empty.next_y);
 }
 
+test "draw exec plan combines frame and first dirty region" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    var row1 = [_]ZigGlyph{.{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{ &row0, &row1 };
+    const dirty = [_]c_int{ 0, 1 };
+    const plan = st_drawexecplan(1, 0, 0, 0, 0, 0, 1, 2, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 1), plan.search_scan);
+    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_active);
+    try std.testing.expectEqual(@as(c_int, 1), plan.region_draw);
+    try std.testing.expectEqual(@as(c_int, 1), plan.region_y);
+    try std.testing.expectEqual(@as(c_int, 2), plan.region_next_y);
+}
+
 test "draw plans gate search scan and cursor" {
     var row0 = [_]ZigGlyph{.{ .u = 'a', .mode = 0, .fg = 0, .bg = 0 }};
     const lines = [_][*]const ZigGlyph{&row0};
-    const inactive = st_drawframeplan(0, 2, 0, 0, 0, 0, 1, 1, &lines);
+    const inactive = drawFramePlan(0, 2, 0, 0, 0, 0, 1, 1, &lines);
 
     try std.testing.expectEqual(@as(c_int, 0), inactive.search_scan);
     try std.testing.expectEqual(@as(c_int, 0), inactive.cursor_active);

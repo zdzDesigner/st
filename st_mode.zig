@@ -229,14 +229,6 @@ export fn st_modeplan(priv: c_int, arg: c_int, set: c_int, alt: c_int) ZigModePl
     return (ModeParam{ .private = priv != 0, .arg = arg }).plan(set != 0, alt != 0);
 }
 
-export fn st_tdefutf8(mode: c_int, ascii: c_char) c_int {
-    return (Utf8Selector{ .ascii = ascii }).apply(mode);
-}
-
-export fn st_tdeftran(ascii: c_char) c_int {
-    return (CharsetSelector{ .ascii = ascii }).value();
-}
-
 test "mode domain plans alternate screen set" {
     const plan = modePlan(mode_alt1049, 1049, true, false);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
@@ -372,20 +364,20 @@ test "mode adapter smoke keeps regular unknown classification" {
     try std.testing.expectEqual(@as(c_int, mode_regular_unknown), plan.kind);
 }
 
-test "tdefutf8 enables and disables utf8 bit" {
-    try std.testing.expectEqual(@as(c_int, term_mode_utf8), st_tdefutf8(0, 'G'));
-    try std.testing.expectEqual(@as(c_int, 0), st_tdefutf8(term_mode_utf8, '@'));
+test "utf8 selector enables and disables utf8 bit" {
+    try std.testing.expectEqual(@as(c_int, term_mode_utf8), (Utf8Selector{ .ascii = 'G' }).apply(0));
+    try std.testing.expectEqual(@as(c_int, 0), (Utf8Selector{ .ascii = '@' }).apply(term_mode_utf8));
 }
 
-test "tdefutf8 ignores unknown selector" {
-    try std.testing.expectEqual(@as(c_int, 5), st_tdefutf8(5, 'x'));
+test "utf8 selector ignores unknown selector" {
+    try std.testing.expectEqual(@as(c_int, 5), (Utf8Selector{ .ascii = 'x' }).apply(5));
 }
 
-test "tdeftran maps supported charsets" {
-    try std.testing.expectEqual(@as(c_int, charset_graphic0), st_tdeftran('0'));
-    try std.testing.expectEqual(@as(c_int, charset_usa), st_tdeftran('B'));
+test "charset selector maps supported charsets" {
+    try std.testing.expectEqual(@as(c_int, charset_graphic0), (CharsetSelector{ .ascii = '0' }).value());
+    try std.testing.expectEqual(@as(c_int, charset_usa), (CharsetSelector{ .ascii = 'B' }).value());
 }
 
-test "tdeftran reports unknown selector" {
-    try std.testing.expectEqual(@as(c_int, charset_unknown), st_tdeftran('x'));
+test "charset selector reports unknown selector" {
+    try std.testing.expectEqual(@as(c_int, charset_unknown), (CharsetSelector{ .ascii = 'x' }).value());
 }

@@ -34,11 +34,7 @@ const TtyWrite = struct {
     }
 };
 
-export fn st_ttywritechunk(input: [*]const u8, len: usize) usize {
-    return (TtyWrite{ .input = input[0..len] }).chunk();
-}
-
-test "tty write chunk stops at carriage return" {
-    try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc\rdef", 7));
-    try std.testing.expectEqual(@as(usize, 3), st_ttywritechunk("abc", 3));
+test "tty write helper stops at carriage return" {
+    try std.testing.expectEqual(@as(usize, 3), (TtyWrite{ .input = "abc\rdef" }).chunk());
+    try std.testing.expectEqual(@as(usize, 3), (TtyWrite{ .input = "abc" }).chunk());
 }
