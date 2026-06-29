@@ -7,7 +7,6 @@
 const std = @import("std");
 const line_core = @import("st_line_core.zig");
 const model = @import("term_model.zig");
-const search = @import("st_search.zig");
 
 const ZigGlyph = extern struct {
     u: u32,
@@ -26,27 +25,10 @@ const ZigLineRange = extern struct {
     bot: c_int,
 };
 
-const ZigSearchStepPlan = search.ZigSearchStepPlan;
-const ZigSearchJumpPlan = search.ZigSearchJumpPlan;
-const ZigSearchDeletePlan = search.ZigSearchDeletePlan;
-const ZigSearchMatch = search.SearchMatch;
-const ZigSearchSnapshot = search.ZigSearchSnapshot;
-const ZigSearchPromptResult = search.ZigSearchPromptResult;
-const ZigSearchInputResult = search.ZigSearchInputResult;
-const ZigSearchCursorResult = search.ZigSearchCursorResult;
-const ZigSearchStateResult = search.ZigSearchStateResult;
-const ZigSearchScanResult = search.ZigSearchScanResult;
-const ZigSearchSetResult = search.ZigSearchSetResult;
-
 const ZigExternalPipePlan = extern struct {
     kind: c_int,
     lastpos: c_int,
     newline: c_int,
-};
-
-const ZigHistoryLinePlan = extern struct {
-    hist: c_int,
-    index: c_int,
 };
 
 const attr_wrap = model.attr_wrap;
@@ -84,11 +66,6 @@ export fn st_tsetdirtrange(top: c_int, bot: c_int, row: c_int) ZigLineRange {
         .top = range.top,
         .bot = range.bot,
     };
-}
-
-export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
-    const plan = search.historyLine(y, histsize, rows);
-    return .{ .hist = boolInt(plan.hist), .index = plan.index };
 }
 
 export fn st_externalpipeplan(line: [*]const ZigGlyph, col: c_int) ZigExternalPipePlan {
@@ -210,16 +187,6 @@ test "set dirt range clamps to terminal rows" {
 
     try std.testing.expectEqual(@as(c_int, 0), range.top);
     try std.testing.expectEqual(@as(c_int, 23), range.bot);
-}
-
-test "history line plan maps scrollback and live rows" {
-    const hist_line = st_tlinehistplan(5, 10, 7);
-    const live_line = st_tlinehistplan(6, 10, 7);
-
-    try std.testing.expectEqual(@as(c_int, 1), hist_line.hist);
-    try std.testing.expectEqual(@as(c_int, 5), hist_line.index);
-    try std.testing.expectEqual(@as(c_int, 0), live_line.hist);
-    try std.testing.expectEqual(@as(c_int, 0), live_line.index);
 }
 
 test "external pipe line plan handles break skip and write" {

@@ -24,6 +24,11 @@ pub const ZigSearchJumpPlan = extern struct {
     new_scr: c_int,
 };
 
+pub const ZigHistoryLinePlan = extern struct {
+    hist: c_int,
+    index: c_int,
+};
+
 pub const ZigSearchDeletePlan = extern struct {
     run: c_int,
     new_len: usize,
@@ -1458,6 +1463,11 @@ export fn st_searchjumpplan(active: c_int, current: c_int, nmatches: c_int, term
     return zigSearchjumpplan(active, current, nmatches, term_scr, match_scr);
 }
 
+export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
+    const plan = historyLine(y, histsize, rows);
+    return .{ .hist = boolInt(plan.hist), .index = plan.index };
+}
+
 pub fn zigSearchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).cursor(input[0..snapshot.inputlen], @enumFromInt(action));
     return .{ .update = zigStateUpdate(result.update), .effect = zigEffectPlan(result.effect), .delete_start = result.delete_start, .delete_end = result.delete_end };
@@ -1902,6 +1912,16 @@ test "search scalar boundary behaviours stay stable across step jump and scan" {
     try std.testing.expectEqual(base.nmatches, scan.update.nmatches);
     try std.testing.expectEqual(base.current, scan.update.current);
     try std.testing.expectEqual(base.match_cap, scan.update.match_cap);
+}
+
+test "search history line adapter maps scrollback and live rows" {
+    const hist_line = st_tlinehistplan(5, 10, 7);
+    const live_line = st_tlinehistplan(6, 10, 7);
+
+    try std.testing.expectEqual(@as(c_int, 1), hist_line.hist);
+    try std.testing.expectEqual(@as(c_int, 5), hist_line.index);
+    try std.testing.expectEqual(@as(c_int, 0), live_line.hist);
+    try std.testing.expectEqual(@as(c_int, 0), live_line.index);
 }
 
 test "search set keeps alloc and apply phases distinct" {

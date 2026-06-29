@@ -154,6 +154,13 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
+    const search_module = b.createModule(.{
+        .root_source_file = b.path("st_search.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const selection_module = b.createModule(.{
         .root_source_file = b.path("st_selection.zig"),
         .target = target,
@@ -236,6 +243,11 @@ pub fn build(b: *std.Build) void {
         .root_module = line_module,
     });
 
+    const search_obj = b.addObject(.{
+        .name = "st_search",
+        .root_module = search_module,
+    });
+
     const selection_obj = b.addObject(.{
         .name = "st_selection",
         .root_module = selection_module,
@@ -261,6 +273,7 @@ pub fn build(b: *std.Build) void {
     root_module.addObject(putc_decode_obj);
     root_module.addObject(setchar_obj);
     root_module.addObject(line_obj);
+    root_module.addObject(search_obj);
     root_module.addObject(selection_obj);
 
     root_module.addCSourceFiles(.{
@@ -345,6 +358,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "st_control_esc_test", .module = control_esc_module },
         .{ .name = "st_setchar_test", .module = setchar_module },
         .{ .name = "st_line_test", .module = line_module },
+        .{ .name = "st_search_test", .module = search_module },
         .{ .name = "st_selection_test", .module = selection_module },
     });
 }
