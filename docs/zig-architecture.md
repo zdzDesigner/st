@@ -56,6 +56,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - Search 扫描已完成聚合：`searchscanline` 改用 `st_searchscanlineiter`，scan line 的 `x/nmatches/cap/y/scr` loop state 与 append/grow/stop 决策集中到 Zig；扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlineplan`、`st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
 - Selection 输出已完成首批聚合：`getsel` 改用 snapshot 形态的 `st_getselexecplan`，`selected` 改用 snapshot 形态的 `st_selected`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 与 export 已从 `st_line.zig` 下沉到 `st_selection.zig`。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`，并按 deletion test 保留在 `st_line.zig`，因为它直接复用 `VisualLine` 与 line wrap 语义；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
+- `st_line.zig` 剩余 exports 已完成 deletion test：line length、tab、attr scan、dump、dirty range 和 external pipe 都仍承载 line 领域规则；当前不再继续机械拆分 line adapter。
 - 已删除一批 deletion test 通过的 pass-through ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`。
 
 ## 第一批迁移入口
