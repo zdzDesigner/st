@@ -127,10 +127,6 @@ export fn st_tinsertblank(n: c_int, x: c_int, col: c_int) ZigEditMove {
     return (TextSpan{ .x = x, .col = col }).insertBlanks(n);
 }
 
-export fn st_tlineinregion(y: c_int, top: c_int, bot: c_int) c_int {
-    return if ((LineRegion{ .top = top, .bot = bot }).contains(y)) 1 else 0;
-}
-
 export fn st_tscrollplan(n: c_int, orig: c_int, bot: c_int, scr: c_int, histsize: c_int, scroll_up: c_int, copyhist: c_int, histi: c_int) ZigScrollPlan {
     return (LineRegion{ .top = orig, .bot = bot }).scroll(n, scr, histsize, scroll_up != 0, copyhist != 0, histi);
 }
@@ -161,12 +157,6 @@ test "delete char move clamps count" {
 test "insert blank move computes source and clear range" {
     const move = st_tinsertblank(2, 3, 10);
     try std.testing.expectEqual(ZigEditMove{ .dst = 5, .src = 3, .size = 5, .clear_x1 = 3, .clear_x2 = 4 }, move);
-}
-
-test "line region check is inclusive" {
-    try std.testing.expectEqual(@as(c_int, 1), st_tlineinregion(3, 3, 6));
-    try std.testing.expectEqual(@as(c_int, 1), st_tlineinregion(6, 3, 6));
-    try std.testing.expectEqual(@as(c_int, 0), st_tlineinregion(7, 3, 6));
 }
 
 test "scroll plan clamps count to scroll region" {

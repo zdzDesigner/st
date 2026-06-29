@@ -1771,7 +1771,9 @@ csiparse(void)
 void
 tmoveato(int x, int y)
 {
-	tmoveto(x, st_tmoveato_y(y, term.c.state, term.top));
+	if (IS_SET(CURSOR_ORIGIN))
+		y += term.top;
+	tmoveto(x, y);
 }
 
 void
@@ -1848,14 +1850,14 @@ tinsertblank(int n)
 void
 tinsertblankline(int n)
 {
-	if (st_tlineinregion(term.c.y, term.top, term.bot))
+	if (term.top <= term.c.y && term.c.y <= term.bot)
 		tscrolldown(term.c.y, n, 0);
 }
 
 void
 tdeleteline(int n)
 {
-	if (st_tlineinregion(term.c.y, term.top, term.bot))
+	if (term.top <= term.c.y && term.c.y <= term.bot)
 		tscrollup(term.c.y, n, 0);
 }
 

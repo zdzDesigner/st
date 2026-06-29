@@ -201,10 +201,6 @@ export fn st_treverseindex(x: c_int, y: c_int, top: c_int) ZigNewlinePlan {
     return (CursorLine{ .x = x, .y = y, .top = top, .bot = top }).reverseIndex();
 }
 
-export fn st_tmoveato_y(y: c_int, state: c_int, top: c_int) c_int {
-    return (CursorOrigin{ .state = state, .top = top }).absoluteY(y);
-}
-
 export fn st_drawframeplan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
     const cursor = (DrawCursor(ZigGlyph){ .cx = cx, .current_y = current_y, .ocx = ocx, .ocy = ocy, .col = col, .row = row, .lines = lines[0..@intCast(row)] }).plan();
     return .{
@@ -272,11 +268,6 @@ test "treverseindex scrolls at top otherwise moves up" {
     try std.testing.expectEqual(@as(c_int, 2), scroll.y);
     try std.testing.expectEqual(@as(c_int, 0), move.scroll);
     try std.testing.expectEqual(@as(c_int, 3), move.y);
-}
-
-test "tmoveato y applies origin offset only in origin mode" {
-    try std.testing.expectEqual(@as(c_int, 7), st_tmoveato_y(5, cursor_origin, 2));
-    try std.testing.expectEqual(@as(c_int, 5), st_tmoveato_y(5, 0, 2));
 }
 
 test "draw cursor plan clamps old cursor and adjusts dummy cells" {

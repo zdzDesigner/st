@@ -38,4 +38,4 @@ Status: completed
 
 ## Conclusion
 
-本轮不删除 ABI。`st_line.zig` 已足够收窄；下一步不应继续机械拆分 line adapter，而应转向新的 high-friction module。
+本轮对 `st_line.zig` 保持不删，但对跨模块 deletion test 额外删除了两条真正通过测试的浅 export：`st_tmoveato_y`、`st_tlineinregion`。`st_line.zig` 已足够收窄；下一步不应继续机械拆分 line adapter，而应转向新的 high-friction module。
