@@ -1,15 +1,17 @@
 //! st_mode.zig 负责 DEC/private mode、UTF-8 mode 与 charset mode 参数分类。
 //! [输入]: private marker、单个 mode 参数、UTF-8 selector 或 charset selector。
-//! [输出]: `ZigModePlan`、更新后的 terminal mode，或 charset 编号。
+//! [输出]: `ZigModePlan`、mode action 顺序、更新后的 terminal mode，或 charset 编号。
 //! [副作用边界]: 不调用 `xsetmode(...)`、`xsetpointermotion(...)`、`tswapscreen(...)`；C 侧保留所有模式副作用。
-//! [定位]: 让 `tsetmode(...)`、`tdefutf8(...)`、`tdeftran(...)` 的参数识别逻辑可测试，同时避免 Zig 复制 C/X11 mode 副作用。
+//! [定位]: 让 `tsetmode(...)`、`tdefutf8(...)`、`tdeftran(...)` 的参数识别和低风险 mode action 顺序可测试，同时避免 Zig 复制 C/X11 mode 副作用。
 
 const std = @import("std");
 
 pub const ZigModePlan = extern struct {
     kind: c_int,
-    cursor_store_action: c_int,
+    cursor_before: c_int,
+    clear_before_swap: c_int,
     swap_screen: c_int,
+    cursor_after: c_int,
 };
 
 pub const mode_ignore = 0;
@@ -47,7 +49,7 @@ const ModeParam = struct {
 
     fn plan(self: ModeParam, set: bool, alt: bool) ZigModePlan {
         if (self.private) {
-            return .{ .kind = switch (self.arg) {
+            return modePlan(switch (self.arg) {
                 1 => mode_appcursor,
                 5 => mode_reverse,
                 6 => mode_origin,
@@ -66,17 +68,17 @@ const ModeParam = struct {
                 1048 => mode_cursor1048,
                 2004 => mode_bracketed_paste,
                 else => mode_private_unknown,
-            }, .cursor_store_action = cursorAction(self.arg, set), .swap_screen = swapScreen(self.arg, set, alt) };
+            }, self.arg, set, alt);
         }
 
-        return .{ .kind = switch (self.arg) {
+        return modePlan(switch (self.arg) {
             0 => mode_ignore,
             2 => mode_kbdlock,
             4 => mode_insert,
             12 => mode_echo,
             20 => mode_crlf,
             else => mode_regular_unknown,
-        }, .cursor_store_action = -1, .swap_screen = 0 };
+        }, self.arg, set, alt);
     }
 };
 
@@ -124,6 +126,17 @@ fn swapScreen(arg: c_int, set: bool, alt: bool) c_int {
     };
 }
 
+fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool) ZigModePlan {
+    const cursor_action = cursorAction(arg, set);
+    return .{
+        .kind = kind,
+        .cursor_before = if (arg == 1049) cursor_action else -1,
+        .clear_before_swap = if ((arg == 1049 or arg == 47 or arg == 1047) and alt) 1 else 0,
+        .swap_screen = swapScreen(arg, set, alt),
+        .cursor_after = if (arg == 1049 or arg == 1048) cursor_action else -1,
+    };
+}
+
 export fn st_modeplan(priv: c_int, arg: c_int, set: c_int, alt: c_int) ZigModePlan {
     return (ModeParam{ .private = priv != 0, .arg = arg }).plan(set != 0, alt != 0);
 }
@@ -139,8 +152,36 @@ export fn st_tdeftran(ascii: c_char) c_int {
 test "private 1049 maps to alt1049" {
     const plan = st_modeplan(1, 1049, 1, 0);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_store_action);
+    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_before);
+    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_after);
     try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
+}
+
+test "mode alternate screen actions preserve 1049 reset order" {
+    const plan = st_modeplan(1, 1049, 0, 1);
+    try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_before);
+    try std.testing.expectEqual(@as(c_int, 1), plan.clear_before_swap);
+    try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
+    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_after);
+}
+
+test "mode alternate screen actions keep 47 separate from cursor" {
+    const plan = st_modeplan(1, 47, 0, 1);
+    try std.testing.expectEqual(@as(c_int, mode_alt47), plan.kind);
+    try std.testing.expectEqual(@as(c_int, -1), plan.cursor_before);
+    try std.testing.expectEqual(@as(c_int, 1), plan.clear_before_swap);
+    try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
+    try std.testing.expectEqual(@as(c_int, -1), plan.cursor_after);
+}
+
+test "mode cursor 1048 only plans cursor action" {
+    const plan = st_modeplan(1, 1048, 1, 0);
+    try std.testing.expectEqual(@as(c_int, mode_cursor1048), plan.kind);
+    try std.testing.expectEqual(@as(c_int, -1), plan.cursor_before);
+    try std.testing.expectEqual(@as(c_int, 0), plan.clear_before_swap);
+    try std.testing.expectEqual(@as(c_int, 0), plan.swap_screen);
+    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_after);
 }
 
 test "private 1005 stays ignored" {

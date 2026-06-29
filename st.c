@@ -2050,7 +2050,7 @@ void
 tsetmode(int priv, int set, int *args, int narg)
 {
 	ZigModePlan plan;
-	int alt, *lim;
+	int *lim;
 
 	for (lim = args + narg; args < lim; ++args) {
 		plan = st_modeplan(priv, *args, set, IS_SET(MODE_ALTSCREEN));
@@ -2106,24 +2106,26 @@ tsetmode(int priv, int set, int *args, int narg)
 		case ST_ZIG_MODE_ALT1049:
 			if (!allowaltscreen)
 				break;
-			if (plan.cursor_store_action >= 0)
-				tcursor(plan.cursor_store_action);
-			/* FALLTHROUGH */
+			if (plan.cursor_before >= 0)
+				tcursor(plan.cursor_before);
+			if (plan.clear_before_swap)
+				tclearregion(0, 0, term.col-1, term.row-1);
+			if (plan.swap_screen)
+				tswapscreen();
+			if (plan.cursor_after >= 0)
+				tcursor(plan.cursor_after);
+			break;
 		case ST_ZIG_MODE_ALT47:
 			if (!allowaltscreen)
 				break;
-			alt = IS_SET(MODE_ALTSCREEN);
-			if (alt) {
+			if (plan.clear_before_swap)
 				tclearregion(0, 0, term.col-1, term.row-1);
-			}
 			if (plan.swap_screen)
 				tswapscreen();
-			if (*args != 1049)
-				break;
-			/* FALLTHROUGH */
+			break;
 		case ST_ZIG_MODE_CURSOR1048:
-			if (plan.cursor_store_action >= 0)
-				tcursor(plan.cursor_store_action);
+			if (plan.cursor_after >= 0)
+				tcursor(plan.cursor_after);
 			break;
 		case ST_ZIG_MODE_BRACKETED_PASTE:
 			xsetmode(set, MODE_BRCKTPASTE);

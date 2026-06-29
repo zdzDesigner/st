@@ -233,8 +233,10 @@ typedef struct {
 
 typedef struct {
 	int kind;
-	int cursor_store_action;
+	int cursor_before;
+	int clear_before_swap;
 	int swap_screen;
+	int cursor_after;
 } ZigModePlan;
 
 typedef struct {
