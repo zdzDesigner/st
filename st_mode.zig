@@ -237,16 +237,16 @@ export fn st_tdeftran(ascii: c_char) c_int {
     return (CharsetSelector{ .ascii = ascii }).value();
 }
 
-test "private 1049 maps to alt1049" {
-    const plan = st_modeplan(1, 1049, 1, 0);
+test "mode domain plans alternate screen set" {
+    const plan = modePlan(mode_alt1049, 1049, true, false);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.cursor_before);
     try std.testing.expectEqual(@as(c_int, 0), plan.cursor_after);
     try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
 }
 
-test "mode alternate screen actions preserve 1049 reset order" {
-    const plan = st_modeplan(1, 1049, 0, 1);
+test "mode domain plans 1049 reset order" {
+    const plan = modePlan(mode_alt1049, 1049, false, true);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_before);
     try std.testing.expectEqual(@as(c_int, 1), plan.clear_before_swap);
@@ -254,8 +254,8 @@ test "mode alternate screen actions preserve 1049 reset order" {
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_after);
 }
 
-test "mode alternate screen actions keep 47 separate from cursor" {
-    const plan = st_modeplan(1, 47, 0, 1);
+test "mode domain keeps 47 separate from cursor" {
+    const plan = modePlan(mode_alt47, 47, false, true);
     try std.testing.expectEqual(@as(c_int, mode_alt47), plan.kind);
     try std.testing.expectEqual(@as(c_int, -1), plan.cursor_before);
     try std.testing.expectEqual(@as(c_int, 1), plan.clear_before_swap);
@@ -263,8 +263,8 @@ test "mode alternate screen actions keep 47 separate from cursor" {
     try std.testing.expectEqual(@as(c_int, -1), plan.cursor_after);
 }
 
-test "mode cursor 1048 only plans cursor action" {
-    const plan = st_modeplan(1, 1048, 1, 0);
+test "mode domain plans 1048 cursor action" {
+    const plan = modePlan(mode_cursor1048, 1048, true, false);
     try std.testing.expectEqual(@as(c_int, mode_cursor1048), plan.kind);
     try std.testing.expectEqual(@as(c_int, -1), plan.cursor_before);
     try std.testing.expectEqual(@as(c_int, 0), plan.clear_before_swap);
@@ -272,18 +272,22 @@ test "mode cursor 1048 only plans cursor action" {
     try std.testing.expectEqual(@as(c_int, 0), plan.cursor_after);
 }
 
-test "private 1005 stays ignored" {
-    const plan = st_modeplan(1, 1005, 1, 0);
-    try std.testing.expectEqual(@as(c_int, mode_ignore), plan.kind);
-    try std.testing.expectEqual(@as(c_int, -1), plan.pointer_motion);
-    try std.testing.expectEqual(@as(c_int, 0), plan.clear_mouse_mode);
-    try std.testing.expectEqual(@as(c_int, mouse_none), plan.mouse_mode);
+test "mode helper maps mouse actions" {
+    try std.testing.expectEqual(@as(c_int, 0), pointerMotion(9, true));
+    try std.testing.expectEqual(@as(c_int, 1), pointerMotion(1003, true));
+    try std.testing.expectEqual(@as(c_int, 0), pointerMotion(1003, false));
+    try std.testing.expectEqual(@as(c_int, -1), pointerMotion(1006, true));
+    try std.testing.expectEqual(@as(c_int, 1), clearMouseMode(1000));
+    try std.testing.expectEqual(@as(c_int, 0), clearMouseMode(1006));
+    try std.testing.expectEqual(@as(c_int, mouse_x10), mouseMode(9));
+    try std.testing.expectEqual(@as(c_int, mouse_sgr), mouseMode(1006));
+    try std.testing.expectEqual(@as(c_int, mouse_none), mouseMode(1005));
 }
 
-test "mode mouse actions clear base mouse mode before concrete modes" {
-    const x10 = st_modeplan(1, 9, 1, 0);
-    const button = st_modeplan(1, 1000, 1, 0);
-    const motion = st_modeplan(1, 1002, 1, 0);
+test "mode domain plans mouse actions" {
+    const x10 = modePlan(mode_mouse_x10, 9, true, false);
+    const button = modePlan(mode_mouse_btn, 1000, true, false);
+    const motion = modePlan(mode_mouse_motion, 1002, true, false);
     try std.testing.expectEqual(@as(c_int, mode_mouse_x10), x10.kind);
     try std.testing.expectEqual(@as(c_int, 0), x10.pointer_motion);
     try std.testing.expectEqual(@as(c_int, 1), x10.clear_mouse_mode);
@@ -292,9 +296,9 @@ test "mode mouse actions clear base mouse mode before concrete modes" {
     try std.testing.expectEqual(@as(c_int, mouse_motion), motion.mouse_mode);
 }
 
-test "mode mouse many toggles pointer motion with set" {
-    const enabled = st_modeplan(1, 1003, 1, 0);
-    const disabled = st_modeplan(1, 1003, 0, 0);
+test "mode domain plans mouse many pointer motion" {
+    const enabled = modePlan(mode_mouse_many, 1003, true, false);
+    const disabled = modePlan(mode_mouse_many, 1003, false, false);
     try std.testing.expectEqual(@as(c_int, mode_mouse_many), enabled.kind);
     try std.testing.expectEqual(@as(c_int, 1), enabled.pointer_motion);
     try std.testing.expectEqual(@as(c_int, 0), disabled.pointer_motion);
@@ -302,29 +306,41 @@ test "mode mouse many toggles pointer motion with set" {
     try std.testing.expectEqual(@as(c_int, mouse_many), enabled.mouse_mode);
 }
 
-test "mode mouse sgr does not clear base mouse mode" {
-    const plan = st_modeplan(1, 1006, 1, 0);
+test "mode domain plans mouse sgr" {
+    const plan = modePlan(mode_mouse_sgr, 1006, true, false);
     try std.testing.expectEqual(@as(c_int, mode_mouse_sgr), plan.kind);
     try std.testing.expectEqual(@as(c_int, -1), plan.pointer_motion);
     try std.testing.expectEqual(@as(c_int, 0), plan.clear_mouse_mode);
     try std.testing.expectEqual(@as(c_int, mouse_sgr), plan.mouse_mode);
 }
 
-test "mode origin action plans cursor state and home move" {
-    const plan = st_modeplan(1, 6, 1, 0);
-    try std.testing.expectEqual(@as(c_int, mode_origin), plan.kind);
+test "mode helper maps origin and simple actions" {
+    try std.testing.expectEqual(@as(c_int, cursor_state_origin), cursorStateAction(6));
+    try std.testing.expectEqual(@as(c_int, cursor_state_none), cursorStateAction(7));
+    try std.testing.expectEqual(@as(c_int, term_mode_wrap), termModeAction(7));
+    try std.testing.expectEqual(@as(c_int, term_mode_insert), termModeAction(4));
+    try std.testing.expectEqual(@as(c_int, term_mode_echo), termModeAction(12));
+    try std.testing.expectEqual(@as(c_int, term_mode_crlf), termModeAction(20));
+    try std.testing.expectEqual(@as(c_int, term_mode_none), termModeAction(5));
+    try std.testing.expectEqual(@as(c_int, xsetmode_hide), xsetmodeAction(25));
+    try std.testing.expectEqual(@as(c_int, xsetmode_kbdlock), xsetmodeAction(2));
+    try std.testing.expectEqual(@as(c_int, xsetmode_none), xsetmodeAction(7));
+}
+
+test "mode domain plans origin action" {
+    const plan = modePlan(mode_origin, 6, true, false);
     try std.testing.expectEqual(@as(c_int, cursor_state_origin), plan.cursor_state_action);
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_state_set);
     try std.testing.expectEqual(@as(c_int, 1), plan.move_origin_home);
 }
 
-test "mode visibility and simple bit actions return final write values" {
-    const visibility = st_modeplan(1, 25, 1, 0);
-    const wrap = st_modeplan(1, 7, 1, 0);
-    const insert = st_modeplan(0, 4, 1, 0);
-    const echo = st_modeplan(0, 12, 1, 0);
-    const crlf = st_modeplan(0, 20, 1, 0);
-    const kbdlock = st_modeplan(0, 2, 1, 0);
+test "mode domain plans visibility and simple bit writes" {
+    const visibility = modePlan(mode_cursor_visibility, 25, true, false);
+    const wrap = modePlan(mode_wrap, 7, true, false);
+    const insert = modePlan(mode_insert, 4, true, false);
+    const echo = modePlan(mode_echo, 12, true, false);
+    const crlf = modePlan(mode_crlf, 20, true, false);
+    const kbdlock = modePlan(mode_kbdlock, 2, true, false);
     try std.testing.expectEqual(@as(c_int, xsetmode_hide), visibility.xsetmode_action);
     try std.testing.expectEqual(@as(c_int, 0), visibility.xsetmode_set);
     try std.testing.expectEqual(@as(c_int, term_mode_wrap), wrap.term_mode_action);
@@ -336,22 +352,22 @@ test "mode visibility and simple bit actions return final write values" {
     try std.testing.expectEqual(@as(c_int, xsetmode_kbdlock), kbdlock.xsetmode_action);
 }
 
-test "private unknown reports private unknown" {
+test "mode adapter smoke plan export" {
+    const alt = st_modeplan(1, 1049, 0, 1);
+    const mouse = st_modeplan(1, 1003, 1, 0);
+    const origin = st_modeplan(1, 6, 1, 0);
+    try std.testing.expectEqual(@as(c_int, mode_alt1049), alt.kind);
+    try std.testing.expectEqual(@as(c_int, mouse_many), mouse.mouse_mode);
+    try std.testing.expectEqual(@as(c_int, cursor_state_origin), origin.cursor_state_action);
+}
+
+test "mode adapter smoke keeps unknown classification" {
     const plan = st_modeplan(1, 9999, 1, 0);
     try std.testing.expectEqual(@as(c_int, mode_private_unknown), plan.kind);
+    try std.testing.expectEqual(@as(c_int, mode_ignore), st_modeplan(1, 1005, 1, 0).kind);
 }
 
-test "regular 2 maps to kbdlock" {
-    const plan = st_modeplan(0, 2, 1, 0);
-    try std.testing.expectEqual(@as(c_int, mode_kbdlock), plan.kind);
-}
-
-test "regular 12 maps to echo" {
-    const plan = st_modeplan(0, 12, 1, 0);
-    try std.testing.expectEqual(@as(c_int, mode_echo), plan.kind);
-}
-
-test "regular unknown reports regular unknown" {
+test "mode adapter smoke keeps regular unknown classification" {
     const plan = st_modeplan(0, 99, 1, 0);
     try std.testing.expectEqual(@as(c_int, mode_regular_unknown), plan.kind);
 }
