@@ -2075,30 +2075,34 @@ tsetmode(int priv, int set, int *args, int narg)
 			xsetmode(!set, MODE_HIDE);
 			break;
 		case ST_ZIG_MODE_MOUSE_X10:
-			xsetpointermotion(0);
-			xsetmode(0, MODE_MOUSE);
-			xsetmode(set, MODE_MOUSEX10);
-			break;
 		case ST_ZIG_MODE_MOUSE_BTN:
-			xsetpointermotion(0);
-			xsetmode(0, MODE_MOUSE);
-			xsetmode(set, MODE_MOUSEBTN);
-			break;
 		case ST_ZIG_MODE_MOUSE_MOTION:
-			xsetpointermotion(0);
-			xsetmode(0, MODE_MOUSE);
-			xsetmode(set, MODE_MOUSEMOTION);
-			break;
 		case ST_ZIG_MODE_MOUSE_MANY:
-			xsetpointermotion(set);
-			xsetmode(0, MODE_MOUSE);
-			xsetmode(set, MODE_MOUSEMANY);
+			if (plan.pointer_motion >= 0)
+				xsetpointermotion(plan.pointer_motion);
+			if (plan.clear_mouse_mode)
+				xsetmode(0, MODE_MOUSE);
+			switch (plan.mouse_mode) {
+			case ST_ZIG_MOUSE_X10:
+				xsetmode(set, MODE_MOUSEX10);
+				break;
+			case ST_ZIG_MOUSE_BUTTON:
+				xsetmode(set, MODE_MOUSEBTN);
+				break;
+			case ST_ZIG_MOUSE_MOTION:
+				xsetmode(set, MODE_MOUSEMOTION);
+				break;
+			case ST_ZIG_MOUSE_MANY:
+				xsetmode(set, MODE_MOUSEMANY);
+				break;
+			}
 			break;
 		case ST_ZIG_MODE_FOCUS:
 			xsetmode(set, MODE_FOCUS);
 			break;
 		case ST_ZIG_MODE_MOUSE_SGR:
-			xsetmode(set, MODE_MOUSESGR);
+			if (plan.mouse_mode == ST_ZIG_MOUSE_SGR)
+				xsetmode(set, MODE_MOUSESGR);
 			break;
 		case ST_ZIG_MODE_8BIT:
 			xsetmode(set, MODE_8BIT);

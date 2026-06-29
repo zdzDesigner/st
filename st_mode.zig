@@ -12,6 +12,9 @@ pub const ZigModePlan = extern struct {
     clear_before_swap: c_int,
     swap_screen: c_int,
     cursor_after: c_int,
+    pointer_motion: c_int,
+    clear_mouse_mode: c_int,
+    mouse_mode: c_int,
 };
 
 pub const mode_ignore = 0;
@@ -37,6 +40,13 @@ pub const mode_kbdlock = 19;
 pub const mode_insert = 20;
 pub const mode_echo = 21;
 pub const mode_crlf = 22;
+
+pub const mouse_none = 0;
+pub const mouse_x10 = 1;
+pub const mouse_button = 2;
+pub const mouse_motion = 3;
+pub const mouse_many = 4;
+pub const mouse_sgr = 5;
 
 const term_mode_utf8 = 1 << 6;
 const charset_graphic0 = 0;
@@ -134,6 +144,35 @@ fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool) ZigModePlan {
         .clear_before_swap = if ((arg == 1049 or arg == 47 or arg == 1047) and alt) 1 else 0,
         .swap_screen = swapScreen(arg, set, alt),
         .cursor_after = if (arg == 1049 or arg == 1048) cursor_action else -1,
+        .pointer_motion = pointerMotion(arg, set),
+        .clear_mouse_mode = clearMouseMode(arg),
+        .mouse_mode = mouseMode(arg),
+    };
+}
+
+fn pointerMotion(arg: c_int, set: bool) c_int {
+    return switch (arg) {
+        9, 1000, 1002 => 0,
+        1003 => if (set) 1 else 0,
+        else => -1,
+    };
+}
+
+fn clearMouseMode(arg: c_int) c_int {
+    return switch (arg) {
+        9, 1000, 1002, 1003 => 1,
+        else => 0,
+    };
+}
+
+fn mouseMode(arg: c_int) c_int {
+    return switch (arg) {
+        9 => mouse_x10,
+        1000 => mouse_button,
+        1002 => mouse_motion,
+        1003 => mouse_many,
+        1006 => mouse_sgr,
+        else => mouse_none,
     };
 }
 
@@ -187,6 +226,39 @@ test "mode cursor 1048 only plans cursor action" {
 test "private 1005 stays ignored" {
     const plan = st_modeplan(1, 1005, 1, 0);
     try std.testing.expectEqual(@as(c_int, mode_ignore), plan.kind);
+    try std.testing.expectEqual(@as(c_int, -1), plan.pointer_motion);
+    try std.testing.expectEqual(@as(c_int, 0), plan.clear_mouse_mode);
+    try std.testing.expectEqual(@as(c_int, mouse_none), plan.mouse_mode);
+}
+
+test "mode mouse actions clear base mouse mode before concrete modes" {
+    const x10 = st_modeplan(1, 9, 1, 0);
+    const button = st_modeplan(1, 1000, 1, 0);
+    const motion = st_modeplan(1, 1002, 1, 0);
+    try std.testing.expectEqual(@as(c_int, mode_mouse_x10), x10.kind);
+    try std.testing.expectEqual(@as(c_int, 0), x10.pointer_motion);
+    try std.testing.expectEqual(@as(c_int, 1), x10.clear_mouse_mode);
+    try std.testing.expectEqual(@as(c_int, mouse_x10), x10.mouse_mode);
+    try std.testing.expectEqual(@as(c_int, mouse_button), button.mouse_mode);
+    try std.testing.expectEqual(@as(c_int, mouse_motion), motion.mouse_mode);
+}
+
+test "mode mouse many toggles pointer motion with set" {
+    const enabled = st_modeplan(1, 1003, 1, 0);
+    const disabled = st_modeplan(1, 1003, 0, 0);
+    try std.testing.expectEqual(@as(c_int, mode_mouse_many), enabled.kind);
+    try std.testing.expectEqual(@as(c_int, 1), enabled.pointer_motion);
+    try std.testing.expectEqual(@as(c_int, 0), disabled.pointer_motion);
+    try std.testing.expectEqual(@as(c_int, 1), enabled.clear_mouse_mode);
+    try std.testing.expectEqual(@as(c_int, mouse_many), enabled.mouse_mode);
+}
+
+test "mode mouse sgr does not clear base mouse mode" {
+    const plan = st_modeplan(1, 1006, 1, 0);
+    try std.testing.expectEqual(@as(c_int, mode_mouse_sgr), plan.kind);
+    try std.testing.expectEqual(@as(c_int, -1), plan.pointer_motion);
+    try std.testing.expectEqual(@as(c_int, 0), plan.clear_mouse_mode);
+    try std.testing.expectEqual(@as(c_int, mouse_sgr), plan.mouse_mode);
 }
 
 test "private unknown reports private unknown" {

@@ -237,6 +237,9 @@ typedef struct {
 	int clear_before_swap;
 	int swap_screen;
 	int cursor_after;
+	int pointer_motion;
+	int clear_mouse_mode;
+	int mouse_mode;
 } ZigModePlan;
 
 typedef struct {
@@ -795,6 +798,15 @@ enum {
 	ST_ZIG_MODE_INSERT = 20,
 	ST_ZIG_MODE_ECHO = 21,
 	ST_ZIG_MODE_CRLF = 22,
+};
+
+enum {
+	ST_ZIG_MOUSE_NONE = 0,
+	ST_ZIG_MOUSE_X10 = 1,
+	ST_ZIG_MOUSE_BUTTON = 2,
+	ST_ZIG_MOUSE_MOTION = 3,
+	ST_ZIG_MOUSE_MANY = 4,
+	ST_ZIG_MOUSE_SGR = 5,
 };
 
 enum {
