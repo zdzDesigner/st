@@ -216,6 +216,57 @@ pub const SelectionStateResult = struct {
     effect: SelectionEffectPlan,
 };
 
+pub const SelectionModel = struct {
+    state: SelectionSnapshot,
+
+    pub fn init(state: SelectionSnapshot) SelectionModel {
+        return .{ .state = state };
+    }
+
+    pub fn start(self: SelectionModel, point: model.Point, snap: i32, alt_screen: bool) SelectionStateResult {
+        return startResult(self.state, point, snap, alt_screen);
+    }
+
+    pub fn extend(self: SelectionModel, point: model.Point, selection_type: SelectionType, done: bool) SelectionStateResult {
+        return extendResult(self.state, point, selection_type, done);
+    }
+
+    pub fn scroll(self: SelectionModel, scroll_origin: i32, top: i32, bot: i32, delta: i32) SelectionStateResult {
+        return scrollResult(self.state, .{ .start = self.state.nb, .end = self.state.ne }, scroll_origin, top, bot, delta);
+    }
+
+    pub fn normalize(self: SelectionModel, cols: i32, start_len: i32, end_len: i32) SelectionStateResult {
+        return normalizeResult(self.state, cols, start_len, end_len);
+    }
+
+    pub fn selected(self: SelectionModel, point: model.Point, alt_screen: bool) bool {
+        return isSelected(point, self.state.mode != .empty and self.state.ob.x != -1, self.state.alt == alt_screen, self.state.selection_type, .{ .start = self.state.nb, .end = self.state.ne });
+    }
+
+    pub fn getSelPlan(self: SelectionModel, y: i32, cols: i32, line: []const ZigGlyph, utf_size: i32) ZigGetSelExecPlan {
+        const bounds = Bounds{ .start = self.state.nb, .end = self.state.ne };
+        const bufsize = getBufferSize(cols, .{ .start = .{ .x = 0, .y = self.state.nb.y }, .end = .{ .x = 0, .y = self.state.ne.y } }, utf_size);
+        const linelen = (line_core.Line(ZigGlyph){ .glyphs = line, .cols = cols }).length();
+        if (linelen == 0) return .{ .empty = 1, .start_x = 0, .last_index = -1, .newline = 1, .bufsize = bufsize };
+
+        const line_plan = getLinePlan(self.state.selection_type, bounds, y, cols);
+        const start_x = line_plan.start_x;
+        var last_index = getLastX(line_plan.last_x, linelen);
+        while (last_index >= start_x and line[@intCast(last_index)].u == ' ') {
+            last_index -= 1;
+        }
+
+        const last_mode: c_ushort = if (last_index >= start_x) line[@intCast(last_index)].mode else 0;
+        return .{
+            .empty = if (last_index < start_x) 1 else 0,
+            .start_x = start_x,
+            .last_index = last_index,
+            .newline = boolInt(needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = self.state.ne.y } }, line_plan.last_x, linelen, last_mode, self.state.selection_type)),
+            .bufsize = bufsize,
+        };
+    }
+};
+
 pub const SelectionEffectPlan = struct {
     dirty: bool,
     top: i32,
@@ -686,21 +737,40 @@ pub fn zigSelclearplan(ob_x: c_int) c_int {
     return boolInt(shouldClear(ob_x));
 }
 
+export fn st_selclearplan(ob_x: c_int) c_int {
+    return zigSelclearplan(ob_x);
+}
+
 pub fn zigSelstartupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelectionStateResult {
-    return zigSelectionStateResult(startResult(zigSelectionSnapshot(snapshot), .{ .x = col, .y = row }, snap, alt_screen != 0));
+    return zigSelectionStateResult(SelectionModel.init(zigSelectionSnapshot(snapshot)).start(.{ .x = col, .y = row }, snap, alt_screen != 0));
+}
+
+export fn st_selstartupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelectionStateResult {
+    return zigSelstartupdate(snapshot, col, row, snap, alt_screen);
 }
 
 pub fn zigSelextendupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, sel_type: c_int, done: c_int) ZigSelectionStateResult {
-    return zigSelectionStateResult(extendResult(zigSelectionSnapshot(snapshot), .{ .x = col, .y = row }, zigSelectionType(sel_type), done != 0));
+    return zigSelectionStateResult(SelectionModel.init(zigSelectionSnapshot(snapshot)).extend(.{ .x = col, .y = row }, zigSelectionType(sel_type), done != 0));
+}
+
+export fn st_selextendupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, sel_type: c_int, done: c_int) ZigSelectionStateResult {
+    return zigSelextendupdate(snapshot, col, row, sel_type, done);
 }
 
 pub fn zigSelscrollupdate(snapshot: ZigSelectionSnapshot, orig: c_int, top: c_int, bot: c_int, delta: c_int) ZigSelectionStateResult {
-    const state = zigSelectionSnapshot(snapshot);
-    return zigSelectionStateResult(scrollResult(state, .{ .start = state.nb, .end = state.ne }, orig, top, bot, delta));
+    return zigSelectionStateResult(SelectionModel.init(zigSelectionSnapshot(snapshot)).scroll(orig, top, bot, delta));
+}
+
+export fn st_selscrollupdate(snapshot: ZigSelectionSnapshot, orig: c_int, top: c_int, bot: c_int, delta: c_int) ZigSelectionStateResult {
+    return zigSelscrollupdate(snapshot, orig, top, bot, delta);
 }
 
 pub fn zigSelnormalizeupdate(snapshot: ZigSelectionSnapshot, col: c_int, start_len: c_int, end_len: c_int) ZigSelectionStateResult {
-    return zigSelectionStateResult(normalizeResult(zigSelectionSnapshot(snapshot), col, start_len, end_len));
+    return zigSelectionStateResult(SelectionModel.init(zigSelectionSnapshot(snapshot)).normalize(col, start_len, end_len));
+}
+
+export fn st_selnormalizeupdate(snapshot: ZigSelectionSnapshot, col: c_int, start_len: c_int, end_len: c_int) ZigSelectionStateResult {
+    return zigSelnormalizeupdate(snapshot, col, start_len, end_len);
 }
 
 pub fn zigSelsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int) ZigSelSnapLineStep {
@@ -708,6 +778,22 @@ pub fn zigSelsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int
         .stop => |next_y| .{ .action = @intFromEnum(SnapLineAction.stop), .y = next_y },
         .move => |next_y| .{ .action = @intFromEnum(SnapLineAction.move), .y = next_y },
     };
+}
+
+export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
+    return snapLineX(direction, col);
+}
+
+export fn st_selsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int) ZigSelSnapLineStep {
+    return zigSelsnaplinestep(y, direction, row, wrapped);
+}
+
+export fn st_selsnapworditerrequest(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int, prevdelim: c_int, prevrune: u32) ZigSelSnapWordIterRequest {
+    return zigSelsnapworditerrequest(x, y, direction, col, row, prevdelim, prevrune);
+}
+
+export fn st_selsnapworditerresolve(request: ZigSelSnapWordIterRequest, prevdelim: c_int, prevrune: u32, reader: ZigSelSnapWordReaderSnapshot) ZigSelSnapWordStep {
+    return zigSelsnapworditerresolve(request, prevdelim, prevrune, reader);
 }
 
 pub fn zigSelsnapwordplan(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int) ZigSelSnapWordPlan {
@@ -723,35 +809,20 @@ pub fn zigSelsnapwordloopstep(snapshot: ZigSelSnapWordLoopSnapshot) ZigSelSnapWo
     };
 }
 
-pub fn zigSelected(x: c_int, y: c_int, mode: c_int, ob_x: c_int, sel_alt: c_int, alt_screen: c_int, sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) c_int {
-    const selection_type = zigSelectionType(sel_type);
-    const bounds = Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
-    return boolInt(isSelected(.{ .x = x, .y = y }, zigSelectionMode(mode) != .empty and ob_x != -1, sel_alt == alt_screen, selection_type, bounds));
+pub fn zigSelected(snapshot: ZigSelectionSnapshot, x: c_int, y: c_int, alt_screen: c_int) c_int {
+    return boolInt(SelectionModel.init(zigSelectionSnapshot(snapshot)).selected(.{ .x = x, .y = y }, alt_screen != 0));
 }
 
-pub fn zigGetselexecplan(sel_type: c_int, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int, y: c_int, col: c_int, line: [*]const ZigGlyph, utf_siz: c_int) ZigGetSelExecPlan {
-    const selection_type = zigSelectionType(sel_type);
-    const bounds = Bounds{ .start = .{ .x = nb_x, .y = nb_y }, .end = .{ .x = ne_x, .y = ne_y } };
-    const bufsize = getBufferSize(col, .{ .start = .{ .x = 0, .y = nb_y }, .end = .{ .x = 0, .y = ne_y } }, utf_siz);
-    const glyphs = line[0..@intCast(col)];
-    const linelen = (line_core.Line(ZigGlyph){ .glyphs = glyphs, .cols = col }).length();
-    if (linelen == 0) return .{ .empty = 1, .start_x = 0, .last_index = -1, .newline = 1, .bufsize = bufsize };
+export fn st_selected(snapshot: ZigSelectionSnapshot, x: c_int, y: c_int, alt_screen: c_int) c_int {
+    return zigSelected(snapshot, x, y, alt_screen);
+}
 
-    const line_plan = getLinePlan(selection_type, bounds, y, col);
-    const start_x = line_plan.start_x;
-    var last_index = getLastX(line_plan.last_x, linelen);
-    while (last_index >= start_x and glyphs[@intCast(last_index)].u == ' ') {
-        last_index -= 1;
-    }
+pub fn zigGetselexecplan(snapshot: ZigSelectionSnapshot, y: c_int, col: c_int, line: [*]const ZigGlyph, utf_siz: c_int) ZigGetSelExecPlan {
+    return SelectionModel.init(zigSelectionSnapshot(snapshot)).getSelPlan(y, col, line[0..@intCast(col)], utf_siz);
+}
 
-    const last_mode: c_ushort = if (last_index >= start_x) glyphs[@intCast(last_index)].mode else 0;
-    return .{
-        .empty = if (last_index < start_x) 1 else 0,
-        .start_x = start_x,
-        .last_index = last_index,
-        .newline = boolInt(needsNewline(y, .{ .start = .{ .x = 0, .y = 0 }, .end = .{ .x = 0, .y = ne_y } }, line_plan.last_x, linelen, last_mode, selection_type)),
-        .bufsize = bufsize,
-    };
+export fn st_getselexecplan(snapshot: ZigSelectionSnapshot, y: c_int, col: c_int, line: [*]const ZigGlyph, utf_siz: c_int) ZigGetSelExecPlan {
+    return zigGetselexecplan(snapshot, y, col, line, utf_siz);
 }
 
 pub fn snapWordPlan(point: model.Point, direction: i32, size: model.Size) SnapWordPlan {
@@ -812,6 +883,23 @@ fn between(value: i32, lower: i32, upper: i32) bool {
     return lower <= value and value <= upper;
 }
 
+fn testSelectionSnapshot(selection_type: SelectionType, mode: SelectionMode, alt: bool, ob_x: i32, nb: model.Point, ne: model.Point) ZigSelectionSnapshot {
+    return .{
+        .mode = @intFromEnum(mode),
+        .selection_type = @intFromEnum(selection_type),
+        .alt = boolInt(alt),
+        .snap = 0,
+        .ob_x = ob_x,
+        .ob_y = nb.y,
+        .oe_x = ne.x,
+        .oe_y = ne.y,
+        .nb_x = nb.x,
+        .nb_y = nb.y,
+        .ne_x = ne.x,
+        .ne_y = ne.y,
+    };
+}
+
 test "snap word plan handles wrapping" {
     const forward = snapWordPlan(.{ .x = 9, .y = 2 }, 1, .{ .cols = 10, .rows = 5 });
     try std.testing.expectEqual(model.Point{ .x = 0, .y = 3 }, forward.point);
@@ -858,6 +946,33 @@ test "selection scroll plan clears or normalizes affected selection" {
 
     const inactive = scrollPlan(-1, 3, 4, bounds, 0, 0, 8, 1);
     try std.testing.expectEqual(ScrollAction.none, inactive.action);
+}
+
+test "selection state adapter exports update plans" {
+    const scroll = st_selscrollupdate(testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 0, .y = 2 }, .{ .x = 3, .y = 6 }), 4, 0, 9, 1);
+    try std.testing.expectEqual(@as(c_int, 1), scroll.effect.clear);
+
+    const extend = st_selextendupdate(testSelectionSnapshot(.regular, .empty, false, 1, .{ .x = 1, .y = 2 }, .{ .x = 3, .y = 4 }), 3, 5, @intFromEnum(SelectionType.rectangular), 0);
+    try std.testing.expectEqual(@as(c_int, 1), extend.effect.dirty);
+    try std.testing.expectEqual(@as(c_int, 2), extend.effect.top);
+    try std.testing.expectEqual(@as(c_int, 5), extend.effect.bot);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SelectionMode.ready)), extend.update.mode);
+
+    const start = st_selstartupdate(testSelectionSnapshot(.regular, .idle, false, -1, .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 }), 3, 4, 1, 1);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SelectionMode.empty)), start.update.mode);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SelectionType.regular)), start.update.selection_type);
+    try std.testing.expectEqual(@as(c_int, 1), start.update.alt);
+    try std.testing.expectEqual(@as(c_int, 1), start.effect.dirty);
+}
+
+test "selection clear and line snap adapter exports" {
+    try std.testing.expectEqual(@as(c_int, 0), st_selclearplan(-1));
+    try std.testing.expectEqual(@as(c_int, 1), st_selclearplan(0));
+    try std.testing.expectEqual(@as(c_int, 0), st_selsnaplinex(-1, 10));
+    try std.testing.expectEqual(@as(c_int, 9), st_selsnaplinex(1, 10));
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SnapLineAction.move)), st_selsnaplinestep(3, -1, 5, 1).action);
+    try std.testing.expectEqual(@as(c_int, 2), st_selsnaplinestep(3, -1, 5, 1).y);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SnapLineAction.stop)), st_selsnaplinestep(3, 1, 5, 0).action);
 }
 
 test "selection extend plan reports dirty range and final mode" {
@@ -934,6 +1049,71 @@ test "selection hit test accepts unnormalized bounds" {
 
     try std.testing.expect(isSelected(.{ .x = 4, .y = 3 }, true, true, .rectangular, bounds));
     try std.testing.expect(isSelected(.{ .x = 8, .y = 2 }, true, true, .regular, bounds));
+}
+
+test "selection hit test adapter uses snapshot interface" {
+    const regular = testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 1, .y = 2 }, .{ .x = 5, .y = 2 });
+    try std.testing.expectEqual(@as(c_int, 1), st_selected(regular, 3, 2, 0));
+    try std.testing.expectEqual(@as(c_int, 0), st_selected(regular, 6, 2, 0));
+
+    const rectangular = testSelectionSnapshot(.rectangular, .ready, false, 0, .{ .x = 2, .y = 1 }, .{ .x = 5, .y = 4 });
+    try std.testing.expectEqual(@as(c_int, 1), st_selected(rectangular, 4, 3, 0));
+    try std.testing.expectEqual(@as(c_int, 0), st_selected(rectangular, 6, 3, 0));
+
+    const inactive = testSelectionSnapshot(.regular, .empty, false, 0, .{ .x = 0, .y = 0 }, .{ .x = 2, .y = 2 });
+    try std.testing.expectEqual(@as(c_int, 0), st_selected(inactive, 1, 1, 0));
+
+    const alt_mismatch = testSelectionSnapshot(.regular, .ready, true, 0, .{ .x = 0, .y = 0 }, .{ .x = 2, .y = 2 });
+    try std.testing.expectEqual(@as(c_int, 0), st_selected(alt_mismatch, 1, 1, 0));
+}
+
+test "get selection exec plan adapter uses snapshot interface" {
+    const line = [_]ZigGlyph{
+        .{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '丙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const snapshot = testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 3, .y = 2 }, .{ .x = 5, .y = 4 });
+    const first = st_getselexecplan(snapshot, 2, line.len, &line, 4);
+    const middle = st_getselexecplan(snapshot, 3, line.len, &line, 4);
+
+    try std.testing.expectEqual(@as(c_int, 3), first.start_x);
+    try std.testing.expectEqual(@as(c_int, 4), first.last_index);
+    try std.testing.expectEqual(@as(c_int, 1), first.newline);
+    try std.testing.expectEqual(@as(c_int, 0), middle.start_x);
+    try std.testing.expectEqual(@as(c_int, 4), middle.last_index);
+}
+
+test "get selection exec plan adapter keeps rectangular and wrap behaviour" {
+    const rect_line = [_]ZigGlyph{
+        .{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '丙', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '丁', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '戊', .mode = 0, .fg = 0, .bg = 0 },
+        .{ .u = '己', .mode = 0, .fg = 0, .bg = 0 },
+    };
+    const rect = st_getselexecplan(testSelectionSnapshot(.rectangular, .ready, false, 0, .{ .x = 3, .y = 2 }, .{ .x = 5, .y = 4 }), 3, rect_line.len, &rect_line, 4);
+    try std.testing.expectEqual(@as(c_int, 3), rect.start_x);
+    try std.testing.expectEqual(@as(c_int, 5), rect.last_index);
+
+    const empty = [_]ZigGlyph{ .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = ' ', .mode = 0, .fg = 0, .bg = 0 } };
+    const empty_plan = st_getselexecplan(testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 0, .y = 2 }, .{ .x = 0, .y = 3 }), 2, empty.len, &empty, 4);
+    try std.testing.expectEqual(@as(c_int, 88), empty_plan.bufsize);
+    try std.testing.expectEqual(@as(c_int, 1), empty_plan.empty);
+
+    const wrapped = [_]ZigGlyph{ .{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }, .{ .u = '乙', .mode = model.attr_wrap, .fg = 0, .bg = 0 } };
+    const wrapped_regular = st_getselexecplan(testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }), 0, wrapped.len, &wrapped, 4);
+    const wrapped_rect = st_getselexecplan(testSelectionSnapshot(.rectangular, .ready, false, 0, .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }), 0, wrapped.len, &wrapped, 4);
+    try std.testing.expectEqual(@as(c_int, 0), wrapped_regular.newline);
+    try std.testing.expectEqual(@as(c_int, 1), wrapped_rect.newline);
 }
 
 test "snap word step accepts and stops" {

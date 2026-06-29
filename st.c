@@ -286,8 +286,9 @@ static size_t searchprevchar(size_t);
 static size_t searchnextchar(size_t);
 static void searchdelete(size_t, size_t);
 
-static void selsetends(int, int, int, int);
-static void selsetbounds(ZigSelBounds);
+static ZigSelectionSnapshot selectionsnapshot(void);
+static void selectionapplystate(ZigSelectionStateUpdate);
+static void selectionapplybounds(ZigSelectionStateUpdate);
 
 static void selnormalize(void);
 static void selscroll(int, int);
@@ -404,35 +405,11 @@ void
 selstart(int col, int row, int snap)
 {
 	ZigSelectionStateResult result;
-	ZigSelectionSnapshot snapshot;
 
 	selclear();
-	snapshot = (ZigSelectionSnapshot){
-		.mode = sel.mode,
-		.selection_type = sel.type,
-		.alt = sel.alt,
-		.snap = sel.snap,
-		.ob_x = sel.ob.x,
-		.ob_y = sel.ob.y,
-		.oe_x = sel.oe.x,
-		.oe_y = sel.oe.y,
-		.nb_x = sel.nb.x,
-		.nb_y = sel.nb.y,
-		.ne_x = sel.ne.x,
-		.ne_y = sel.ne.y,
-	};
-	result = st_selstartupdate(snapshot, col, row, snap, IS_SET(MODE_ALTSCREEN));
-	sel.mode = result.update.mode;
-	sel.type = result.update.selection_type;
-	sel.alt = result.update.alt;
-	sel.snap = result.update.snap;
-	selsetends(result.update.ob_x, result.update.ob_y, result.update.oe_x, result.update.oe_y);
-	selsetbounds((ZigSelBounds){
-		.nb_x = result.update.nb_x,
-		.nb_y = result.update.nb_y,
-		.ne_x = result.update.ne_x,
-		.ne_y = result.update.ne_y,
-	});
+	result = st_selstartupdate(selectionsnapshot(), col, row, snap,
+		IS_SET(MODE_ALTSCREEN));
+	selectionapplystate(result.update);
 	if (result.effect.dirty)
 		tsetdirt(result.effect.top, result.effect.bot);
 }
@@ -441,7 +418,6 @@ void
 selextend(int col, int row, int type, int done)
 {
 	ZigSelectionStateResult result;
-	ZigSelectionSnapshot snapshot;
 
 	if (sel.mode == SEL_IDLE)
 		return;
@@ -449,32 +425,8 @@ selextend(int col, int row, int type, int done)
 		selclear();
 		return;
 	}
-	snapshot = (ZigSelectionSnapshot){
-		.mode = sel.mode,
-		.selection_type = sel.type,
-		.alt = sel.alt,
-		.snap = sel.snap,
-		.ob_x = sel.ob.x,
-		.ob_y = sel.ob.y,
-		.oe_x = sel.oe.x,
-		.oe_y = sel.oe.y,
-		.nb_x = sel.nb.x,
-		.nb_y = sel.nb.y,
-		.ne_x = sel.ne.x,
-		.ne_y = sel.ne.y,
-	};
-	result = st_selextendupdate(snapshot, col, row, type, done);
-	sel.mode = result.update.mode;
-	sel.type = result.update.selection_type;
-	sel.alt = result.update.alt;
-	sel.snap = result.update.snap;
-	selsetends(result.update.ob_x, result.update.ob_y, result.update.oe_x, result.update.oe_y);
-	selsetbounds((ZigSelBounds){
-		.nb_x = result.update.nb_x,
-		.nb_y = result.update.nb_y,
-		.ne_x = result.update.ne_x,
-		.ne_y = result.update.ne_y,
-	});
+	result = st_selextendupdate(selectionsnapshot(), col, row, type, done);
+	selectionapplystate(result.update);
 	if (result.effect.dirty)
 		tsetdirt(result.effect.top, result.effect.bot);
 }
@@ -483,12 +435,22 @@ void
 selnormalize(void)
 {
 	ZigSelectionStateResult result;
-	ZigSelectionSnapshot snapshot;
 	int start_len, end_len;
 
 	start_len = tlinelen(sel.ob.y < sel.oe.y ? sel.ob.y : sel.oe.y);
 	end_len = tlinelen(sel.ob.y < sel.oe.y ? sel.oe.y : sel.ob.y);
-	snapshot = (ZigSelectionSnapshot){
+	result = st_selnormalizeupdate(selectionsnapshot(), term.col,
+		start_len, end_len);
+	selectionapplybounds(result.update);
+
+	selsnap(&sel.nb.x, &sel.nb.y, -1);
+	selsnap(&sel.ne.x, &sel.ne.y, +1);
+}
+
+static ZigSelectionSnapshot
+selectionsnapshot(void)
+{
+	return (ZigSelectionSnapshot){
 		.mode = sel.mode,
 		.selection_type = sel.type,
 		.alt = sel.alt,
@@ -502,42 +464,35 @@ selnormalize(void)
 		.ne_x = sel.ne.x,
 		.ne_y = sel.ne.y,
 	};
-	result = st_selnormalizeupdate(snapshot, term.col, start_len, end_len);
-	selsetbounds((ZigSelBounds){
-		.nb_x = result.update.nb_x,
-		.nb_y = result.update.nb_y,
-		.ne_x = result.update.ne_x,
-		.ne_y = result.update.ne_y,
-	});
-
-	selsnap(&sel.nb.x, &sel.nb.y, -1);
-	selsnap(&sel.ne.x, &sel.ne.y, +1);
 }
 
 static void
-selsetends(int ob_x, int ob_y, int oe_x, int oe_y)
+selectionapplystate(ZigSelectionStateUpdate update)
 {
-	sel.ob.x = ob_x;
-	sel.ob.y = ob_y;
-	sel.oe.x = oe_x;
-	sel.oe.y = oe_y;
+	sel.mode = update.mode;
+	sel.type = update.selection_type;
+	sel.alt = update.alt;
+	sel.snap = update.snap;
+	sel.ob.x = update.ob_x;
+	sel.ob.y = update.ob_y;
+	sel.oe.x = update.oe_x;
+	sel.oe.y = update.oe_y;
+	selectionapplybounds(update);
 }
 
 static void
-selsetbounds(ZigSelBounds bounds)
+selectionapplybounds(ZigSelectionStateUpdate update)
 {
-	sel.nb.x = bounds.nb_x;
-	sel.nb.y = bounds.nb_y;
-	sel.ne.x = bounds.ne_x;
-	sel.ne.y = bounds.ne_y;
+	sel.nb.x = update.nb_x;
+	sel.nb.y = update.nb_y;
+	sel.ne.x = update.ne_x;
+	sel.ne.y = update.ne_y;
 }
 
 int
 selected(int x, int y)
 {
-	return st_selected(x, y, sel.mode, sel.ob.x, sel.alt,
-		IS_SET(MODE_ALTSCREEN), sel.type, sel.nb.x, sel.nb.y,
-		sel.ne.x, sel.ne.y);
+	return st_selected(selectionsnapshot(), x, y, IS_SET(MODE_ALTSCREEN));
 }
 
 int
@@ -1224,14 +1179,14 @@ getsel(void)
 	if (sel.ob.x == -1)
 		return NULL;
 
-	plan = st_getselexecplan(sel.type, sel.nb.x, sel.nb.y, sel.ne.x,
-		sel.ne.y, sel.nb.y, term.col, (const ZigGlyph *)TLINE(sel.nb.y), UTF_SIZ);
+	plan = st_getselexecplan(selectionsnapshot(), sel.nb.y, term.col,
+		(const ZigGlyph *)TLINE(sel.nb.y), UTF_SIZ);
 	ptr = str = xmalloc(plan.bufsize);
 
 	/* append every set & selected glyph to the selection */
 	for (y = sel.nb.y; y <= sel.ne.y; y++) {
-		plan = st_getselexecplan(sel.type, sel.nb.x, sel.nb.y, sel.ne.x,
-			sel.ne.y, y, term.col, (const ZigGlyph *)TLINE(y), UTF_SIZ);
+		plan = st_getselexecplan(selectionsnapshot(), y, term.col,
+			(const ZigGlyph *)TLINE(y), UTF_SIZ);
 		if (plan.empty) {
 			*ptr++ = '\n';
 			continue;
@@ -1768,37 +1723,12 @@ void
 selscroll(int orig, int n)
 {
 	ZigSelectionStateResult result;
-	ZigSelectionSnapshot snapshot;
 
-	snapshot = (ZigSelectionSnapshot){
-		.mode = sel.mode,
-		.selection_type = sel.type,
-		.alt = sel.alt,
-		.snap = sel.snap,
-		.ob_x = sel.ob.x,
-		.ob_y = sel.ob.y,
-		.oe_x = sel.oe.x,
-		.oe_y = sel.oe.y,
-		.nb_x = sel.nb.x,
-		.nb_y = sel.nb.y,
-		.ne_x = sel.ne.x,
-		.ne_y = sel.ne.y,
-	};
-	result = st_selscrollupdate(snapshot, orig, term.top, term.bot, n);
+	result = st_selscrollupdate(selectionsnapshot(), orig, term.top, term.bot, n);
 	if (result.effect.clear) {
 		selclear();
 	} else {
-		sel.mode = result.update.mode;
-		sel.type = result.update.selection_type;
-		sel.alt = result.update.alt;
-		sel.snap = result.update.snap;
-		selsetends(result.update.ob_x, result.update.ob_y, result.update.oe_x, result.update.oe_y);
-		selsetbounds((ZigSelBounds){
-			.nb_x = result.update.nb_x,
-			.nb_y = result.update.nb_y,
-			.ne_x = result.update.ne_x,
-			.ne_y = result.update.ne_y,
-		});
+		selectionapplystate(result.update);
 	}
 }
 

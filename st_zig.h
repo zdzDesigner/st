@@ -341,13 +341,6 @@ typedef struct {
 } ZigGlyph;
 
 typedef struct {
-	int nb_x;
-	int nb_y;
-	int ne_x;
-	int ne_y;
-} ZigSelBounds;
-
-typedef struct {
 	int write;
 	int last;
 } ZigDumpLinePlan;
@@ -855,7 +848,7 @@ int st_selsnaplinex(int, int);
 ZigSelSnapLineStep st_selsnaplinestep(int, int, int, int);
 ZigSelSnapWordIterRequest st_selsnapworditerrequest(int, int, int, int, int, int, uint32_t);
 ZigSelSnapWordStep st_selsnapworditerresolve(ZigSelSnapWordIterRequest, int, uint32_t, ZigSelSnapWordReaderSnapshot);
-int st_selected(int, int, int, int, int, int, int, int, int, int, int);
+int st_selected(ZigSelectionSnapshot, int, int, int);
 int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
 ZigSearchLinePlan st_searchlineplan(const ZigGlyph *, int, int, const uint32_t *, int, int, int, int, int);
@@ -870,7 +863,7 @@ ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
 ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
 ZigSearchInputResult st_searchinputupdate(ZigSearchSnapshot, size_t);
 ZigSearchSetResult st_searchsetupdate(ZigSearchSnapshot, size_t, int);
-ZigGetSelExecPlan st_getselexecplan(int, int, int, int, int, int, int, const ZigGlyph *, int);
+ZigGetSelExecPlan st_getselexecplan(ZigSelectionSnapshot, int, int, const ZigGlyph *, int);
 size_t st_ttywritechunk(const unsigned char *, size_t);
 
 #endif

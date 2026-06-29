@@ -39,9 +39,9 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_control_esc.zig` 通过 `EscSequence`、`ControlSequence` 承载 ESC/control 字节到纯 plan 的决策逻辑。
 - `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`InputControlPlan`、`InputEscPlan`、`InputEscFlowPlan` 承载字符写入、STR 收集和 input 主线计划，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
-- `st_selection.zig` 承载 selection snap、normalize、extend、scroll、getsel 输出范围等纯逻辑，并持有 selection adapter implementation。
+- `st_selection.zig` 通过 `SelectionModel` 承载 selection start、extend、normalize、scroll、selected 和 getsel 输出范围写模型，并持有 selection adapter implementation 与 `export fn st_sel*` / `st_selected` / `st_getselexecplan`。
 - `st_search.zig` 通过 `SearchModel` 承载 search 写模型入口，并保留输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
-- `st_line.zig` 作为 line/history 相关 C ABI adapter，并保留 selection 的过渡导出 shim；search adapter implementation、`export fn st_search*` 和 C 标量到 `SearchModel` 的转换已下沉到 `st_search.zig`，selection adapter implementation 已下沉到 `st_selection.zig`，`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
+- `st_line.zig` 作为 line/history/external pipe 相关 C ABI adapter；search adapter implementation、`export fn st_search*` 和 C 标量到 `SearchModel` 的转换已下沉到 `st_search.zig`，selection adapter implementation 与 `export fn st_sel*` 已下沉到 `st_selection.zig`，`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
 
 ## 当前状态
 
@@ -54,7 +54,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
 - Search 扫描已完成聚合：`searchscanline` 改用 `st_searchlineplan`，扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
-- Selection 输出已完成首批聚合：`getsel` 改用 `st_getselexecplan`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 已从 `st_line.zig` 下沉到 `st_selection.zig`。
+- Selection 输出已完成首批聚合：`getsel` 改用 snapshot 形态的 `st_getselexecplan`，`selected` 改用 snapshot 形态的 `st_selected`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 与 export 已从 `st_line.zig` 下沉到 `st_selection.zig`。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 - 已删除一批 deletion test 通过的 pass-through ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`。
 
@@ -65,7 +65,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 第一阶段已让 Zig 接管 `search` 的读模型：C 组装 `SearchSnapshot`，Zig 返回更大粒度的 `SearchStateUpdate` / `SearchEffectPlan`。
 - 第二阶段已开始通过 `SearchModel` 收口 `search` 写模型 interface：`prompt/input/cursor/state/scan/set` 的 adapter implementation 与 `export fn st_search*` 已统一下沉到 `st_search.zig`；C 侧 `searchsnapshot()` / `searchapplyupdate()` 的标量字段映射也已集中到 `SearchScalarState` seam，并开始被 `searchnext/searchprev/searchjump/searchscan/searchmatch` 等调用点消费。`input` mutation transaction 和 `query` alloc/apply phase 也都已拆出独立 seam。当前结论是：`query` ownership 与 `input` ownership 都暂不迁到 Zig，因为 decode、指针替换、`xrealloc/memmove/memcpy`、scan/jump/redraw 等关键 effect 仍主要发生在 C shim，迁移 ownership 的新增协议成本高于当前收益。
 - `search` 稳定后，再复制同一策略到 `sel`，最后再推进到 `term` 主状态。
-- `sel` 当前已进入统一快照阶段：`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口；`selsnap()` 的 `SNAP_WORD` 也已切到 Zig 主导 loop，C 侧开始消费 `SelectionSnapshot -> SelectionStateResult` 与 `SnapWordIterator` request/resolve seam。
+- `sel` 当前已进入统一快照阶段：`SelectionModel` 已收口 start/extend/normalize/scroll/selected/getsel 状态决策，`st_selstartupdate`、`st_selextendupdate`、`st_selscrollupdate` 已替代旧 plan 入口；C 侧的 `selectionsnapshot()` / `selectionapplystate()` 已集中承载 Selection 状态读写映射，调用点不再重复展开 `sel` 字段；当前不迁 `sel` ownership，因为 `selsnap()` 仍依赖 C 侧 `TLINE(...)` / delimiter 读取，`getsel()` 仍由 C 执行 malloc、UTF-8 编码和 clipboard 输出。
 - `selsnap()` 的 word loop 已从 `ZigSelSnapWordLoopSnapshot` 单步接口迁到 `SnapWordIterator` 两阶段接口：`st_selsnapworditerrequest` 负责返回下一读点，C 读取 glyph/line/wrap 事实后再经 `st_selsnapworditerresolve` 让 Zig 返回 accept/stop。旧 `st_selsnapwordplan`、`st_selsnapwordloopstep` ABI 已删除。
 
 ### 第一版结构
