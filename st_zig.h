@@ -240,6 +240,13 @@ typedef struct {
 	int pointer_motion;
 	int clear_mouse_mode;
 	int mouse_mode;
+	int cursor_state_action;
+	int cursor_state_set;
+	int move_origin_home;
+	int term_mode_action;
+	int term_mode_set;
+	int xsetmode_action;
+	int xsetmode_set;
 } ZigModePlan;
 
 typedef struct {
@@ -807,6 +814,25 @@ enum {
 	ST_ZIG_MOUSE_MOTION = 3,
 	ST_ZIG_MOUSE_MANY = 4,
 	ST_ZIG_MOUSE_SGR = 5,
+};
+
+enum {
+	ST_ZIG_CURSOR_STATE_NONE = 0,
+	ST_ZIG_CURSOR_STATE_ORIGIN = 1,
+};
+
+enum {
+	ST_ZIG_TERM_MODE_NONE = 0,
+	ST_ZIG_TERM_MODE_WRAP = 1,
+	ST_ZIG_TERM_MODE_INSERT = 2,
+	ST_ZIG_TERM_MODE_ECHO = 3,
+	ST_ZIG_TERM_MODE_CRLF = 4,
+};
+
+enum {
+	ST_ZIG_XSETMODE_NONE = 0,
+	ST_ZIG_XSETMODE_HIDE = 1,
+	ST_ZIG_XSETMODE_KBDLOCK = 2,
 };
 
 enum {

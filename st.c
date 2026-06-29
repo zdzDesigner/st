@@ -2065,14 +2065,18 @@ tsetmode(int priv, int set, int *args, int narg)
 			xsetmode(set, MODE_REVERSE);
 			break;
 		case ST_ZIG_MODE_ORIGIN:
-			MODBIT(term.c.state, set, CURSOR_ORIGIN);
-			tmoveato(0, 0);
+			if (plan.cursor_state_action == ST_ZIG_CURSOR_STATE_ORIGIN)
+				MODBIT(term.c.state, plan.cursor_state_set, CURSOR_ORIGIN);
+			if (plan.move_origin_home)
+				tmoveato(0, 0);
 			break;
 		case ST_ZIG_MODE_WRAP:
-			MODBIT(term.mode, set, MODE_WRAP);
+			if (plan.term_mode_action == ST_ZIG_TERM_MODE_WRAP)
+				MODBIT(term.mode, plan.term_mode_set, MODE_WRAP);
 			break;
 		case ST_ZIG_MODE_CURSOR_VISIBILITY:
-			xsetmode(!set, MODE_HIDE);
+			if (plan.xsetmode_action == ST_ZIG_XSETMODE_HIDE)
+				xsetmode(plan.xsetmode_set, MODE_HIDE);
 			break;
 		case ST_ZIG_MODE_MOUSE_X10:
 		case ST_ZIG_MODE_MOUSE_BTN:
@@ -2135,16 +2139,20 @@ tsetmode(int priv, int set, int *args, int narg)
 			xsetmode(set, MODE_BRCKTPASTE);
 			break;
 		case ST_ZIG_MODE_KBDLOCK:
-			xsetmode(set, MODE_KBDLOCK);
+			if (plan.xsetmode_action == ST_ZIG_XSETMODE_KBDLOCK)
+				xsetmode(plan.xsetmode_set, MODE_KBDLOCK);
 			break;
 		case ST_ZIG_MODE_INSERT:
-			MODBIT(term.mode, set, MODE_INSERT);
+			if (plan.term_mode_action == ST_ZIG_TERM_MODE_INSERT)
+				MODBIT(term.mode, plan.term_mode_set, MODE_INSERT);
 			break;
 		case ST_ZIG_MODE_ECHO:
-			MODBIT(term.mode, !set, MODE_ECHO);
+			if (plan.term_mode_action == ST_ZIG_TERM_MODE_ECHO)
+				MODBIT(term.mode, plan.term_mode_set, MODE_ECHO);
 			break;
 		case ST_ZIG_MODE_CRLF:
-			MODBIT(term.mode, set, MODE_CRLF);
+			if (plan.term_mode_action == ST_ZIG_TERM_MODE_CRLF)
+				MODBIT(term.mode, plan.term_mode_set, MODE_CRLF);
 			break;
 		case ST_ZIG_MODE_PRIVATE_UNKNOWN:
 			fprintf(stderr,

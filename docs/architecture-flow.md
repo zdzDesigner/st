@@ -101,7 +101,7 @@ flowchart TD
 
 当前状态：`csihandle()` 已收敛为单一 `st_csiexecplan()` 顶层 command plan；C 侧只按 command kind 执行 `tapply*`、`tsetmode`、`tsetattr` 和 `xsetcursor` 等副作用。旧 `st_plancursor`、`st_planedit`、`st_planerase`、`st_planlight`、`st_planstate`、`st_planmisc` ABI 已删除。Input 主线已删除旧 `st_tcontrolexec`、`st_tescexec`、`st_tescflow`、`st_tescflowafter`、`st_tcontrolafter`、`st_tcontrolfinish` 碎片 ABI，改由 `InputControlPlan`、`InputEscPlan`、`InputEscFlowPlan` 返回状态写回计划。
 
-Mode action 补充状态：`1049/47/1047/1048` alternate screen / cursor save-load 路径已从 C fallthrough 收口为 `ZigModePlan` action fields；mouse mode 路径也已由 Zig 决定 `pointer_motion`、`clear_mouse_mode` 和 `mouse_mode`。C 保留 `allowaltscreen` gate，并执行 `tcursor`、`tclearregion`、`tswapscreen`、`xsetpointermotion`、`xsetmode` 副作用。
+Mode action 补充状态：`1049/47/1047/1048` alternate screen / cursor save-load 路径已从 C fallthrough 收口为 `ZigModePlan` action fields；mouse mode 路径也已由 Zig 决定 `pointer_motion`、`clear_mouse_mode` 和 `mouse_mode`；origin/visibility/simple bit actions 也已改为 Zig 返回最终 action fields。C 保留 `allowaltscreen` gate，并执行 `tcursor`、`tclearregion`、`tswapscreen`、`xsetpointermotion`、`xsetmode`、`tmoveato` 与 bit write 副作用；unknown diagnostics 仍留在 C。
 
 ## Search 子系统流程
 

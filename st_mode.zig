@@ -15,6 +15,13 @@ pub const ZigModePlan = extern struct {
     pointer_motion: c_int,
     clear_mouse_mode: c_int,
     mouse_mode: c_int,
+    cursor_state_action: c_int,
+    cursor_state_set: c_int,
+    move_origin_home: c_int,
+    term_mode_action: c_int,
+    term_mode_set: c_int,
+    xsetmode_action: c_int,
+    xsetmode_set: c_int,
 };
 
 pub const mode_ignore = 0;
@@ -47,6 +54,19 @@ pub const mouse_button = 2;
 pub const mouse_motion = 3;
 pub const mouse_many = 4;
 pub const mouse_sgr = 5;
+
+pub const cursor_state_none = 0;
+pub const cursor_state_origin = 1;
+
+pub const term_mode_none = 0;
+pub const term_mode_wrap = 1;
+pub const term_mode_insert = 2;
+pub const term_mode_echo = 3;
+pub const term_mode_crlf = 4;
+
+pub const xsetmode_none = 0;
+pub const xsetmode_hide = 1;
+pub const xsetmode_kbdlock = 2;
 
 const term_mode_utf8 = 1 << 6;
 const charset_graphic0 = 0;
@@ -147,6 +167,35 @@ fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool) ZigModePlan {
         .pointer_motion = pointerMotion(arg, set),
         .clear_mouse_mode = clearMouseMode(arg),
         .mouse_mode = mouseMode(arg),
+        .cursor_state_action = cursorStateAction(arg),
+        .cursor_state_set = if (set) 1 else 0,
+        .move_origin_home = if (arg == 6) 1 else 0,
+        .term_mode_action = termModeAction(arg),
+        .term_mode_set = if (arg == 12) (if (!set) 1 else 0) else (if (set) 1 else 0),
+        .xsetmode_action = xsetmodeAction(arg),
+        .xsetmode_set = if (arg == 25) (if (!set) 1 else 0) else (if (set) 1 else 0),
+    };
+}
+
+fn cursorStateAction(arg: c_int) c_int {
+    return if (arg == 6) cursor_state_origin else cursor_state_none;
+}
+
+fn termModeAction(arg: c_int) c_int {
+    return switch (arg) {
+        7 => term_mode_wrap,
+        4 => term_mode_insert,
+        12 => term_mode_echo,
+        20 => term_mode_crlf,
+        else => term_mode_none,
+    };
+}
+
+fn xsetmodeAction(arg: c_int) c_int {
+    return switch (arg) {
+        25 => xsetmode_hide,
+        2 => xsetmode_kbdlock,
+        else => xsetmode_none,
     };
 }
 
@@ -259,6 +308,32 @@ test "mode mouse sgr does not clear base mouse mode" {
     try std.testing.expectEqual(@as(c_int, -1), plan.pointer_motion);
     try std.testing.expectEqual(@as(c_int, 0), plan.clear_mouse_mode);
     try std.testing.expectEqual(@as(c_int, mouse_sgr), plan.mouse_mode);
+}
+
+test "mode origin action plans cursor state and home move" {
+    const plan = st_modeplan(1, 6, 1, 0);
+    try std.testing.expectEqual(@as(c_int, mode_origin), plan.kind);
+    try std.testing.expectEqual(@as(c_int, cursor_state_origin), plan.cursor_state_action);
+    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_state_set);
+    try std.testing.expectEqual(@as(c_int, 1), plan.move_origin_home);
+}
+
+test "mode visibility and simple bit actions return final write values" {
+    const visibility = st_modeplan(1, 25, 1, 0);
+    const wrap = st_modeplan(1, 7, 1, 0);
+    const insert = st_modeplan(0, 4, 1, 0);
+    const echo = st_modeplan(0, 12, 1, 0);
+    const crlf = st_modeplan(0, 20, 1, 0);
+    const kbdlock = st_modeplan(0, 2, 1, 0);
+    try std.testing.expectEqual(@as(c_int, xsetmode_hide), visibility.xsetmode_action);
+    try std.testing.expectEqual(@as(c_int, 0), visibility.xsetmode_set);
+    try std.testing.expectEqual(@as(c_int, term_mode_wrap), wrap.term_mode_action);
+    try std.testing.expectEqual(@as(c_int, 1), wrap.term_mode_set);
+    try std.testing.expectEqual(@as(c_int, term_mode_insert), insert.term_mode_action);
+    try std.testing.expectEqual(@as(c_int, term_mode_echo), echo.term_mode_action);
+    try std.testing.expectEqual(@as(c_int, 0), echo.term_mode_set);
+    try std.testing.expectEqual(@as(c_int, term_mode_crlf), crlf.term_mode_action);
+    try std.testing.expectEqual(@as(c_int, xsetmode_kbdlock), kbdlock.xsetmode_action);
 }
 
 test "private unknown reports private unknown" {
