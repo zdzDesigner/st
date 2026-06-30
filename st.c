@@ -195,16 +195,21 @@ typedef struct {
 } SearchScalarState;
 
 typedef struct {
-	int active;
-	size_t len;
-	size_t cursor;
-	size_t cap;
-} SearchInputState;
-
-typedef struct {
 	int count;
 	int cap;
 } SearchMatchesState;
+
+typedef struct {
+	ZigSearchInputState input;
+	int realloc_input;
+	int clear;
+	size_t insert_at;
+	size_t move_dst;
+	size_t move_src;
+	size_t move_len;
+	const char *insert_text;
+	size_t insert_len;
+} SearchInputMutation;
 
 static void execsh(char *, char **);
 static void stty(char **);
@@ -214,14 +219,16 @@ static SearchScalarState searchscalarstate(void);
 static void searchwritescalarstate(SearchScalarState);
 static ZigSearchSnapshot zigsearchsnapshot(SearchScalarState);
 static SearchScalarState searchscalarfromupdate(ZigSearchStateUpdate);
-static SearchInputState searchinputstate(void);
-static void searchwriteinputstate(SearchInputState);
+static ZigSearchInputState searchinputstate(void);
+static void searchwriteinputstate(ZigSearchInputState);
 static void searchapplyqueryreplace(Rune *, ZigSearchSetResult);
 static SearchMatchesState searchmatchesstate(void);
 static void searchwritematchesstate(SearchMatchesState);
 static void searchapplyinputinsert(ZigSearchInputResult, const char *, size_t);
 static void searchapplyinputdelete(size_t, size_t);
+static void searchapplycursordelete(ZigSearchCursorResult);
 static void searchapplyinputclear(ZigSearchStateResult);
+static void searchapplyinputmutation(SearchInputMutation);
 static Rune *searchallocquerybuffer(size_t);
 static void searchapplydecodedquery(size_t, int, Rune *);
 
@@ -615,7 +622,7 @@ searchprev(const Arg *arg)
 void
 searchprompt(const Arg *arg)
 {
-	SearchInputState input;
+	ZigSearchInputState input;
 	ZigSearchPromptResult result;
 
 	(void)arg;
@@ -750,10 +757,10 @@ searchscalarfromupdate(ZigSearchStateUpdate update)
 	};
 }
 
-static SearchInputState
+static ZigSearchInputState
 searchinputstate(void)
 {
-	return (SearchInputState){
+	return (ZigSearchInputState){
 		.active = search.inputmode,
 		.len = search.inputlen,
 		.cursor = search.inputcursor,
@@ -762,7 +769,7 @@ searchinputstate(void)
 }
 
 static void
-searchwriteinputstate(SearchInputState state)
+searchwriteinputstate(ZigSearchInputState state)
 {
 	search.inputmode = state.active;
 	search.inputlen = state.len;
@@ -878,51 +885,98 @@ searchapplydecodedquery(size_t query_len, int qlen, Rune *runes)
 static void
 searchapplyinputinsert(ZigSearchInputResult result, const char *text, size_t len)
 {
-	SearchInputState input;
+	SearchInputMutation mutation;
 
 	searchapplyupdate(result.update);
-	input = searchinputstate();
-	if (result.effect.realloc_input) {
-		search.input = xrealloc(search.input, input.cap);
-	}
-	memmove(search.input + result.move_dst,
-		search.input + result.move_src,
-		result.move_len);
-	memcpy(search.input + result.insert_at, text, len);
-	search.input[input.len] = '\0';
+	mutation = (SearchInputMutation){
+		.input = st_searchinputstate(result.update),
+		.realloc_input = result.effect.realloc_input,
+		.move_dst = result.move_dst,
+		.move_src = result.move_src,
+		.move_len = result.move_len,
+		.insert_at = result.insert_at,
+		.insert_text = text,
+		.insert_len = len,
+	};
+	searchapplyinputmutation(mutation);
 	searchset(search.input);
 }
 
 static void
 searchapplyinputdelete(size_t start, size_t end)
 {
-	SearchInputState input;
+	ZigSearchInputState input;
 	ZigSearchDeletePlan plan;
+	SearchInputMutation mutation;
 
 	input = searchinputstate();
 	plan = st_searchdeleteplan(start, end, input.len);
 	if (!plan.run)
 		return;
-	memmove(search.input + start, search.input + end, input.len - end + 1);
-	input.len = plan.new_len;
-	searchwriteinputstate(input);
+	mutation = (SearchInputMutation){
+		.input = plan.input,
+		.move_dst = start,
+		.move_src = end,
+		.move_len = input.len - end + 1,
+	};
+	searchapplyinputmutation(mutation);
+}
+
+static void
+searchapplycursordelete(ZigSearchCursorResult result)
+{
+	ZigSearchInputState input;
+	SearchInputMutation mutation;
+
+	if (result.delete_start == result.delete_end)
+		return;
+	input = searchinputstate();
+	mutation = (SearchInputMutation){
+		.input = result.input,
+		.move_dst = result.delete_start,
+		.move_src = result.delete_end,
+		.move_len = input.len - result.delete_end + 1,
+	};
+	searchapplyinputmutation(mutation);
 }
 
 static void
 searchapplyinputclear(ZigSearchStateResult result)
 {
-	SearchInputState input;
+	SearchInputMutation mutation;
 
 	searchapplyupdate(result.update);
 	searchapplyresourceeffect(result.effect);
-	input = searchinputstate();
-	if (search.input && input.len == 0)
-		search.input[0] = '\0';
-	if (result.effect.clear_query && input.cap == 0) {
+	mutation = (SearchInputMutation){
+		.input = result.input,
+		.clear = 1,
+	};
+	searchapplyinputmutation(mutation);
+	if (result.effect.clear_query && result.input.cap == 0) {
 		free(search.input);
 		search.input = NULL;
 	}
 	searchapplyfloweffect(result.effect);
+}
+
+static void
+searchapplyinputmutation(SearchInputMutation mutation)
+{
+	if (mutation.realloc_input)
+		search.input = xrealloc(search.input, mutation.input.cap);
+	if (mutation.move_len > 0)
+		memmove(search.input + mutation.move_dst,
+			search.input + mutation.move_src,
+			mutation.move_len);
+	if (mutation.insert_len > 0)
+		memcpy(search.input + mutation.insert_at,
+			mutation.insert_text,
+			mutation.insert_len);
+	if (mutation.clear && search.input && mutation.input.len == 0)
+		search.input[0] = '\0';
+	if (mutation.insert_len > 0)
+		search.input[mutation.input.len] = '\0';
+	searchwriteinputstate(mutation.input);
 }
 
 static void
@@ -942,8 +996,7 @@ searchapplycursor(int action)
 
 	result = st_searchcursorupdate(searchsnapshot(),
 		(const unsigned char *)searchinputtext(), action);
-	if (result.delete_start != result.delete_end)
-		searchapplyinputdelete(result.delete_start, result.delete_end);
+	searchapplycursordelete(result);
 	searchapplyupdate(result.update);
 	searchapplyfloweffect(result.effect);
 }
@@ -951,7 +1004,7 @@ searchapplycursor(int action)
 size_t
 searchprevchar(size_t cursor)
 {
-	SearchInputState input;
+	ZigSearchInputState input;
 	size_t next;
 
 	input = searchinputstate();
@@ -968,7 +1021,7 @@ searchprevchar(size_t cursor)
 size_t
 searchnextchar(size_t cursor)
 {
-	SearchInputState input;
+	ZigSearchInputState input;
 	size_t next;
 
 	input = searchinputstate();

@@ -508,8 +508,15 @@ typedef struct {
 } ZigSearchStepPlan;
 
 typedef struct {
+	int active;
+	size_t len;
+	size_t cursor;
+	size_t cap;
+} ZigSearchInputState;
+
+typedef struct {
 	int run;
-	size_t new_len;
+	ZigSearchInputState input;
 } ZigSearchDeletePlan;
 
 typedef struct {
@@ -641,6 +648,7 @@ typedef struct {
 typedef struct {
 	ZigSearchStateUpdate update;
 	ZigSearchEffectPlan effect;
+	ZigSearchInputState input;
 	size_t delete_start;
 	size_t delete_end;
 } ZigSearchCursorResult;
@@ -648,6 +656,7 @@ typedef struct {
 typedef struct {
 	ZigSearchStateUpdate update;
 	ZigSearchEffectPlan effect;
+	ZigSearchInputState input;
 } ZigSearchStateResult;
 
 typedef struct {
@@ -914,6 +923,7 @@ ZigSearchCursorResult st_searchcursorupdate(ZigSearchSnapshot, const unsigned ch
 ZigSearchStateResult st_searchstateupdate(ZigSearchSnapshot, int);
 ZigSearchScanResult st_searchscanupdate(ZigSearchSnapshot, int, int);
 ZigSearchDeletePlan st_searchdeleteplan(size_t, size_t, size_t);
+ZigSearchInputState st_searchinputstate(ZigSearchStateUpdate);
 ZigExternalPipePlan st_externalpipeplan(const ZigGlyph *, int);
 ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
 ZigSearchInputResult st_searchinputupdate(ZigSearchSnapshot, size_t);

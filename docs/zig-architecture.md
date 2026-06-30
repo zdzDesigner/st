@@ -61,6 +61,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_line.zig` 剩余 exports 已完成 deletion test：line length、tab、attr scan、dump、dirty range 和 external pipe 都仍承载 line 领域规则；当前不再继续机械拆分 line adapter。
 - 已删除一批 deletion test 通过的 pass-through/obsolete ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_tmoveato_y`、`st_tlineinregion`、`st_tdefutf8`、`st_tdeftran`、`st_ttywritechunk`、`st_drawframeplan`。
 - 低风险 shim-thinning 批次已关闭：Search、Selection、Draw、Resize、CSI、Input、Mode、Scroll/Edit、ExternalPipe 和 ABI/Test cleanup 都已到当前收益边界。后续如果继续推进，必须作为明确的 state ownership project，而不是继续机械合并 helper 或扫描浅 export。
+- 主线 ownership 复查已关闭：Search buffer、term dirty、selection、term cursor/viewport、input mainline 和 ABI/Test sweep 当前都没有安全的小代码切片。后续只能在选定单一 owner 边界后重开，不再重复做宽泛扫描。
 
 ## 第一批迁移入口
 
@@ -100,8 +101,8 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - 约束：当前只拆事务，不迁 `search.query` ownership；`Rune *query` 指针和 free 生命周期仍留在 C
 
 - `SearchInputSeams`
-- 组成：`SearchInputState`、`searchapplyinputinsert()`、`searchapplyinputdelete()`、`searchapplyinputclear()`
-- 作用：把 input 的 grow/insert/delete/clear 事务和 `searchset()` 触发条件收口到可验证的 transaction seam
+- 组成：`ZigSearchInputState`、`st_searchinputstate()`、`st_searchdeleteplan()`、`searchapplyinputmutation()`、`searchapplyinputinsert()`、`searchapplyinputdelete()`、`searchapplyinputclear()`
+- 作用：把 input scalar state、grow/insert/delete/clear 事务和 `searchset()` 触发条件收口到可验证的 transaction seam；delete 事务已由 Zig 返回删除后的 input scalar state，C 通过统一 mutation executor 执行 `xrealloc`、`memmove`、`memcpy`、清空和写回
 - 约束：当前只拆事务，不迁 `search.input` ownership；`char *input` 指针和 `xmalloc/xrealloc/free` 生命周期仍留在 C
 
 - `SearchScanIteratorSeam`
@@ -114,7 +115,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `searchprompt()`：已切到 `SearchSnapshot -> PromptUpdate + alloc_input effect`，C 只执行输入 buffer 分配和 redraw effect。
 - `searchinput()`：已切到 `SearchSnapshot + input bytes -> SearchStateUpdate + realloc_input effect`，C 只执行 realloc/memmove/memcpy 后触发 `searchset()`。
 - `searchset()`：已切到 `SearchSnapshot + decoded query -> SearchStateUpdate + alloc_query/jump/redraw effect`，C 只执行 UTF-8 decode、query 指针替换、scan/jump/redraw。
-- `searchapplycursor()` / `searchapplystate()`：已收口到 `SearchCursorResult` / `SearchStateResult`，C 侧先构造 `SearchSnapshot`，再消费 update/effect，只执行 delete/free/redraw 等副作用。
+- `searchapplycursor()` / `searchapplystate()`：已收口到 `SearchCursorResult` / `SearchStateResult`，C 侧先构造 `SearchSnapshot`，再消费 update/effect；cursor delete 事务已由 `ZigSearchCursorResult` 返回 delete range 与 post-delete `ZigSearchInputState`，clear/commit/cancel 也由 `ZigSearchStateResult` 返回 post-action `ZigSearchInputState`，C 只执行 `memmove()`、free/redraw 等副作用。
 
 ## 完成定义
 

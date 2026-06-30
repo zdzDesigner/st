@@ -221,7 +221,7 @@ flowchart LR
     F --> G[再评估 PTY/X11/clipboard 所有权]
 ```
 
-- **Search 第一优先级**：主流程纯逻辑已稳定，且小 ABI 已大幅收薄；`SearchSnapshot`、`SearchStateUpdate` 和 `SearchEffectPlan` 已让 Zig 接管主要 search 状态决策，C 侧通过集中 helper 执行 resource/view/flow effect、query replace transaction 和 scan match reset。下一步若继续推进，应进入明确的 search buffer ownership 项目，而不是继续机械合并 helper。
+- **Search 第一优先级**：主流程纯逻辑已稳定，且小 ABI 已大幅收薄；`SearchSnapshot`、`SearchStateUpdate`、`ZigSearchInputState` 和 `SearchEffectPlan` 已让 Zig 接管主要 search 状态决策，C 侧通过集中 helper 执行 resource/view/flow effect、query replace transaction、input buffer mutation 和 scan match reset。下一步若继续推进，应优先让 input delete/clear 也消费更完整的 Zig input transaction，再评估 buffer ownership。
 - **Selection 定版**：主流程完成，`selected/getsel` 已改为 snapshot interface，line snap step 和 word snap loop step 已 plan 化，selection adapter implementation 与 export 已下沉到 `st_selection.zig`；C 侧 result executor 统一执行 selection state/dirty/clear effect，仍只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
 - **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
 - **Draw 收口**：draw frame gate、cursor 调整和首个 dirty region 查询已收敛为 `ZigDrawExecPlan`；C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链，旧 `st_drawframeplan` ABI 已删除。
@@ -229,4 +229,5 @@ flowchart LR
 - **ExternalPipe 聚合**：行长度、write/skip、lastpos 和 wrap newline 已合并为 `st_externalpipeplan`；C 继续负责 `tlinehist`、`utf8encode` 和 `xwrite`。`tlinehist` 的 history plan export 已下沉到 `st_search.zig`。
 - **ABI 瘦身**：`st_zig.h` 仍只保留 C shim 实际调用入口；已清理多轮旧 `st_plan*`、search/mode/strhandle 小 helper，以及 `st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_drawframeplan` 等 pass-through/obsolete exports。后续新增边界优先是 snapshot/update/effect 结构，而不是新的零碎 `st_*` 导出。
 - **批次边界**：低风险 shim-thinning 已完成批量收口；Batch 2-6 均关闭或延期到 deliberate state ownership project。下一步不再规划新的浅 candidate，而应选择一个状态族进入 ownership design。
+- **主线边界**：Search ownership pilot、Term dirty ownership、Selection ownership review、Term cursor/viewport ownership、Input/mainline ownership 和 ABI/Test final sweep 已完成复查；当前没有安全的小切片。后续只能选择一个明确 owner 边界进入设计，不再重复做主线扫描。
 - **验证要求**：每批迁移后执行 `zig fmt`、`zig build abi-check`、`zig build test`、`zig build`；提交或发布前补 `timeout 5 ./zig-out/bin/st`。
