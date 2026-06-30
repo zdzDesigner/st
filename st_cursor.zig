@@ -1,6 +1,6 @@
 //! st_cursor.zig 负责光标移动 clamp、换行、绘制光标和保存恢复规划。
 //! [输入]: 目标坐标、光标状态、滚动区域、dirty/line 指针和保存恢复 mode。
-//! [输出]: `ZigCursorMove`、`ZigNewlinePlan`、term frame snapshot、draw frame/region plan 和 cursor store plan。
+//! [输出]: `ZigTermCursorPlan`、term frame snapshot 和 draw frame/region plan。
 //! [副作用边界]: 不调用 `tmoveto(...)` / `tmoveato(...)`，不修改 `term.c`；C 侧 executor 负责真实移动。
 //! [定位]: 支撑 C executor 的光标副作用边界；CSI 顶层分类已收敛到 `st_csi.zig`。
 
@@ -13,17 +13,25 @@ pub const ZigCursorPlan = extern struct {
     y: c_int,
 };
 
-pub const ZigCursorMove = extern struct {
+pub const ZigTermCursorSnapshot = extern struct {
+    state: c_int,
+    x: c_int,
+    y: c_int,
+    col: c_int,
+    row: c_int,
+    top: c_int,
+    bot: c_int,
+};
+
+pub const ZigTermCursorPlan = extern struct {
+    action: c_int,
     x: c_int,
     y: c_int,
     state: c_int,
-};
-
-pub const ZigNewlinePlan = extern struct {
     scroll: c_int,
+    scroll_down: c_int,
     scroll_top: c_int,
-    x: c_int,
-    y: c_int,
+    slot: c_int,
 };
 
 const ZigGlyph = extern struct {
@@ -38,13 +46,6 @@ pub const ZigDrawCursorPlan = extern struct {
     cy: c_int,
     ocx: c_int,
     ocy: c_int,
-};
-
-pub const ZigDrawRegionPlan = extern struct {
-    draw: c_int,
-    clear_dirty: c_int,
-    y: c_int,
-    next_y: c_int,
 };
 
 pub const ZigTermFrameSnapshot = extern struct {
@@ -77,13 +78,9 @@ pub const ZigDrawExecPlan = extern struct {
     cursor_active: c_int,
     imspot_active: c_int,
     region_draw: c_int,
+    region_clear_dirty: c_int,
     region_y: c_int,
     region_next_y: c_int,
-};
-
-pub const ZigCursorStorePlan = extern struct {
-    action: c_int,
-    slot: c_int,
 };
 
 pub const cursor_move_to = 0;
@@ -98,59 +95,80 @@ const cursor_store_none = 0;
 const cursor_store_save = 1;
 const cursor_store_load = 2;
 const attr_wdummy = model.attr_wdummy;
+const term_cursor_move_to: c_int = 0;
+const term_cursor_move_to_abs: c_int = 1;
+const term_cursor_newline: c_int = 2;
+const term_cursor_reverse_index: c_int = 3;
+const term_cursor_store: c_int = 4;
 
-const CursorMove = struct {
+const TermCursor = struct {
+    state: c_int,
     x: c_int,
     y: c_int,
-    state: c_int,
     col: c_int,
     row: c_int,
     top: c_int,
     bot: c_int,
 
-    fn clamp(self: CursorMove) ZigCursorMove {
+    fn fromSnapshot(snapshot: ZigTermCursorSnapshot) TermCursor {
+        return .{
+            .state = snapshot.state,
+            .x = snapshot.x,
+            .y = snapshot.y,
+            .col = snapshot.col,
+            .row = snapshot.row,
+            .top = snapshot.top,
+            .bot = snapshot.bot,
+        };
+    }
+
+    fn moveTo(self: TermCursor, action: c_int, x: c_int, y: c_int) ZigTermCursorPlan {
         const min_y: c_int = if ((self.state & cursor_origin) != 0) self.top else 0;
         const max_y: c_int = if ((self.state & cursor_origin) != 0) self.bot else self.row - 1;
 
         return .{
-            .x = limitInt(self.x, 0, self.col - 1),
-            .y = limitInt(self.y, min_y, max_y),
+            .action = action,
+            .x = limitInt(x, 0, self.col - 1),
+            .y = limitInt(y, min_y, max_y),
             .state = self.state & ~@as(c_int, cursor_wrapnext),
+            .scroll = 0,
+            .scroll_down = 0,
+            .scroll_top = 0,
+            .slot = 0,
         };
     }
-};
 
-const CursorLine = struct {
-    x: c_int,
-    y: c_int,
-    top: c_int,
-    bot: c_int,
+    fn moveToAbs(self: TermCursor, x: c_int, y: c_int) ZigTermCursorPlan {
+        const absolute_y = y + if ((self.state & cursor_origin) != 0) self.top else 0;
+        return self.moveTo(term_cursor_move_to_abs, x, absolute_y);
+    }
 
-    fn newline(self: CursorLine, first_col: bool) ZigNewlinePlan {
+    fn newline(self: TermCursor, first_col: bool) ZigTermCursorPlan {
+        const y = if (self.y == self.bot) self.y else self.y + 1;
         return .{
+            .action = term_cursor_newline,
+            .x = limitInt(if (first_col) 0 else self.x, 0, self.col - 1),
+            .y = limitInt(y, 0, self.row - 1),
+            .state = self.state & ~@as(c_int, cursor_wrapnext),
             .scroll = if (self.y == self.bot) 1 else 0,
+            .scroll_down = 0,
             .scroll_top = self.top,
-            .x = if (first_col) 0 else self.x,
-            .y = if (self.y == self.bot) self.y else self.y + 1,
+            .slot = 0,
         };
     }
 
-    fn reverseIndex(self: CursorLine) ZigNewlinePlan {
+    fn reverseIndex(self: TermCursor) ZigTermCursorPlan {
+        const y = if (self.y == self.top) self.y else self.y - 1;
         return .{
+            .action = term_cursor_reverse_index,
+            .x = limitInt(self.x, 0, self.col - 1),
+            .y = limitInt(y, 0, self.row - 1),
+            .state = self.state & ~@as(c_int, cursor_wrapnext),
             .scroll = if (self.y == self.top) 1 else 0,
+            .scroll_down = 1,
             .scroll_top = self.top,
-            .x = self.x,
-            .y = if (self.y == self.top) self.y else self.y - 1,
+            .slot = 0,
         };
-    }
-};
-
-const CursorOrigin = struct {
-    state: c_int,
-    top: c_int,
-
-    fn absoluteY(self: CursorOrigin, y: c_int) c_int {
-        return y + if ((self.state & cursor_origin) != 0) self.top else 0;
     }
 };
 
@@ -185,48 +203,45 @@ fn DrawCursor(comptime Glyph: type) type {
     };
 }
 
-const CursorStore = struct {
-    mode: c_int,
-    alt: bool,
-
-    fn plan(self: CursorStore) ZigCursorStorePlan {
-        return .{
-            .action = switch (self.mode) {
-                cursor_save => cursor_store_save,
-                cursor_load => cursor_store_load,
-                else => cursor_store_none,
-            },
-            .slot = if (self.alt) 1 else 0,
-        };
-    }
-};
-
 const DrawRegion = struct {
     dirty: []const c_int,
     start_y: c_int,
     end_y: c_int,
 
-    fn plan(self: DrawRegion) ZigDrawRegionPlan {
+    fn plan(self: DrawRegion) ZigDrawExecPlan {
         var y = self.start_y;
         while (y < self.end_y) : (y += 1) {
             if (self.dirty[@intCast(y)] != 0) {
-                return .{ .draw = 1, .clear_dirty = 1, .y = y, .next_y = y + 1 };
+                return .{ .search_scan = 0, .cx = 0, .cy = 0, .ocx = 0, .ocy = 0, .cursor_active = 0, .imspot_active = 0, .region_draw = 1, .region_clear_dirty = 1, .region_y = y, .region_next_y = y + 1 };
             }
         }
-        return .{ .draw = 0, .clear_dirty = 0, .y = self.end_y, .next_y = self.end_y };
+        return .{ .search_scan = 0, .cx = 0, .cy = 0, .ocx = 0, .ocy = 0, .cursor_active = 0, .imspot_active = 0, .region_draw = 0, .region_clear_dirty = 0, .region_y = self.end_y, .region_next_y = self.end_y };
     }
 };
 
-export fn st_tmoveto(x: c_int, y: c_int, state: c_int, col: c_int, row: c_int, top: c_int, bot: c_int) ZigCursorMove {
-    return (CursorMove{ .x = x, .y = y, .state = state, .col = col, .row = row, .top = top, .bot = bot }).clamp();
-}
-
-export fn st_tnewline(first_col: c_int, x: c_int, y: c_int, top: c_int, bot: c_int) ZigNewlinePlan {
-    return (CursorLine{ .x = x, .y = y, .top = top, .bot = bot }).newline(first_col != 0);
-}
-
-export fn st_treverseindex(x: c_int, y: c_int, top: c_int) ZigNewlinePlan {
-    return (CursorLine{ .x = x, .y = y, .top = top, .bot = top }).reverseIndex();
+export fn st_termcursorplan(action: c_int, snapshot: ZigTermCursorSnapshot, arg_x: c_int, arg_y: c_int) ZigTermCursorPlan {
+    const cursor = TermCursor.fromSnapshot(snapshot);
+    return switch (action) {
+        term_cursor_move_to => cursor.moveTo(term_cursor_move_to, arg_x, arg_y),
+        term_cursor_move_to_abs => cursor.moveToAbs(arg_x, arg_y),
+        term_cursor_newline => cursor.newline(arg_x != 0),
+        term_cursor_reverse_index => cursor.reverseIndex(),
+        term_cursor_store => .{
+            .action = switch (arg_x) {
+                cursor_save => cursor_store_save,
+                cursor_load => cursor_store_load,
+                else => cursor_store_none,
+            },
+            .x = snapshot.x,
+            .y = snapshot.y,
+            .state = snapshot.state,
+            .scroll = 0,
+            .scroll_down = 0,
+            .scroll_top = 0,
+            .slot = if (arg_y != 0) 1 else 0,
+        },
+        else => cursor.moveTo(term_cursor_move_to, snapshot.x, snapshot.y),
+    };
 }
 
 fn drawFramePlan(snapshot: ZigTermFrameSnapshot, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
@@ -253,18 +268,11 @@ export fn st_drawexecplan(snapshot: ZigTermFrameSnapshot, lines: [*]const [*]con
         .ocy = frame.ocy,
         .cursor_active = frame.cursor_active,
         .imspot_active = frame.imspot_active,
-        .region_draw = region.draw,
-        .region_y = region.y,
-        .region_next_y = region.next_y,
+        .region_draw = region.region_draw,
+        .region_clear_dirty = region.region_clear_dirty,
+        .region_y = region.region_y,
+        .region_next_y = region.region_next_y,
     };
-}
-
-export fn st_drawregionplan(dirty: [*]const c_int, y: c_int, y2: c_int) ZigDrawRegionPlan {
-    return (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y, .end_y = y2 }).plan();
-}
-
-export fn st_tcursorplan(mode: c_int, alt: c_int) ZigCursorStorePlan {
-    return (CursorStore{ .mode = mode, .alt = alt != 0 }).plan();
 }
 
 fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
@@ -273,32 +281,47 @@ fn limitInt(value: c_int, lower: c_int, upper: c_int) c_int {
     return value;
 }
 
-test "tmoveto clears wrapnext and clamps to full screen" {
-    const move = st_tmoveto(99, -3, cursor_wrapnext, 10, 6, 2, 4);
+test "termcursorplan move clears wrapnext and clamps to full screen" {
+    const snapshot = ZigTermCursorSnapshot{ .state = cursor_wrapnext, .x = 0, .y = 0, .col = 10, .row = 6, .top = 2, .bot = 4 };
+    const move = st_termcursorplan(term_cursor_move_to, snapshot, 99, -3);
 
+    try std.testing.expectEqual(@as(c_int, term_cursor_move_to), move.action);
     try std.testing.expectEqual(@as(c_int, 9), move.x);
     try std.testing.expectEqual(@as(c_int, 0), move.y);
     try std.testing.expectEqual(@as(c_int, 0), move.state);
+    try std.testing.expectEqual(@as(c_int, 0), move.scroll);
 }
 
-test "tmoveto origin mode clamps to scroll region" {
-    const move = st_tmoveto(4, 9, cursor_origin | cursor_wrapnext, 10, 6, 2, 4);
+test "termcursorplan move origin mode clamps to scroll region" {
+    const snapshot = ZigTermCursorSnapshot{ .state = cursor_origin | cursor_wrapnext, .x = 0, .y = 0, .col = 10, .row = 6, .top = 2, .bot = 4 };
+    const move = st_termcursorplan(term_cursor_move_to, snapshot, 4, 9);
 
     try std.testing.expectEqual(@as(c_int, 4), move.x);
     try std.testing.expectEqual(@as(c_int, 4), move.y);
     try std.testing.expectEqual(@as(c_int, cursor_origin), move.state);
 }
 
+test "termcursorplan absolute move offsets only in origin mode" {
+    const normal = ZigTermCursorSnapshot{ .state = 0, .x = 0, .y = 0, .col = 10, .row = 8, .top = 2, .bot = 6 };
+    const origin = ZigTermCursorSnapshot{ .state = cursor_origin, .x = 0, .y = 0, .col = 10, .row = 8, .top = 2, .bot = 6 };
+
+    try std.testing.expectEqual(@as(c_int, 4), st_termcursorplan(term_cursor_move_to_abs, normal, 4, 4).y);
+    try std.testing.expectEqual(@as(c_int, 6), st_termcursorplan(term_cursor_move_to_abs, origin, 4, 4).y);
+}
+
 test "tnewline advances within scroll region" {
-    const plan = st_tnewline(0, 5, 3, 1, 6);
+    const snapshot = ZigTermCursorSnapshot{ .state = cursor_wrapnext, .x = 5, .y = 3, .col = 10, .row = 8, .top = 1, .bot = 6 };
+    const plan = st_termcursorplan(term_cursor_newline, snapshot, 0, 0);
 
     try std.testing.expectEqual(@as(c_int, 0), plan.scroll);
     try std.testing.expectEqual(@as(c_int, 5), plan.x);
     try std.testing.expectEqual(@as(c_int, 4), plan.y);
+    try std.testing.expectEqual(@as(c_int, 0), plan.state);
 }
 
 test "tnewline scrolls at bottom and honors first column" {
-    const plan = st_tnewline(1, 5, 6, 1, 6);
+    const snapshot = ZigTermCursorSnapshot{ .state = 0, .x = 5, .y = 6, .col = 10, .row = 8, .top = 1, .bot = 6 };
+    const plan = st_termcursorplan(term_cursor_newline, snapshot, 1, 0);
 
     try std.testing.expectEqual(@as(c_int, 1), plan.scroll);
     try std.testing.expectEqual(@as(c_int, 1), plan.scroll_top);
@@ -307,10 +330,13 @@ test "tnewline scrolls at bottom and honors first column" {
 }
 
 test "treverseindex scrolls at top otherwise moves up" {
-    const scroll = st_treverseindex(5, 2, 2);
-    const move = st_treverseindex(5, 4, 2);
+    const top = ZigTermCursorSnapshot{ .state = 0, .x = 5, .y = 2, .col = 10, .row = 8, .top = 2, .bot = 6 };
+    const mid = ZigTermCursorSnapshot{ .state = 0, .x = 5, .y = 4, .col = 10, .row = 8, .top = 2, .bot = 6 };
+    const scroll = st_termcursorplan(term_cursor_reverse_index, top, 0, 0);
+    const move = st_termcursorplan(term_cursor_reverse_index, mid, 0, 0);
 
     try std.testing.expectEqual(@as(c_int, 1), scroll.scroll);
+    try std.testing.expectEqual(@as(c_int, 1), scroll.scroll_down);
     try std.testing.expectEqual(@as(c_int, 2), scroll.y);
     try std.testing.expectEqual(@as(c_int, 0), move.scroll);
     try std.testing.expectEqual(@as(c_int, 3), move.y);
@@ -340,16 +366,19 @@ test "draw cursor plan clamps old cursor and adjusts dummy cells" {
 
 test "draw region plan finds next dirty line" {
     const dirty = [_]c_int{ 0, 0, 3, 0 };
-    const found = st_drawregionplan(&dirty, 0, dirty.len);
-    const empty = st_drawregionplan(&dirty, 3, dirty.len);
+    const row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{ &row0, &row0, &row0, &row0 };
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 1, .cx = 0, .current_y = 0, .ocx = 0, .ocy = 0, .col = 1, .row = 4 };
+    const found = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+    const empty = st_drawexecplan(snapshot, &lines, &dirty, 3, dirty.len);
 
-    try std.testing.expectEqual(@as(c_int, 1), found.draw);
-    try std.testing.expectEqual(@as(c_int, 1), found.clear_dirty);
-    try std.testing.expectEqual(@as(c_int, 2), found.y);
-    try std.testing.expectEqual(@as(c_int, 3), found.next_y);
-    try std.testing.expectEqual(@as(c_int, 0), empty.draw);
-    try std.testing.expectEqual(@as(c_int, 0), empty.clear_dirty);
-    try std.testing.expectEqual(@as(c_int, 4), empty.next_y);
+    try std.testing.expectEqual(@as(c_int, 1), found.region_draw);
+    try std.testing.expectEqual(@as(c_int, 1), found.region_clear_dirty);
+    try std.testing.expectEqual(@as(c_int, 2), found.region_y);
+    try std.testing.expectEqual(@as(c_int, 3), found.region_next_y);
+    try std.testing.expectEqual(@as(c_int, 0), empty.region_draw);
+    try std.testing.expectEqual(@as(c_int, 0), empty.region_clear_dirty);
+    try std.testing.expectEqual(@as(c_int, 4), empty.region_next_y);
 }
 
 test "draw exec plan combines frame and first dirty region" {
@@ -380,8 +409,9 @@ test "draw plans gate search scan and cursor" {
 }
 
 test "tcursor plan maps mode and alt slot" {
-    const save = st_tcursorplan(cursor_save, 1);
-    const load = st_tcursorplan(cursor_load, 0);
+    const snapshot = ZigTermCursorSnapshot{ .state = 0, .x = 0, .y = 0, .col = 10, .row = 8, .top = 1, .bot = 6 };
+    const save = st_termcursorplan(term_cursor_store, snapshot, cursor_save, 1);
+    const load = st_termcursorplan(term_cursor_store, snapshot, cursor_load, 0);
 
     try std.testing.expectEqual(@as(c_int, cursor_store_save), save.action);
     try std.testing.expectEqual(@as(c_int, 1), save.slot);

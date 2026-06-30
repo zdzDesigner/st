@@ -72,24 +72,25 @@ typedef struct {
 } ZigCursorPlan;
 
 typedef struct {
+	int state;
+	int x;
+	int y;
+	int col;
+	int row;
+	int top;
+	int bot;
+} ZigTermCursorSnapshot;
+
+typedef struct {
+	int action;
 	int x;
 	int y;
 	int state;
-} ZigCursorMove;
-
-typedef struct {
 	int scroll;
+	int scroll_down;
 	int scroll_top;
-	int x;
-	int y;
-} ZigNewlinePlan;
-
-typedef struct {
-	int draw;
-	int clear_dirty;
-	int y;
-	int next_y;
-} ZigDrawRegionPlan;
+	int slot;
+} ZigTermCursorPlan;
 
 typedef struct {
 	int search_active;
@@ -111,14 +112,10 @@ typedef struct {
 	int cursor_active;
 	int imspot_active;
 	int region_draw;
+	int region_clear_dirty;
 	int region_y;
 	int region_next_y;
 } ZigDrawExecPlan;
-
-typedef struct {
-	int action;
-	int slot;
-} ZigCursorStorePlan;
 
 enum {
 	ST_ZIG_CURSOR_STORE_NONE = 0,
@@ -150,6 +147,8 @@ typedef struct {
 	int run;
 	int new_scr;
 	int delta;
+	int selscroll_delta;
+	int full_dirty;
 } ZigKScrollPlan;
 
 typedef struct {
@@ -163,6 +162,7 @@ typedef struct {
 	int kind;
 	int top;
 	int bottom;
+	int cursor_home;
 } ZigStatePlan;
 
 typedef struct {
@@ -234,6 +234,8 @@ typedef struct {
 	int kind;
 	int value;
 	int extra;
+	int mode_mask;
+	int mode_bits;
 } ZigMiscPlan;
 
 typedef struct {
@@ -261,6 +263,8 @@ typedef struct {
 	int move_origin_home;
 	int term_mode_action;
 	int term_mode_set;
+	int mode_mask;
+	int mode_bits;
 	int xsetmode_action;
 	int xsetmode_set;
 } ZigModePlan;
@@ -282,6 +286,16 @@ typedef struct {
 } ZigStrSequence;
 
 typedef struct {
+	int esc;
+	int charset_set;
+	int charset;
+	int icharset_set;
+	int icharset;
+	int tab_set;
+	int tab_x;
+} ZigInputScalarStateUpdate;
+
+typedef struct {
 	int action;
 	int new_esc;
 	int finish_esc;
@@ -289,6 +303,7 @@ typedef struct {
 	int charset;
 	int tab_set;
 	int tab_x;
+	ZigInputScalarStateUpdate state;
 } ZigInputControlPlan;
 
 typedef struct {
@@ -301,6 +316,7 @@ typedef struct {
 	int icharset;
 	int tab_set;
 	int tab_x;
+	ZigInputScalarStateUpdate state;
 } ZigInputEscPlan;
 
 enum {
@@ -865,6 +881,14 @@ enum {
 	ST_ZIG_PUTC_ADVANCE_WRAPNEXT = 1,
 };
 
+enum {
+	ST_ZIG_TERM_CURSOR_MOVE_TO = 0,
+	ST_ZIG_TERM_CURSOR_MOVE_TO_ABS = 1,
+	ST_ZIG_TERM_CURSOR_NEWLINE = 2,
+	ST_ZIG_TERM_CURSOR_REVERSE_INDEX = 3,
+	ST_ZIG_TERM_CURSOR_STORE = 4,
+};
+
 char *st_base64dec(const char *);
 ZigUtf8Decode st_utf8decode(const unsigned char *, size_t);
 size_t st_utf8encode(uint32_t, unsigned char *);
@@ -872,12 +896,8 @@ ZigCsiParse st_csiparse(const unsigned char *, size_t);
 ZigCsiExecPlan st_csiexecplan(char, char, char, const int *, int, int, int, int, int);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
-ZigCursorMove st_tmoveto(int, int, int, int, int, int, int);
-ZigNewlinePlan st_tnewline(int, int, int, int, int);
-ZigNewlinePlan st_treverseindex(int, int, int);
+ZigTermCursorPlan st_termcursorplan(int, ZigTermCursorSnapshot, int, int);
 ZigDrawExecPlan st_drawexecplan(ZigTermFrameSnapshot, const ZigGlyph * const *, const int *, int, int);
-ZigDrawRegionPlan st_drawregionplan(const int *, int, int);
-ZigCursorStorePlan st_tcursorplan(int, int);
 ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 ZigScrollPlan st_tscrollplan(int, int, int, int, int, int, int, int);
@@ -888,6 +908,8 @@ ZigResizeExecPlan st_tresizeexecplan(const int *, int, int, int, int, int, int, 
 ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
 ZigModePlan st_modeplan(int, int, int, int);
+int st_tdefutf8plan(char, int);
+int st_tdeftranplan(char);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrSequence st_tstrsequence(unsigned char, int);
 ZigStrHandlePlan st_strhandleplan(char, int, int, int);

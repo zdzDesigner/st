@@ -1406,9 +1406,11 @@ void tfulldirt(void) { tsetdirt(0, term.row - 1); }
 
 void tcursor(int mode) {
     static TCursor c[2];
-    ZigCursorStorePlan plan;
+    ZigTermCursorSnapshot snapshot;
+    ZigTermCursorPlan plan;
 
-    plan = st_tcursorplan(mode, IS_SET(MODE_ALTSCREEN));
+    snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
+    plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_STORE, snapshot, mode, IS_SET(MODE_ALTSCREEN));
     if (plan.action == ST_ZIG_CURSOR_STORE_SAVE) {
         c[plan.slot] = term.c;
     } else if (plan.action == ST_ZIG_CURSOR_STORE_LOAD) {
@@ -1463,8 +1465,10 @@ void kscrolldown(const Arg *a) {
     plan = st_kscrolldownplan(a->i, term.row, term.scr);
     if (plan.run) {
         term.scr = plan.new_scr;
-        selscroll(0, plan.delta);
-        tfulldirt();
+        if (plan.selscroll_delta)
+            selscroll(0, plan.selscroll_delta);
+        if (plan.full_dirty)
+            tfulldirt();
     }
 }
 
@@ -1474,8 +1478,10 @@ void kscrollup(const Arg *a) {
     plan = st_kscrollupplan(a->i, term.row, term.scr, HISTSIZE);
     if (plan.run) {
         term.scr = plan.new_scr;
-        selscroll(0, plan.delta);
-        tfulldirt();
+        if (plan.selscroll_delta)
+            selscroll(0, plan.selscroll_delta);
+        if (plan.full_dirty)
+            tfulldirt();
     }
 }
 
@@ -1545,12 +1551,16 @@ void selscroll(int orig, int n) {
 }
 
 void tnewline(int first_col) {
-    ZigNewlinePlan plan;
+    ZigTermCursorSnapshot snapshot;
+    ZigTermCursorPlan plan;
 
-    plan = st_tnewline(first_col, term.c.x, term.c.y, term.top, term.bot);
+    snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
+    plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_NEWLINE, snapshot, first_col, 0);
     if (plan.scroll)
         tscrollup(plan.scroll_top, 1, 1);
-    tmoveto(plan.x, plan.y);
+    term.c.state = plan.state;
+    term.c.x = plan.x;
+    term.c.y = plan.y;
 }
 
 void csiparse(void) {
@@ -1566,18 +1576,25 @@ void csiparse(void) {
 
 /* for absolute user moves, when decom is set */
 void tmoveato(int x, int y) {
-    if (IS_SET(CURSOR_ORIGIN))
-        y += term.top;
-    tmoveto(x, y);
+    ZigTermCursorSnapshot snapshot;
+    ZigTermCursorPlan plan;
+
+    snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
+    plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_MOVE_TO_ABS, snapshot, x, y);
+    term.c.state = plan.state;
+    term.c.x = plan.x;
+    term.c.y = plan.y;
 }
 
 void tmoveto(int x, int y) {
-    ZigCursorMove move;
+    ZigTermCursorSnapshot snapshot;
+    ZigTermCursorPlan plan;
 
-    move = st_tmoveto(x, y, term.c.state, term.col, term.row, term.top, term.bot);
-    term.c.state = move.state;
-    term.c.x = move.x;
-    term.c.y = move.y;
+    snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
+    plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_MOVE_TO, snapshot, x, y);
+    term.c.state = plan.state;
+    term.c.x = plan.x;
+    term.c.y = plan.y;
 }
 
 void tsetchar(Rune u, Glyph *attr, int x, int y) {
@@ -1756,7 +1773,8 @@ void tapplystate(const ZigStatePlan *plan) {
     switch (plan->kind) {
     case ST_ZIG_STATE_SET_SCROLL:
         tsetscroll(plan->top, plan->bottom);
-        tmoveato(0, 0);
+        if (plan->cursor_home)
+            tmoveato(0, 0);
         break;
     case ST_ZIG_STATE_SAVE_CURSOR:
         tcursor(CURSOR_SAVE);
@@ -1781,10 +1799,7 @@ void tapplymisc(const ZigMiscPlan *plan) {
         tdumpsel();
         break;
     case ST_ZIG_MISC_MEDIA_PRINT_OFF:
-        term.mode &= ~MODE_PRINT;
-        break;
     case ST_ZIG_MISC_MEDIA_PRINT_ON:
-        term.mode |= MODE_PRINT;
         break;
     case ST_ZIG_MISC_REPEAT_LAST:
         if (!term.lastc)
@@ -1793,6 +1808,8 @@ void tapplymisc(const ZigMiscPlan *plan) {
             tputc(term.lastc);
         break;
     }
+    if (plan->mode_mask)
+        term.mode = (term.mode & ~plan->mode_mask) | plan->mode_bits;
 }
 
 void tsetmode(int priv, int set, int *args, int narg) {
@@ -1818,8 +1835,6 @@ void tsetmode(int priv, int set, int *args, int narg) {
                 tmoveato(0, 0);
             break;
         case ST_ZIG_MODE_WRAP:
-            if (plan.term_mode_action == ST_ZIG_TERM_MODE_WRAP)
-                MODBIT(term.mode, plan.term_mode_set, MODE_WRAP);
             break;
         case ST_ZIG_MODE_CURSOR_VISIBILITY:
             if (plan.xsetmode_action == ST_ZIG_XSETMODE_HIDE)
@@ -1890,16 +1905,8 @@ void tsetmode(int priv, int set, int *args, int narg) {
                 xsetmode(plan.xsetmode_set, MODE_KBDLOCK);
             break;
         case ST_ZIG_MODE_INSERT:
-            if (plan.term_mode_action == ST_ZIG_TERM_MODE_INSERT)
-                MODBIT(term.mode, plan.term_mode_set, MODE_INSERT);
-            break;
         case ST_ZIG_MODE_ECHO:
-            if (plan.term_mode_action == ST_ZIG_TERM_MODE_ECHO)
-                MODBIT(term.mode, plan.term_mode_set, MODE_ECHO);
-            break;
         case ST_ZIG_MODE_CRLF:
-            if (plan.term_mode_action == ST_ZIG_TERM_MODE_CRLF)
-                MODBIT(term.mode, plan.term_mode_set, MODE_CRLF);
             break;
         case ST_ZIG_MODE_PRIVATE_UNKNOWN:
             fprintf(stderr, "erresc: unknown private set/reset mode %d\n", *args);
@@ -1908,6 +1915,8 @@ void tsetmode(int priv, int set, int *args, int narg) {
             fprintf(stderr, "erresc: unknown set/reset mode %d\n", *args);
             break;
         }
+        if (plan.mode_mask)
+            term.mode = (term.mode & ~plan.mode_mask) | plan.mode_bits;
     }
 }
 
@@ -2212,31 +2221,11 @@ void tdump(void) {
 
 void tputtab(int n) { term.c.x = st_tputtab(term.c.x, term.col, n, term.tabs); }
 
-void tdefutf8(char ascii) {
-    switch (ascii) {
-    case 'G':
-        term.mode |= MODE_UTF8;
-        break;
-    case '@':
-        term.mode &= ~MODE_UTF8;
-        break;
-    }
-}
+void tdefutf8(char ascii) { term.mode = st_tdefutf8plan(ascii, term.mode); }
 
 void tdeftran(char ascii) {
-    int charset;
+    int charset = st_tdeftranplan(ascii);
 
-    switch (ascii) {
-    case '0':
-        charset = CS_GRAPHIC0;
-        break;
-    case 'B':
-        charset = CS_USA;
-        break;
-    default:
-        charset = -1;
-        break;
-    }
     if (charset < 0) {
         fprintf(stderr, "esc unhandled charset: ESC ( %c\n", ascii);
     } else {
@@ -2264,13 +2253,20 @@ void tstrsequence(uchar c) {
     term.esc = seq.esc;
 }
 
+void applyinputscalarwriteback(const ZigInputScalarStateUpdate *update) {
+    term.esc = update->esc;
+    if (update->charset_set)
+        term.charset = update->charset;
+    if (update->icharset_set)
+        term.icharset = update->icharset;
+    if (update->tab_set)
+        term.tabs[update->tab_x] = 1;
+}
+
 void tcontrolcode(uchar ascii) {
     ZigInputControlPlan plan = st_inputcontrolplan(ascii, term.esc, term.charset, term.c.x);
 
-    if (plan.charset_set)
-        term.charset = plan.charset;
-    if (plan.tab_set)
-        term.tabs[plan.tab_x] = 1;
+    applyinputscalarwriteback(&plan.state);
 
     switch (plan.action) {
     case ST_ZIG_CTL_ACTION_TAB:
@@ -2293,7 +2289,6 @@ void tcontrolcode(uchar ascii) {
         }
         break;
     case ST_ZIG_CTL_ACTION_ESCAPE:
-        term.esc = plan.new_esc;
         csireset();
         return;
     case ST_ZIG_CTL_ACTION_SUBSTITUTE:
@@ -2322,15 +2317,10 @@ void tcontrolcode(uchar ascii) {
  */
 int eschandle(uchar ascii) {
     ZigInputEscPlan exec = st_inputescplan(ascii, term.esc, term.charset, term.icharset, term.c.x);
-    ZigNewlinePlan plan;
+    ZigTermCursorSnapshot cursor_snapshot;
+    ZigTermCursorPlan cursor_plan;
 
-    term.esc = exec.new_esc;
-    if (exec.charset_set)
-        term.charset = exec.charset;
-    if (exec.icharset_set)
-        term.icharset = exec.icharset;
-    if (exec.tab_set)
-        term.tabs[exec.tab_x] = 1;
+    applyinputscalarwriteback(&exec.state);
 
     switch (exec.action) {
     case ST_ZIG_ESC_ACTION_START_STR:
@@ -2343,10 +2333,14 @@ int eschandle(uchar ascii) {
         tnewline(1);
         break;
     case ST_ZIG_ESC_ACTION_RI:
-        plan = st_treverseindex(term.c.x, term.c.y, term.top);
-        if (plan.scroll)
-            tscrolldown(plan.scroll_top, 1, 1);
-        tmoveto(plan.x, plan.y);
+        cursor_snapshot =
+            (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
+        cursor_plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_REVERSE_INDEX, cursor_snapshot, 0, 0);
+        if (cursor_plan.scroll)
+            tscrolldown(cursor_plan.scroll_top, 1, 1);
+        term.c.state = cursor_plan.state;
+        term.c.x = cursor_plan.x;
+        term.c.y = cursor_plan.y;
         break;
     case ST_ZIG_ESC_ACTION_DECID:
         ttywrite(vtiden, strlen(vtiden), 0);
@@ -2623,17 +2617,20 @@ void resettitle(void) { xsettitle(NULL); }
 
 void drawregion(int x1, int y1, int x2, int y2) {
     int y = y1;
-    ZigDrawRegionPlan region;
+    ZigTermFrameSnapshot snapshot;
+    ZigDrawExecPlan region;
+
+    snapshot = (ZigTermFrameSnapshot){0, 1, 0, 0, 0, 0, term.col, term.row};
 
     for (;;) {
-        region = st_drawregionplan(term.dirty, y, y2);
-        if (!region.draw)
+        region = st_drawexecplan(snapshot, (const ZigGlyph *const *)term.line, term.dirty, y, y2);
+        if (!region.region_draw)
             break;
-        y = region.y;
-        if (region.clear_dirty)
+        y = region.region_y;
+        if (region.region_clear_dirty)
             term.dirty[y] = 0;
         xdrawline(TLINE(y), x1, y, x2);
-        y = region.next_y;
+        y = region.region_next_y;
     }
 }
 

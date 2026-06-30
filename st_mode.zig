@@ -20,6 +20,8 @@ pub const ZigModePlan = extern struct {
     move_origin_home: c_int,
     term_mode_action: c_int,
     term_mode_set: c_int,
+    mode_mask: c_int,
+    mode_bits: c_int,
     xsetmode_action: c_int,
     xsetmode_set: c_int,
 };
@@ -63,6 +65,11 @@ pub const term_mode_wrap = 1;
 pub const term_mode_insert = 2;
 pub const term_mode_echo = 3;
 pub const term_mode_crlf = 4;
+
+const term_mode_wrap_bit = 1 << 0;
+const term_mode_insert_bit = 1 << 1;
+const term_mode_crlf_bit = 1 << 3;
+const term_mode_echo_bit = 1 << 4;
 
 pub const xsetmode_none = 0;
 pub const xsetmode_hide = 1;
@@ -158,6 +165,8 @@ fn swapScreen(arg: c_int, set: bool, alt: bool) c_int {
 
 fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool) ZigModePlan {
     const cursor_action = cursorAction(arg, set);
+    const term_mode_set = if (arg == 12) !set else set;
+    const term_mask = termModeMask(arg);
     return .{
         .kind = kind,
         .cursor_before = if (arg == 1049) cursor_action else -1,
@@ -171,9 +180,21 @@ fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool) ZigModePlan {
         .cursor_state_set = if (set) 1 else 0,
         .move_origin_home = if (arg == 6) 1 else 0,
         .term_mode_action = termModeAction(arg),
-        .term_mode_set = if (arg == 12) (if (!set) 1 else 0) else (if (set) 1 else 0),
+        .term_mode_set = if (term_mode_set) 1 else 0,
+        .mode_mask = term_mask,
+        .mode_bits = if (term_mode_set) term_mask else 0,
         .xsetmode_action = xsetmodeAction(arg),
         .xsetmode_set = if (arg == 25) (if (!set) 1 else 0) else (if (set) 1 else 0),
+    };
+}
+
+fn termModeMask(arg: c_int) c_int {
+    return switch (arg) {
+        7 => term_mode_wrap_bit,
+        4 => term_mode_insert_bit,
+        12 => term_mode_echo_bit,
+        20 => term_mode_crlf_bit,
+        else => 0,
     };
 }
 
@@ -227,6 +248,14 @@ fn mouseMode(arg: c_int) c_int {
 
 export fn st_modeplan(priv: c_int, arg: c_int, set: c_int, alt: c_int) ZigModePlan {
     return (ModeParam{ .private = priv != 0, .arg = arg }).plan(set != 0, alt != 0);
+}
+
+export fn st_tdefutf8plan(ascii: c_char, mode: c_int) c_int {
+    return (Utf8Selector{ .ascii = ascii }).apply(mode);
+}
+
+export fn st_tdeftranplan(ascii: c_char) c_int {
+    return (CharsetSelector{ .ascii = ascii }).value();
 }
 
 test "mode domain plans alternate screen set" {
@@ -337,10 +366,18 @@ test "mode domain plans visibility and simple bit writes" {
     try std.testing.expectEqual(@as(c_int, 0), visibility.xsetmode_set);
     try std.testing.expectEqual(@as(c_int, term_mode_wrap), wrap.term_mode_action);
     try std.testing.expectEqual(@as(c_int, 1), wrap.term_mode_set);
+    try std.testing.expectEqual(@as(c_int, term_mode_wrap_bit), wrap.mode_mask);
+    try std.testing.expectEqual(@as(c_int, term_mode_wrap_bit), wrap.mode_bits);
     try std.testing.expectEqual(@as(c_int, term_mode_insert), insert.term_mode_action);
+    try std.testing.expectEqual(@as(c_int, term_mode_insert_bit), insert.mode_mask);
+    try std.testing.expectEqual(@as(c_int, term_mode_insert_bit), insert.mode_bits);
     try std.testing.expectEqual(@as(c_int, term_mode_echo), echo.term_mode_action);
     try std.testing.expectEqual(@as(c_int, 0), echo.term_mode_set);
+    try std.testing.expectEqual(@as(c_int, term_mode_echo_bit), echo.mode_mask);
+    try std.testing.expectEqual(@as(c_int, 0), echo.mode_bits);
     try std.testing.expectEqual(@as(c_int, term_mode_crlf), crlf.term_mode_action);
+    try std.testing.expectEqual(@as(c_int, term_mode_crlf_bit), crlf.mode_mask);
+    try std.testing.expectEqual(@as(c_int, term_mode_crlf_bit), crlf.mode_bits);
     try std.testing.expectEqual(@as(c_int, xsetmode_kbdlock), kbdlock.xsetmode_action);
 }
 
@@ -371,6 +408,14 @@ test "utf8 selector enables and disables utf8 bit" {
 
 test "utf8 selector ignores unknown selector" {
     try std.testing.expectEqual(@as(c_int, 5), (Utf8Selector{ .ascii = 'x' }).apply(5));
+}
+
+test "mode exports utf8 and charset selectors" {
+    try std.testing.expectEqual(@as(c_int, term_mode_utf8), st_tdefutf8plan('G', 0));
+    try std.testing.expectEqual(@as(c_int, 0), st_tdefutf8plan('@', term_mode_utf8));
+    try std.testing.expectEqual(@as(c_int, charset_graphic0), st_tdeftranplan('0'));
+    try std.testing.expectEqual(@as(c_int, charset_usa), st_tdeftranplan('B'));
+    try std.testing.expectEqual(@as(c_int, charset_unknown), st_tdeftranplan('x'));
 }
 
 test "charset selector maps supported charsets" {

@@ -37,6 +37,8 @@ pub const ZigKScrollPlan = extern struct {
     run: c_int,
     new_scr: c_int,
     delta: c_int,
+    selscroll_delta: c_int,
+    full_dirty: c_int,
 };
 
 pub const edit_insert_blank = 0;
@@ -105,17 +107,17 @@ const KeyboardScroll = struct {
         var count = if (self.n < 0) self.row + self.n else self.n;
         if (count > self.scr) count = self.scr;
         return if (self.scr > 0)
-            .{ .run = 1, .new_scr = self.scr - count, .delta = -count }
+            .{ .run = 1, .new_scr = self.scr - count, .delta = -count, .selscroll_delta = -count, .full_dirty = 1 }
         else
-            .{ .run = 0, .new_scr = self.scr, .delta = 0 };
+            .{ .run = 0, .new_scr = self.scr, .delta = 0, .selscroll_delta = 0, .full_dirty = 0 };
     }
 
     fn up(self: KeyboardScroll) ZigKScrollPlan {
         const count = if (self.n < 0) self.row + self.n else self.n;
         return if (self.scr <= self.histsize - count)
-            .{ .run = 1, .new_scr = self.scr + count, .delta = count }
+            .{ .run = 1, .new_scr = self.scr + count, .delta = count, .selscroll_delta = count, .full_dirty = 1 }
         else
-            .{ .run = 0, .new_scr = self.scr, .delta = 0 };
+            .{ .run = 0, .new_scr = self.scr, .delta = 0, .selscroll_delta = 0, .full_dirty = 0 };
     }
 };
 
@@ -187,6 +189,8 @@ test "keyboard scroll down clamps to current scroll" {
     try std.testing.expectEqual(@as(c_int, 1), plan.run);
     try std.testing.expectEqual(@as(c_int, 0), plan.new_scr);
     try std.testing.expectEqual(@as(c_int, -4), plan.delta);
+    try std.testing.expectEqual(@as(c_int, -4), plan.selscroll_delta);
+    try std.testing.expectEqual(@as(c_int, 1), plan.full_dirty);
 }
 
 test "keyboard scroll up preserves hist bound" {
@@ -195,4 +199,6 @@ test "keyboard scroll up preserves hist bound" {
     try std.testing.expectEqual(@as(c_int, 1), plan.run);
     try std.testing.expectEqual(@as(c_int, 95), plan.new_scr);
     try std.testing.expectEqual(@as(c_int, 5), plan.delta);
+    try std.testing.expectEqual(@as(c_int, 5), plan.selscroll_delta);
+    try std.testing.expectEqual(@as(c_int, 1), plan.full_dirty);
 }

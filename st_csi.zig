@@ -51,12 +51,15 @@ const ZigStatePlan = extern struct {
     kind: c_int,
     top: c_int,
     bottom: c_int,
+    cursor_home: c_int,
 };
 
 const ZigMiscPlan = extern struct {
     kind: c_int,
     value: c_int,
     extra: c_int,
+    mode_mask: c_int,
+    mode_bits: c_int,
 };
 
 const ZigCsiExecPlan = extern struct {
@@ -118,6 +121,7 @@ const misc_media_print_on = 5;
 const misc_repeat_last = 6;
 const misc_set_cursor_style = 7;
 const misc_unknown = 8;
+const mode_print = 1 << 5;
 
 export fn st_csiparse(buf: [*]const u8, len: usize) ZigCsiParse {
     return (CsiParser{ .input = buf[0..len] }).parse();
@@ -321,31 +325,31 @@ const CsiExec = struct {
         const arg0 = defaultZero(self.args, 0);
         return switch (self.mode0) {
             'i' => switch (arg0) {
-                0 => .{ .kind = misc_media_dump, .value = 0, .extra = 0 },
-                1 => .{ .kind = misc_media_dump_line, .value = 0, .extra = 0 },
-                2 => .{ .kind = misc_media_dump_sel, .value = 0, .extra = 0 },
-                4 => .{ .kind = misc_media_print_off, .value = 0, .extra = 0 },
-                5 => .{ .kind = misc_media_print_on, .value = 0, .extra = 0 },
-                else => .{ .kind = misc_none, .value = 0, .extra = 0 },
+                0 => miscResult(misc_media_dump, 0, 0),
+                1 => miscResult(misc_media_dump_line, 0, 0),
+                2 => miscResult(misc_media_dump_sel, 0, 0),
+                4 => miscModeResult(misc_media_print_off, 0),
+                5 => miscModeResult(misc_media_print_on, mode_print),
+                else => miscResult(misc_none, 0, 0),
             },
-            'b' => .{ .kind = misc_repeat_last, .value = countArg(self.args), .extra = 0 },
+            'b' => miscResult(misc_repeat_last, countArg(self.args), 0),
             ' ' => if (self.mode1 == 'q')
-                .{ .kind = misc_set_cursor_style, .value = arg0, .extra = 0 }
+                miscResult(misc_set_cursor_style, arg0, 0)
             else
-                .{ .kind = misc_unknown, .value = 0, .extra = 0 },
-            else => .{ .kind = misc_unknown, .value = 0, .extra = 0 },
+                miscResult(misc_unknown, 0, 0),
+            else => miscResult(misc_unknown, 0, 0),
         };
     }
 
     fn statePlan(self: CsiExec) ZigStatePlan {
         return switch (self.mode0) {
             'r' => if (self.private)
-                .{ .kind = state_unknown, .top = 0, .bottom = 0 }
+                .{ .kind = state_unknown, .top = 0, .bottom = 0, .cursor_home = 0 }
             else
-                .{ .kind = state_set_scroll, .top = defaultOne(self.args, 0) - 1, .bottom = defaultArg(self.args, 1, self.row) - 1 },
-            's' => .{ .kind = state_save_cursor, .top = 0, .bottom = 0 },
-            'u' => .{ .kind = state_load_cursor, .top = 0, .bottom = 0 },
-            else => .{ .kind = state_unknown, .top = 0, .bottom = 0 },
+                .{ .kind = state_set_scroll, .top = defaultOne(self.args, 0) - 1, .bottom = defaultArg(self.args, 1, self.row) - 1, .cursor_home = 1 },
+            's' => .{ .kind = state_save_cursor, .top = 0, .bottom = 0, .cursor_home = 0 },
+            'u' => .{ .kind = state_load_cursor, .top = 0, .bottom = 0, .cursor_home = 0 },
+            else => .{ .kind = state_unknown, .top = 0, .bottom = 0, .cursor_home = 0 },
         };
     }
 };
@@ -356,11 +360,19 @@ fn emptyExec() ZigCsiExecPlan {
         .mode_set = 0,
         .edit = .{ .kind = edit_unknown, .count = 0, .rect = zeroRect() },
         .cursor = .{ .kind = cursor_unknown, .x = 0, .y = 0 },
-        .misc = .{ .kind = misc_unknown, .value = 0, .extra = 0 },
+        .misc = miscResult(misc_unknown, 0, 0),
         .light = .{ .kind = light_unknown, .value = 0, .x = 0, .y = 0 },
         .erase = .{ .kind = erase_unknown, .count = 0, .rects = std.mem.zeroes([2]ZigClearRect) },
-        .state = .{ .kind = state_unknown, .top = 0, .bottom = 0 },
+        .state = .{ .kind = state_unknown, .top = 0, .bottom = 0, .cursor_home = 0 },
     };
+}
+
+fn miscResult(kind: c_int, value: c_int, extra: c_int) ZigMiscPlan {
+    return .{ .kind = kind, .value = value, .extra = extra, .mode_mask = 0, .mode_bits = 0 };
+}
+
+fn miscModeResult(kind: c_int, bits: c_int) ZigMiscPlan {
+    return .{ .kind = kind, .value = 0, .extra = 0, .mode_mask = mode_print, .mode_bits = bits };
 }
 
 fn addEraseRect(plan: *ZigErasePlan, x1: c_int, y1: c_int, x2: c_int, y2: c_int) void {
@@ -448,6 +460,8 @@ test "csi exec groups erase and rejects invalid erase arg" {
 test "csi exec groups light and misc commands" {
     const light = st_csiexecplan('n', 0, 0, &[_]c_int{6}, 1, 7, 9, 80, 24);
     const misc = st_csiexecplan('b', 0, 0, &[_]c_int{0}, 1, 7, 9, 80, 24);
+    const print_on = st_csiexecplan('i', 0, 0, &[_]c_int{5}, 1, 7, 9, 80, 24);
+    const print_off = st_csiexecplan('i', 0, 0, &[_]c_int{4}, 1, 7, 9, 80, 24);
     const cursor_style = st_csiexecplan(' ', 'q', 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
     const invalid = st_csiexecplan(' ', 'x', 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
 
@@ -458,6 +472,10 @@ test "csi exec groups light and misc commands" {
     try std.testing.expectEqual(@as(c_int, csi_exec_misc), misc.kind);
     try std.testing.expectEqual(@as(c_int, misc_repeat_last), misc.misc.kind);
     try std.testing.expectEqual(@as(c_int, 1), misc.misc.value);
+    try std.testing.expectEqual(@as(c_int, mode_print), print_on.misc.mode_mask);
+    try std.testing.expectEqual(@as(c_int, mode_print), print_on.misc.mode_bits);
+    try std.testing.expectEqual(@as(c_int, mode_print), print_off.misc.mode_mask);
+    try std.testing.expectEqual(@as(c_int, 0), print_off.misc.mode_bits);
     try std.testing.expectEqual(@as(c_int, misc_set_cursor_style), cursor_style.misc.kind);
     try std.testing.expectEqual(@as(c_int, csi_exec_unknown), invalid.kind);
 }
@@ -469,6 +487,8 @@ test "csi exec groups mode attr and state" {
     try std.testing.expectEqual(@as(c_int, csi_exec_state), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).kind);
     try std.testing.expectEqual(@as(c_int, 1), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).state.top);
     try std.testing.expectEqual(@as(c_int, 7), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).state.bottom);
+    try std.testing.expectEqual(@as(c_int, 1), st_csiexecplan('r', 0, 0, &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).state.cursor_home);
+    try std.testing.expectEqual(@as(c_int, 0), st_csiexecplan('s', 0, 0, &[_]c_int{}, 0, 0, 0, 80, 24).state.cursor_home);
     try std.testing.expectEqual(@as(c_int, csi_exec_unknown), st_csiexecplan('r', 0, '?', &[_]c_int{ 2, 8 }, 2, 0, 0, 80, 24).kind);
 }
 

@@ -10,6 +10,7 @@ pub const ZigStatePlan = extern struct {
     kind: c_int,
     top: c_int,
     bottom: c_int,
+    cursor_home: c_int,
 };
 
 pub const ZigScrollRegion = extern struct {

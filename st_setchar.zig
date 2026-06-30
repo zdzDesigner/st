@@ -40,6 +40,16 @@ pub const ZigInputEscFlowPlan = extern struct {
     new_csi_len: usize,
 };
 
+pub const ZigInputScalarStateUpdate = extern struct {
+    esc: c_int,
+    charset_set: c_int,
+    charset: c_int,
+    icharset_set: c_int,
+    icharset: c_int,
+    tab_set: c_int,
+    tab_x: c_int,
+};
+
 pub const ZigInputControlPlan = extern struct {
     action: c_int,
     new_esc: c_int,
@@ -48,6 +58,7 @@ pub const ZigInputControlPlan = extern struct {
     charset: c_int,
     tab_set: c_int,
     tab_x: c_int,
+    state: ZigInputScalarStateUpdate,
 };
 
 pub const ZigInputEscPlan = extern struct {
@@ -60,6 +71,7 @@ pub const ZigInputEscPlan = extern struct {
     icharset: c_int,
     tab_set: c_int,
     tab_x: c_int,
+    state: ZigInputScalarStateUpdate,
 };
 
 pub const ZigEscPlan = control_esc.ZigEscPlan;
@@ -322,7 +334,7 @@ fn planEsc(ascii: u8) ZigEscPlan {
 
 export fn st_inputescplan(ascii: u8, esc: c_int, charset: c_int, icharset: c_int, x: c_int) ZigInputEscPlan {
     const raw = (control_esc.EscSequence{ .ascii = ascii }).plan();
-    var result = ZigInputEscPlan{ .action = control_esc.EscSequence.action(raw.kind), .ret = raw.ret, .new_esc = esc, .charset_set = 0, .charset = charset, .icharset_set = 0, .icharset = icharset, .tab_set = 0, .tab_x = x };
+    var result = ZigInputEscPlan{ .action = control_esc.EscSequence.action(raw.kind), .ret = raw.ret, .new_esc = esc, .charset_set = 0, .charset = charset, .icharset_set = 0, .icharset = icharset, .tab_set = 0, .tab_x = x, .state = inputState(esc, 0, charset, 0, icharset, 0, x) };
     switch (raw.kind) {
         esc_set_csi => result.new_esc = esc | esc_csi,
         control_esc.esc_set_test => result.new_esc = esc | esc_test,
@@ -339,12 +351,13 @@ export fn st_inputescplan(ascii: u8, esc: c_int, charset: c_int, icharset: c_int
         control_esc.esc_hts => result.tab_set = 1,
         else => {},
     }
+    result.state = inputState(result.new_esc, result.charset_set, result.charset, result.icharset_set, result.icharset, result.tab_set, result.tab_x);
     return result;
 }
 
 export fn st_inputcontrolplan(ascii: u8, esc: c_int, charset: c_int, x: c_int) ZigInputControlPlan {
     const raw = (control_esc.ControlSequence{ .ascii = ascii }).plan();
-    var result = ZigInputControlPlan{ .action = control_esc.ControlSequence.action(raw.kind), .new_esc = esc, .finish_esc = esc, .charset_set = 0, .charset = charset, .tab_set = 0, .tab_x = x };
+    var result = ZigInputControlPlan{ .action = control_esc.ControlSequence.action(raw.kind), .new_esc = esc, .finish_esc = esc, .charset_set = 0, .charset = charset, .tab_set = 0, .tab_x = x, .state = inputState(esc, 0, charset, 0, 0, 0, x) };
     switch (raw.kind) {
         control_esc.ctl_escape => {
             result.new_esc = (esc & ~(esc_csi | esc_altcharset | esc_test)) | esc_start;
@@ -357,10 +370,15 @@ export fn st_inputcontrolplan(ascii: u8, esc: c_int, charset: c_int, x: c_int) Z
         control_esc.ctl_set_tab_stop => result.tab_set = 1,
         else => {},
     }
+    result.state = inputState(result.new_esc, result.charset_set, result.charset, 0, 0, result.tab_set, result.tab_x);
     if (control_esc.ControlSequence.clearsString(raw.kind)) {
         result.finish_esc = result.new_esc & ~(esc_str_end | esc_str);
     }
     return result;
+}
+
+fn inputState(esc: c_int, charset_set: c_int, charset: c_int, icharset_set: c_int, icharset: c_int, tab_set: c_int, tab_x: c_int) ZigInputScalarStateUpdate {
+    return .{ .esc = esc, .charset_set = charset_set, .charset = charset, .icharset_set = icharset_set, .icharset = icharset, .tab_set = tab_set, .tab_x = tab_x };
 }
 
 fn controlAction(kind: c_int) c_int {
@@ -638,6 +656,7 @@ test "tescexec sets csi bit" {
     const exec = st_inputescplan('[', esc_start, 0, 0, 0);
 
     try std.testing.expectEqual(@as(c_int, esc_start | esc_csi), exec.new_esc);
+    try std.testing.expectEqual(@as(c_int, esc_start | esc_csi), exec.state.esc);
     try std.testing.expectEqual(@as(c_int, esc_action_none), exec.action);
     try std.testing.expectEqual(@as(c_int, 0), exec.ret);
 }
@@ -648,6 +667,8 @@ test "tescexec selects alt charset and returns no action" {
     try std.testing.expectEqual(@as(c_int, 1), exec.icharset_set);
     try std.testing.expectEqual(@as(c_int, 3), exec.icharset);
     try std.testing.expectEqual(@as(c_int, esc_start | esc_altcharset), exec.new_esc);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.icharset_set);
+    try std.testing.expectEqual(@as(c_int, 3), exec.state.icharset);
     try std.testing.expectEqual(@as(c_int, esc_action_none), exec.action);
 }
 
@@ -662,6 +683,7 @@ test "controlexec escape updates esc bits" {
     const exec = st_inputcontrolplan('\x1b', esc_csi | esc_altcharset | esc_test, 0, 0);
 
     try std.testing.expectEqual(@as(c_int, esc_start), exec.new_esc);
+    try std.testing.expectEqual(@as(c_int, esc_start), exec.state.esc);
     try std.testing.expectEqual(@as(c_int, ctl_action_escape), exec.action);
     try std.testing.expectEqual(@as(c_int, esc_start), exec.finish_esc);
 }
@@ -671,6 +693,8 @@ test "controlexec lock shift updates charset" {
 
     try std.testing.expectEqual(@as(c_int, 1), exec.charset_set);
     try std.testing.expectEqual(@as(c_int, 1), exec.charset);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.charset_set);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.charset);
     try std.testing.expectEqual(@as(c_int, ctl_action_none), exec.action);
 }
 
@@ -679,5 +703,7 @@ test "controlexec sets tab stop and clears string" {
 
     try std.testing.expectEqual(@as(c_int, 1), exec.tab_set);
     try std.testing.expectEqual(@as(c_int, 1), exec.tab_x);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.tab_set);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.tab_x);
     try std.testing.expectEqual(@as(c_int, esc_start), exec.finish_esc);
 }
