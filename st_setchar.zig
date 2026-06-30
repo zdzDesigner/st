@@ -38,6 +38,7 @@ pub const ZigInputEscFlowPlan = extern struct {
     csi_write: c_int,
     csi_byte: u8,
     new_csi_len: usize,
+    finish_esc: c_int,
 };
 
 pub const ZigInputScalarStateUpdate = extern struct {
@@ -290,7 +291,7 @@ const EscFlow = struct {
         if ((self.esc & esc_csi) != 0) {
             const new_len = self.csi_len + 1;
             const handle_csi: c_int = if ((0x40 <= self.rune and self.rune <= 0x7E) or self.csi_len >= self.csi_cap - 1) 1 else 0;
-            return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .csi_write = 1, .csi_byte = @truncate(self.rune), .new_csi_len = new_len };
+            return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .csi_write = 1, .csi_byte = @truncate(self.rune), .new_csi_len = new_len, .finish_esc = 0 };
         }
         if ((self.esc & esc_utf8) != 0) return emptyEscFlow(esc_flow_utf8, self.csi_len);
         if ((self.esc & esc_altcharset) != 0) return emptyEscFlow(esc_flow_altcharset, self.csi_len);
@@ -301,7 +302,7 @@ const EscFlow = struct {
 };
 
 fn emptyEscFlow(kind: c_int, csi_len: usize) ZigInputEscFlowPlan {
-    return .{ .kind = kind, .handle_csi = 0, .csi_write = 0, .csi_byte = 0, .new_csi_len = csi_len };
+    return .{ .kind = kind, .handle_csi = 0, .csi_write = 0, .csi_byte = 0, .new_csi_len = csi_len, .finish_esc = 0 };
 }
 
 export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int) void {
@@ -602,6 +603,7 @@ test "tescflow appends csi byte and finishes on final byte" {
     try std.testing.expectEqual(@as(c_int, 1), exec.csi_write);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
     try std.testing.expectEqual(@as(u8, 'm'), exec.csi_byte);
+    try std.testing.expectEqual(@as(c_int, 0), exec.finish_esc);
 }
 
 test "tescflow keeps collecting non final csi byte" {
@@ -612,6 +614,7 @@ test "tescflow keeps collecting non final csi byte" {
     try std.testing.expectEqual(@as(c_int, 1), exec.csi_write);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
     try std.testing.expectEqual(@as(u8, '3'), exec.csi_byte);
+    try std.testing.expectEqual(@as(c_int, 0), exec.finish_esc);
 }
 
 test "tescflow routes utf8 state" {
@@ -619,6 +622,7 @@ test "tescflow routes utf8 state" {
 
     try std.testing.expectEqual(@as(c_int, esc_flow_utf8), exec.kind);
     try std.testing.expectEqual(@as(usize, 0), exec.new_csi_len);
+    try std.testing.expectEqual(@as(c_int, 0), exec.finish_esc);
 }
 
 test "clear glyph resets cell using current colors" {

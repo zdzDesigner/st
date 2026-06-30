@@ -232,6 +232,7 @@ static void tprinter(char *, size_t);
 static void tdumpsel(void);
 static void tdumpline(int);
 static void tdump(void);
+static void tapplymisc(const ZigMiscPlan *);
 static void tclearregion(int, int, int, int);
 static void tcursor(int);
 static void tdeletechar(int);
@@ -1198,9 +1199,11 @@ void stty(char **args) {
 
 int ttynew(char *line, char *cmd, char *out, char **args) {
     int m, s;
+    ZigMiscPlan print_plan;
 
     if (out) {
-        term.mode |= MODE_PRINT;
+        print_plan = st_startprinterplan();
+        tapplymisc(&print_plan);
         iofd = (!strcmp(out, "-")) ? 1 : open(out, O_WRONLY | O_CREAT, 0666);
         if (iofd < 0) {
             fprintf(stderr, "Error opening %s:%s\n", out, strerror(errno));
@@ -1421,26 +1424,34 @@ void tcursor(int mode) {
 
 void treset(void) {
     uint i;
-    ZigResetPlan plan;
+    const ZigResetScreenStep *step;
+    ZigResetExecPlan plan;
 
-    plan = st_tresetplan(defaultfg, defaultbg, term.row);
-    term.c = (TCursor){{.mode = plan.cursor_attr_mode, .fg = plan.cursor_fg, .bg = plan.cursor_bg},
-                       .x = plan.cursor_x,
-                       .y = plan.cursor_y,
-                       .state = plan.cursor_state};
+    plan = st_tresetexecplan(defaultfg, defaultbg, term.row);
+    term.c = (TCursor){{.mode = plan.state.cursor_attr_mode, .fg = plan.state.cursor_fg, .bg = plan.state.cursor_bg},
+                       .x = plan.state.cursor_x,
+                       .y = plan.state.cursor_y,
+                       .state = plan.state.cursor_state};
 
     st_tresettabs(term.tabs, term.col, tabspaces);
-    term.top = plan.top;
-    term.bot = plan.bot;
-    term.mode = plan.mode;
-    memset(term.trantbl, plan.trantbl, sizeof(term.trantbl));
-    term.charset = plan.charset;
+    term.top = plan.state.top;
+    term.bot = plan.state.bot;
+    term.mode = plan.state.mode;
+    memset(term.trantbl, plan.state.trantbl, sizeof(term.trantbl));
+    term.charset = plan.state.charset;
 
-    for (i = 0; i < 2; i++) {
-        tmoveto(0, 0);
-        tcursor(CURSOR_SAVE);
-        tclearregion(0, 0, term.col - 1, term.row - 1);
-        tswapscreen();
+    if (plan.screen_step_count != 2)
+        die("invalid reset screen step count: %d\n", plan.screen_step_count);
+    for (i = 0; i < plan.screen_step_count; i++) {
+        step = &plan.screen_steps[i];
+        if (step->move_home)
+            tmoveto(0, 0);
+        if (step->save_cursor)
+            tcursor(CURSOR_SAVE);
+        if (step->clear)
+            tclearregion(0, 0, term.col - 1, term.row - 1);
+        if (step->swap_screen)
+            tswapscreen();
     }
 }
 
@@ -1751,10 +1762,8 @@ void tapplyedit(const ZigEditPlan *plan) {
 void tapplylight(const ZigLightPlan *plan, char *buf, int *len) {
     switch (plan->kind) {
     case ST_ZIG_LIGHT_CLEAR_TAB_CURRENT:
-        term.tabs[term.c.x] = 0;
         break;
     case ST_ZIG_LIGHT_CLEAR_TAB_ALL:
-        memset(term.tabs, 0, term.col * sizeof(*term.tabs));
         break;
     case ST_ZIG_LIGHT_PUT_TAB:
         tputtab(plan->value);
@@ -1767,6 +1776,10 @@ void tapplylight(const ZigLightPlan *plan, char *buf, int *len) {
         ttywrite(buf, *len, 0);
         break;
     }
+    if (plan->tab_clear_current)
+        term.tabs[term.c.x] = 0;
+    if (plan->tab_clear_all)
+        memset(term.tabs, 0, term.col * sizeof(*term.tabs));
 }
 
 void tapplystate(const ZigStatePlan *plan) {
@@ -2182,7 +2195,12 @@ void tprinter(char *s, size_t len) {
     }
 }
 
-void toggleprinter(const Arg *arg) { term.mode ^= MODE_PRINT; }
+void toggleprinter(const Arg *arg) {
+    ZigMiscPlan plan;
+
+    plan = st_toggleprinterplan(term.mode);
+    term.mode = (term.mode & ~plan.mode_mask) | plan.mode_bits;
+}
 
 void printscreen(const Arg *arg) { tdump(); }
 
@@ -2479,7 +2497,7 @@ check_control_code:
         }
         if ((escflow.kind == ST_ZIG_ESC_FLOW_CSI || escflow.kind == ST_ZIG_ESC_FLOW_ESC) && !esc_action_done)
             return;
-        term.esc = 0;
+        term.esc = escflow.finish_esc;
         /*
          * All characters which form part of a sequence are not
          * printed

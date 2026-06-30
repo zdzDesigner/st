@@ -1,6 +1,6 @@
 //! st_state.zig 负责 scroll region、resize、reset 和 tab reset 的纯规划。
 //! [输入]: scroll region 边界、resize 尺寸、tab stops、默认颜色和终端行数。
-//! [输出]: `ZigScrollRegion`、`ZigResizeExecPlan`、`ZigResetPlan` 或 tab reset 写入。
+//! [输出]: `ZigScrollRegion`、`ZigResizeExecPlan`、`ZigResetExecPlan` 或 tab reset 写入。
 //! [副作用边界]: 不调用 `tsetscroll(...)` / `tcursor(...)`，不修改光标或 scroll region；这些保留在 C executor。
 //! [定位]: 支撑 C executor 的状态变更边界；CSI state 顶层分类已收敛到 `st_csi.zig`。
 
@@ -43,6 +43,19 @@ pub const ZigResetPlan = extern struct {
     mode: c_int,
     charset: c_int,
     trantbl: c_int,
+};
+
+pub const ZigResetScreenStep = extern struct {
+    move_home: c_int,
+    save_cursor: c_int,
+    clear: c_int,
+    swap_screen: c_int,
+};
+
+pub const ZigResetExecPlan = extern struct {
+    state: ZigResetPlan,
+    screen_step_count: c_int,
+    screen_steps: [2]ZigResetScreenStep,
 };
 
 const ZigClearRect = extern struct {
@@ -236,6 +249,18 @@ const ResetRequest = struct {
     }
 };
 
+const ResetExec = struct {
+    request: ResetRequest,
+
+    fn plan(self: ResetExec) ZigResetExecPlan {
+        return .{
+            .state = self.request.plan(),
+            .screen_step_count = 2,
+            .screen_steps = [_]ZigResetScreenStep{ resetScreenStep(), resetScreenStep() },
+        };
+    }
+};
+
 const TabReset = struct {
     tabs: []c_int,
     col: c_int,
@@ -279,8 +304,8 @@ export fn st_tresizeexecplan(tabs: [*]const c_int, requested_col: c_int, request
     return (ResizeExec{ .request = request, .tabs = tabs[0..@intCast(tab_count)], .tabspaces = tabspaces }).plan();
 }
 
-export fn st_tresetplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetPlan {
-    return (ResetRequest{ .default_fg = default_fg, .default_bg = default_bg, .row = row }).plan();
+export fn st_tresetexecplan(default_fg: u32, default_bg: u32, row: c_int) ZigResetExecPlan {
+    return (ResetExec{ .request = .{ .default_fg = default_fg, .default_bg = default_bg, .row = row } }).plan();
 }
 
 export fn st_tresettabs(tabs: [*]c_int, col: c_int, tabspaces: c_uint) void {
@@ -305,6 +330,10 @@ fn addResizeRect(plan: *ZigResizeClearPlan, x1: c_int, y1: c_int, x2: c_int, y2:
     if (plan.count >= plan.rects.len) return;
     plan.rects[@intCast(plan.count)] = .{ .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2 };
     plan.count += 1;
+}
+
+fn resetScreenStep() ZigResetScreenStep {
+    return .{ .move_home = 1, .save_cursor = 1, .clear = 1, .swap_screen = 1 };
 }
 
 test "tsetscroll clamps to terminal rows" {
@@ -409,7 +438,7 @@ test "tresize row plan exposes resize and alloc ranges" {
 }
 
 test "treset plan sets default terminal state" {
-    const plan = st_tresetplan(7, 8, 24);
+    const plan = (ResetRequest{ .default_fg = 7, .default_bg = 8, .row = 24 }).plan();
 
     try std.testing.expectEqual(@as(c_ushort, attr_null), plan.cursor_attr_mode);
     try std.testing.expectEqual(@as(u32, 7), plan.cursor_fg);
@@ -418,6 +447,18 @@ test "treset plan sets default terminal state" {
     try std.testing.expectEqual(@as(c_int, 23), plan.bot);
     try std.testing.expectEqual(@as(c_int, mode_wrap | mode_utf8), plan.mode);
     try std.testing.expectEqual(@as(c_int, charset_usa), plan.trantbl);
+}
+
+test "treset exec plan owns double screen reset ordering" {
+    const plan = st_tresetexecplan(7, 8, 24);
+
+    try std.testing.expectEqual(@as(c_int, 2), plan.screen_step_count);
+    for (plan.screen_steps) |step| {
+        try std.testing.expectEqual(@as(c_int, 1), step.move_home);
+        try std.testing.expectEqual(@as(c_int, 1), step.save_cursor);
+        try std.testing.expectEqual(@as(c_int, 1), step.clear);
+        try std.testing.expectEqual(@as(c_int, 1), step.swap_screen);
+    }
 }
 
 test "treset tabs marks configured stops" {

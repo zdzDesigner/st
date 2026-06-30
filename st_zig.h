@@ -156,6 +156,8 @@ typedef struct {
 	int value;
 	int x;
 	int y;
+	int tab_clear_current;
+	int tab_clear_all;
 } ZigLightPlan;
 
 typedef struct {
@@ -196,6 +198,19 @@ typedef struct {
 	int charset;
 	int trantbl;
 } ZigResetPlan;
+
+typedef struct {
+	int move_home;
+	int save_cursor;
+	int clear;
+	int swap_screen;
+} ZigResetScreenStep;
+
+typedef struct {
+	ZigResetPlan state;
+	int screen_step_count;
+	ZigResetScreenStep screen_steps[2];
+} ZigResetExecPlan;
 
 typedef struct {
 	int count;
@@ -367,6 +382,7 @@ typedef struct {
 	int csi_write;
 	unsigned char csi_byte;
 	size_t new_csi_len;
+	int finish_esc;
 } ZigInputEscFlowPlan;
 
 enum {
@@ -894,6 +910,8 @@ ZigUtf8Decode st_utf8decode(const unsigned char *, size_t);
 size_t st_utf8encode(uint32_t, unsigned char *);
 ZigCsiParse st_csiparse(const unsigned char *, size_t);
 ZigCsiExecPlan st_csiexecplan(char, char, char, const int *, int, int, int, int, int);
+ZigMiscPlan st_toggleprinterplan(int);
+ZigMiscPlan st_startprinterplan(void);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigTermCursorPlan st_termcursorplan(int, ZigTermCursorSnapshot, int, int);
@@ -905,7 +923,7 @@ ZigKScrollPlan st_kscrolldownplan(int, int, int);
 ZigKScrollPlan st_kscrollupplan(int, int, int, int);
 ZigScrollRegion st_tsetscroll(int, int, int);
 ZigResizeExecPlan st_tresizeexecplan(const int *, int, int, int, int, int, int, int);
-ZigResetPlan st_tresetplan(uint32_t, uint32_t, int);
+ZigResetExecPlan st_tresetexecplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
 ZigModePlan st_modeplan(int, int, int, int);
 int st_tdefutf8plan(char, int);

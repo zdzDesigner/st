@@ -27,7 +27,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_base64.zig` 通过 `Base64Input`、`Base64Decoder` 承载 OSC 等路径复用的 base64 解码入口。
 - `st_csi.zig` 通过 `CsiParser`、`CsiArgParser` 和 `CsiExecPlan` 承载 CSI 原始字节解析、private marker 分类和 `csihandle` 顶层 command plan。
 - `st_line_core.zig` 通过 `Line`、`Lines`、`TabStops`、`VisualLine`、`ExternalPipe`、`Viewport` 承载 line length、tab、dirty range、dump/external pipe plan 和 attr scan 纯逻辑。
-- `st_state.zig` 通过 `ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`TabReset`、`ResizeClear` 承载 scroll region、resize、reset、tab 和 clear rect 规划；CSI set-scroll 的 cursor home coupling 由 `ZigStatePlan.cursor_home` 返回给 C executor。
+- `st_state.zig` 通过 `ScrollBounds`、`ResizeRequest`、`ResizeTabs`、`ResetRequest`、`ResetExec`、`TabReset`、`ResizeClear` 承载 scroll region、resize、reset、tab 和 clear rect 规划；CSI set-scroll 的 cursor home coupling 由 `ZigStatePlan.cursor_home` 返回给 C executor，`treset()` 的双屏 reset ordering 由 `ZigResetExecPlan` 返回给 C executor。
 - `st_edit.zig` 通过 `TextSpan`、`LineRegion`、`KeyboardScroll` 承载行内搬移、区域滚动、历史环形指针和键盘滚动规划；keyboard scroll 的 selection delta 和 full dirty effect 由 `ZigKScrollPlan` 返回给 C executor。
 - `st_cursor.zig` 通过 `TermCursor`、`ZigTermCursorSnapshot`、`ZigTermCursorPlan`、`DrawCursor` 和 `DrawExecPlan` 承载移动 clamp、origin-mode y 调整、换行、reverse-index、保存/恢复动作、draw frame/region 执行规划和 IME spot 更新判断。
 - `st_erase.zig` 通过 `ClearRect` 承载清理矩形归一化。
@@ -51,10 +51,12 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `ST_ZIG_*` 只暴露当前 C shim 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
 - Search 和 Selection 主流程已完成首轮迁移定版；近期工作以 ABI 瘦身和 effect 执行收口为主，已把一批 search/mode/strhandle 小 helper 回退到 C shim，并把 search 的资源释放、scan match reset、refresh-search 分支和 jump/redraw effect 集中到 C 侧 helper。本阶段重点不再是继续细碎删 helper，而是开始把状态所有权从 C 迁到 Zig。
 - Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 `ZigDrawExecPlan` 驱动的 frame/region 副作用调用链，并开始作为 `TermState Owner` 大步切片使用 `ZigTermFrameSnapshot` 收口 search/screen/cursor/viewport 标量；cursor move、origin-mode y 调整、newline、reverse-index 和 save/load 已合并为 `ZigTermCursorSnapshot -> st_termcursorplan`。dirty draw consumption 由 `ZigDrawExecPlan.region_clear_dirty` 显式表达 state update，最终 cursor y 写回由 `ZigDrawExecPlan.cy` 返回，旧 `st_tmoveto`、`st_tcursororiginy`、`st_tnewline`、`st_treverseindex`、`st_tcursorplan`、`st_drawregionplan`、`st_drawframeplan` ABI 和头文件中的旧 `ZigDrawFramePlan` typedef 已删除。
+- Reset ordering 已收敛为 `ZigResetExecPlan`：C 侧仍执行 `tmoveto`、`tcursor`、`tclearregion` 和 `tswapscreen` 副作用，但双屏 reset loop 的 action 顺序由 Zig state plan 明确返回。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
-- Mode/State 标量写回已完成收口：`tsetmode` simple bit writes 由 `ZigModePlan.mode_mask/mode_bits` 驱动，`tdefutf8` / `tdeftran` 改用 `st_tdefutf8plan` / `st_tdeftranplan`，media print mode 由 `ZigMiscPlan.mode_mask/mode_bits` 驱动；C 仍保留真实平台 mode 副作用和最终标量写回。
+- Light/Tab 状态写回已收口：CSI tab clear 的 current/all tab 写回由 `ZigLightPlan.tab_clear_current/tab_clear_all` 驱动，C executor 只执行 `term.tabs` 数组写入或 `memset`。
+- Mode/State 标量写回已完成收口：`tsetmode` simple bit writes 由 `ZigModePlan.mode_mask/mode_bits` 驱动，`tdefutf8` / `tdeftran` 改用 `st_tdefutf8plan` / `st_tdeftranplan`，media print mode、`toggleprinter()` 与 `ttynew(out)` 初始打印位由 `ZigMiscPlan.mode_mask/mode_bits` 驱动；C 仍保留真实平台 mode 副作用和最终标量写回。
 - Mode actions 已完成前三条低风险切片：alternate screen / cursor save-load 路径不再依赖 C fallthrough 表达顺序，mouse mode 路径不再由 C 重复维护 pointer/clear/set 顺序，origin/visibility/simple bit action 也不再让 C 持有 `set/!set` 规则；`ZigModePlan` 返回 action fields，C 继续执行真实副作用和 `allowaltscreen` gate。unknown diagnostics 仍保留在 C。
-- Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
+- Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；ESC flow 完成后的 `term.esc` 写回由 `ZigInputEscFlowPlan.finish_esc` 返回；旧 ESC/control 碎片 ABI 已删除。
 - Search 扫描已完成聚合：`searchscanline` 改用 `st_searchscanlineiter`，scan line 的 `x/nmatches/cap/y/scr` loop state 与 append/grow/stop 决策集中到 Zig；扫描结束后的 `nmatches/current` 收口也已改成 `st_searchscanupdate`；旧 `st_searchlineplan`、`st_searchlinematch`、`st_searchscanlineend`、`st_searchappendmatch` 小 ABI 已删除。
 - Selection 输出已完成首批聚合：`getsel` 改用 snapshot 形态的 `st_getselexecplan`，`selected` 改用 snapshot 形态的 `st_selected`，旧 `st_getsellineplan`、`st_getselbufsize`、`st_getsellastx`、`st_getselnewline` 小 ABI 已删除；selection adapter implementation 与 export 已从 `st_line.zig` 下沉到 `st_selection.zig`。
 - Selection result 消费已完成收口：`selstart` / `selextend` / `selscroll` 不再在调用点展开 state/dirty/clear effect，统一交给 C 侧 result executor 执行状态写回和必要副作用。

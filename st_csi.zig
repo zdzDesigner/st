@@ -45,6 +45,8 @@ const ZigLightPlan = extern struct {
     value: c_int,
     x: c_int,
     y: c_int,
+    tab_clear_current: c_int,
+    tab_clear_all: c_int,
 };
 
 const ZigStatePlan = extern struct {
@@ -130,6 +132,14 @@ export fn st_csiparse(buf: [*]const u8, len: usize) ZigCsiParse {
 export fn st_csiexecplan(mode0: c_char, mode1: c_char, priv: c_char, arg: [*]const c_int, len: c_int, x: c_int, y: c_int, col: c_int, row: c_int) ZigCsiExecPlan {
     const args = arg[0..@intCast(len)];
     return (CsiExec{ .mode0 = mode0, .mode1 = mode1, .private = priv != 0, .args = args, .x = x, .y = y, .col = col, .row = row }).plan();
+}
+
+export fn st_toggleprinterplan(mode: c_int) ZigMiscPlan {
+    return miscModeResult(misc_media_print_on, mode ^ mode_print);
+}
+
+export fn st_startprinterplan() ZigMiscPlan {
+    return miscModeResult(misc_media_print_on, mode_print);
 }
 
 const ParsedArg = struct {
@@ -303,21 +313,21 @@ const CsiExec = struct {
         const arg0 = defaultZero(self.args, 0);
         return switch (self.mode0) {
             'c' => if (arg0 == 0)
-                .{ .kind = light_write_vtident, .value = 0, .x = 0, .y = 0 }
+                lightResult(light_write_vtident, 0, 0, 0, 0, 0)
             else
-                .{ .kind = light_none, .value = 0, .x = 0, .y = 0 },
+                lightResult(light_none, 0, 0, 0, 0, 0),
             'g' => switch (arg0) {
-                0 => .{ .kind = light_clear_tab_current, .value = 0, .x = 0, .y = 0 },
-                3 => .{ .kind = light_clear_tab_all, .value = 0, .x = 0, .y = 0 },
-                else => .{ .kind = light_unknown, .value = arg0, .x = 0, .y = 0 },
+                0 => lightResult(light_clear_tab_current, 0, 0, 0, 1, 0),
+                3 => lightResult(light_clear_tab_all, 0, 0, 0, 0, 1),
+                else => lightResult(light_unknown, arg0, 0, 0, 0, 0),
             },
-            'I' => .{ .kind = light_put_tab, .value = countArg(self.args), .x = 0, .y = 0 },
-            'Z' => .{ .kind = light_put_tab, .value = -countArg(self.args), .x = 0, .y = 0 },
+            'I' => lightResult(light_put_tab, countArg(self.args), 0, 0, 0, 0),
+            'Z' => lightResult(light_put_tab, -countArg(self.args), 0, 0, 0, 0),
             'n' => if (arg0 == 6)
-                .{ .kind = light_write_cursor_position, .value = 0, .x = self.x + 1, .y = self.y + 1 }
+                lightResult(light_write_cursor_position, 0, self.x + 1, self.y + 1, 0, 0)
             else
-                .{ .kind = light_none, .value = 0, .x = 0, .y = 0 },
-            else => .{ .kind = light_unknown, .value = 0, .x = 0, .y = 0 },
+                lightResult(light_none, 0, 0, 0, 0, 0),
+            else => lightResult(light_unknown, 0, 0, 0, 0, 0),
         };
     }
 
@@ -361,7 +371,7 @@ fn emptyExec() ZigCsiExecPlan {
         .edit = .{ .kind = edit_unknown, .count = 0, .rect = zeroRect() },
         .cursor = .{ .kind = cursor_unknown, .x = 0, .y = 0 },
         .misc = miscResult(misc_unknown, 0, 0),
-        .light = .{ .kind = light_unknown, .value = 0, .x = 0, .y = 0 },
+        .light = lightResult(light_unknown, 0, 0, 0, 0, 0),
         .erase = .{ .kind = erase_unknown, .count = 0, .rects = std.mem.zeroes([2]ZigClearRect) },
         .state = .{ .kind = state_unknown, .top = 0, .bottom = 0, .cursor_home = 0 },
     };
@@ -373,6 +383,10 @@ fn miscResult(kind: c_int, value: c_int, extra: c_int) ZigMiscPlan {
 
 fn miscModeResult(kind: c_int, bits: c_int) ZigMiscPlan {
     return .{ .kind = kind, .value = 0, .extra = 0, .mode_mask = mode_print, .mode_bits = bits };
+}
+
+fn lightResult(kind: c_int, value: c_int, x: c_int, y: c_int, tab_clear_current: c_int, tab_clear_all: c_int) ZigLightPlan {
+    return .{ .kind = kind, .value = value, .x = x, .y = y, .tab_clear_current = tab_clear_current, .tab_clear_all = tab_clear_all };
 }
 
 fn addEraseRect(plan: *ZigErasePlan, x1: c_int, y1: c_int, x2: c_int, y2: c_int) void {
@@ -462,6 +476,8 @@ test "csi exec groups light and misc commands" {
     const misc = st_csiexecplan('b', 0, 0, &[_]c_int{0}, 1, 7, 9, 80, 24);
     const print_on = st_csiexecplan('i', 0, 0, &[_]c_int{5}, 1, 7, 9, 80, 24);
     const print_off = st_csiexecplan('i', 0, 0, &[_]c_int{4}, 1, 7, 9, 80, 24);
+    const clear_tab = st_csiexecplan('g', 0, 0, &[_]c_int{0}, 1, 7, 9, 80, 24);
+    const clear_tabs = st_csiexecplan('g', 0, 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
     const cursor_style = st_csiexecplan(' ', 'q', 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
     const invalid = st_csiexecplan(' ', 'x', 0, &[_]c_int{3}, 1, 7, 9, 80, 24);
 
@@ -469,6 +485,8 @@ test "csi exec groups light and misc commands" {
     try std.testing.expectEqual(@as(c_int, light_write_cursor_position), light.light.kind);
     try std.testing.expectEqual(@as(c_int, 8), light.light.x);
     try std.testing.expectEqual(@as(c_int, 10), light.light.y);
+    try std.testing.expectEqual(@as(c_int, 0), light.light.tab_clear_current);
+    try std.testing.expectEqual(@as(c_int, 0), light.light.tab_clear_all);
     try std.testing.expectEqual(@as(c_int, csi_exec_misc), misc.kind);
     try std.testing.expectEqual(@as(c_int, misc_repeat_last), misc.misc.kind);
     try std.testing.expectEqual(@as(c_int, 1), misc.misc.value);
@@ -476,8 +494,31 @@ test "csi exec groups light and misc commands" {
     try std.testing.expectEqual(@as(c_int, mode_print), print_on.misc.mode_bits);
     try std.testing.expectEqual(@as(c_int, mode_print), print_off.misc.mode_mask);
     try std.testing.expectEqual(@as(c_int, 0), print_off.misc.mode_bits);
+    try std.testing.expectEqual(@as(c_int, 1), clear_tab.light.tab_clear_current);
+    try std.testing.expectEqual(@as(c_int, 0), clear_tab.light.tab_clear_all);
+    try std.testing.expectEqual(@as(c_int, 0), clear_tabs.light.tab_clear_current);
+    try std.testing.expectEqual(@as(c_int, 1), clear_tabs.light.tab_clear_all);
+    try std.testing.expectEqual(@as(c_int, 0), cursor_style.light.tab_clear_current);
+    try std.testing.expectEqual(@as(c_int, 0), cursor_style.light.tab_clear_all);
     try std.testing.expectEqual(@as(c_int, misc_set_cursor_style), cursor_style.misc.kind);
     try std.testing.expectEqual(@as(c_int, csi_exec_unknown), invalid.kind);
+}
+
+test "toggle printer plan flips only print mode bit" {
+    const on = st_toggleprinterplan(0);
+    const off = st_toggleprinterplan(mode_print);
+
+    try std.testing.expectEqual(@as(c_int, mode_print), on.mode_mask);
+    try std.testing.expectEqual(@as(c_int, mode_print), on.mode_bits);
+    try std.testing.expectEqual(@as(c_int, mode_print), off.mode_mask);
+    try std.testing.expectEqual(@as(c_int, 0), off.mode_bits);
+}
+
+test "start printer plan sets print mode bit" {
+    const plan = st_startprinterplan();
+
+    try std.testing.expectEqual(@as(c_int, mode_print), plan.mode_mask);
+    try std.testing.expectEqual(@as(c_int, mode_print), plan.mode_bits);
 }
 
 test "csi exec groups mode attr and state" {
