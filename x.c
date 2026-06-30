@@ -562,9 +562,13 @@ void selnotify(XEvent *e)
             *repl++ = '\r';
         }
 
-        if (IS_SET(MODE_BRCKTPASTE) && ofs == 0) ttywrite("\033[200~", 6, 0);
-        ttywrite((char *)data, nitems * format / 8, 1);
-        if (IS_SET(MODE_BRCKTPASTE) && rem == 0) ttywrite("\033[201~", 6, 0);
+        if (searchinputactive()) {
+            searchinput((char *)data, nitems * format / 8);
+        } else {
+            if (IS_SET(MODE_BRCKTPASTE) && ofs == 0) ttywrite("\033[200~", 6, 0);
+            ttywrite((char *)data, nitems * format / 8, 1);
+            if (IS_SET(MODE_BRCKTPASTE) && rem == 0) ttywrite("\033[201~", 6, 0);
+        }
         XFree(data);
         /* number of 32-bit chunks returned */
         ofs += nitems * format / 32;
@@ -1834,6 +1838,13 @@ void kpress(XEvent *ev)
 
     if (searchinputactive()) {
         baseksym = XLookupKeysym(e, 0);
+        for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
+            if ((bp->func == clippaste || bp->func == selpaste) &&
+                shortcutmatch(bp, e) && match(bp->mod, e->state)) {
+                bp->func(&(bp->arg));
+                return;
+            }
+        }
         if (baseksym == XK_Escape) {
             searchclear(NULL);
         } else if ((e->state & ControlMask) && baseksym == XK_n) {

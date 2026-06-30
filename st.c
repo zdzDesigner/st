@@ -280,6 +280,7 @@ static void searchapplyupdate(ZigSearchStateUpdate);
 static void searchapplyresourceeffect(ZigSearchEffectPlan);
 static void searchapplyvieweffect(ZigSearchEffectPlan);
 static void searchapplyfloweffect(ZigSearchEffectPlan);
+static int searchresetscanmatches(void);
 static void searchresetstate(void);
 static void searchapplycursor(int);
 static void searchapplystate(int);
@@ -292,6 +293,7 @@ static ZigSelectionSnapshot selectionsnapshot(void);
 static void selectionapplystate(ZigSelectionStateUpdate);
 static void selectionapplybounds(ZigSelectionStateUpdate);
 static void selectionapplyresult(ZigSelectionStateResult);
+static void selectionapplyscrollresult(ZigSelectionStateResult);
 
 static void selnormalize(void);
 static void selscroll(int, int);
@@ -494,6 +496,15 @@ selectionapplyresult(ZigSelectionStateResult result)
 	selectionapplystate(result.update);
 	if (result.effect.dirty)
 		tsetdirt(result.effect.top, result.effect.bot);
+}
+
+static void
+selectionapplyscrollresult(ZigSelectionStateResult result)
+{
+	if (result.effect.clear)
+		selclear();
+	else
+		selectionapplystate(result.update);
 }
 
 int
@@ -818,6 +829,21 @@ searchapplyfloweffect(ZigSearchEffectPlan effect)
 		searchapplyvieweffect(effect);
 }
 
+static int
+searchresetscanmatches(void)
+{
+	SearchMatchesState matches;
+	SearchScalarState state;
+
+	state = searchscalarstate();
+	matches = searchmatchesstate();
+	if (search.matches && matches.cap > 0)
+		matches.count = 0;
+	matches.count = 0;
+	searchwritematchesstate(matches);
+	return state.current;
+}
+
 static void
 searchapplyqueryreplace(Rune *runes, ZigSearchSetResult result)
 {
@@ -1011,12 +1037,7 @@ searchscan(void)
 	/* scan 会重建整份 matches 数组。
 	 * 先记住旧 current，扫描结束后再决定保留旧索引、回退到 0，还是置为 -1。 */
 	state = searchscalarstate();
-	matches = searchmatchesstate();
-	oldcurrent = state.current;
-	if (search.matches && matches.cap > 0)
-		matches.count = 0;
-	matches.count = 0;
-	searchwritematchesstate(matches);
+	oldcurrent = searchresetscanmatches();
 	if (!state.active || state.query_len <= 0)
 		return;
 
@@ -1752,11 +1773,7 @@ selscroll(int orig, int n)
 	ZigSelectionStateResult result;
 
 	result = st_selscrollupdate(selectionsnapshot(), orig, term.top, term.bot, n);
-	if (result.effect.clear) {
-		selclear();
-	} else {
-		selectionapplystate(result.update);
-	}
+	selectionapplyscrollresult(result);
 }
 
 void
