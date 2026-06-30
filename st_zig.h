@@ -86,22 +86,26 @@ typedef struct {
 
 typedef struct {
 	int draw;
+	int clear_dirty;
 	int y;
 	int next_y;
 } ZigDrawRegionPlan;
 
 typedef struct {
-	int search_scan;
+	int search_active;
+	int scr;
 	int cx;
+	int current_y;
 	int ocx;
 	int ocy;
-	int cursor_active;
-	int imspot_active;
-} ZigDrawFramePlan;
+	int col;
+	int row;
+} ZigTermFrameSnapshot;
 
 typedef struct {
 	int search_scan;
 	int cx;
+	int cy;
 	int ocx;
 	int ocy;
 	int cursor_active;
@@ -871,7 +875,7 @@ ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigCursorMove st_tmoveto(int, int, int, int, int, int, int);
 ZigNewlinePlan st_tnewline(int, int, int, int, int);
 ZigNewlinePlan st_treverseindex(int, int, int);
-ZigDrawExecPlan st_drawexecplan(int, int, int, int, int, int, int, int, const ZigGlyph * const *, const int *, int, int);
+ZigDrawExecPlan st_drawexecplan(ZigTermFrameSnapshot, const ZigGlyph * const *, const int *, int, int);
 ZigDrawRegionPlan st_drawregionplan(const int *, int, int);
 ZigCursorStorePlan st_tcursorplan(int, int);
 ZigEditMove st_tdeletechar(int, int, int);

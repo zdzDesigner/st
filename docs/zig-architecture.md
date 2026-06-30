@@ -50,7 +50,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_zig.h` 与 Zig `export fn st_*` 符号集合已核对一致；当前仍是唯一公开 ABI，但定位已经调整为过渡兼容层。
 - `ST_ZIG_*` 只暴露当前 C shim 实际分支需要的常量；Zig 内部状态如未被 C 使用，不进入 `st_zig.h`。
 - Search 和 Selection 主流程已完成首轮迁移定版；近期工作以 ABI 瘦身和 effect 执行收口为主，已把一批 search/mode/strhandle 小 helper 回退到 C shim，并把 search 的资源释放、scan match reset、refresh-search 分支和 jump/redraw effect 集中到 C 侧 helper。本阶段重点不再是继续细碎删 helper，而是开始把状态所有权从 C 迁到 Zig。
-- Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 `ZigDrawExecPlan` 驱动的 frame/region 副作用调用链，旧 `st_drawframeplan` ABI 已删除。
+- Resize 已收敛为 `ZigResizeExecPlan` 驱动的 C shim 顺序；Draw 已收敛为 `ZigDrawExecPlan` 驱动的 frame/region 副作用调用链，并开始作为 `TermState Owner` 首批切片使用 `ZigTermFrameSnapshot` 收口 search/screen/cursor/viewport 标量。dirty draw consumption 由 `ZigDrawRegionPlan.clear_dirty` 显式表达 state update，最终 cursor y 写回由 `ZigDrawExecPlan.cy` 返回，旧 `st_drawframeplan` ABI 和头文件中的旧 `ZigDrawFramePlan` typedef 已删除。
 - CSI 已完成大块聚合：`csihandle` 只调用 `st_csiexecplan` 获取 cursor/edit/erase/mode/state/attr/misc/light 顶层动作；旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除。
 - Mode actions 已完成前三条低风险切片：alternate screen / cursor save-load 路径不再依赖 C fallthrough 表达顺序，mouse mode 路径不再由 C 重复维护 pointer/clear/set 顺序，origin/visibility/simple bit action 也不再让 C 持有 `set/!set` 规则；`ZigModePlan` 返回 action fields，C 继续执行真实副作用和 `allowaltscreen` gate。unknown diagnostics 仍保留在 C。
 - Input 已完成首批聚合：`tcontrolcode`、`eschandle` 和 `tputc` ESC flow 改用 `st_inputcontrolplan`、`st_inputescplan`、`st_inputescflowplan`；旧 ESC/control 碎片 ABI 已删除。
@@ -59,7 +59,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - Selection result 消费已完成收口：`selstart` / `selextend` / `selscroll` 不再在调用点展开 state/dirty/clear effect，统一交给 C 侧 result executor 执行状态写回和必要副作用。
 - ExternalPipe 已合并行长度、输出范围和 wrap newline 计划为 `st_externalpipeplan`，并按 deletion test 保留在 `st_line.zig`，因为它直接复用 `VisualLine` 与 line wrap 语义；C 保留历史行访问、UTF-8 编码和 pipe 写入副作用。
 - `st_line.zig` 剩余 exports 已完成 deletion test：line length、tab、attr scan、dump、dirty range 和 external pipe 都仍承载 line 领域规则；当前不再继续机械拆分 line adapter。
-- 已删除一批 deletion test 通过的 pass-through/obsolete ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_tmoveato_y`、`st_tlineinregion`、`st_tdefutf8`、`st_tdeftran`、`st_ttywritechunk`、`st_drawframeplan`。
+- 已删除一批 deletion test 通过的 pass-through/obsolete ABI：`st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_tmoveato_y`、`st_tlineinregion`、`st_tdefutf8`、`st_tdeftran`、`st_ttywritechunk`、`st_drawframeplan`，以及头文件中不再被 C 消费的 `ZigDrawFramePlan` typedef。
 - 低风险 shim-thinning 批次已关闭：Search、Selection、Draw、Resize、CSI、Input、Mode、Scroll/Edit、ExternalPipe 和 ABI/Test cleanup 都已到当前收益边界。后续如果继续推进，必须作为明确的 state ownership project，而不是继续机械合并 helper 或扫描浅 export。
 - 主线 ownership 复查已关闭：Search buffer、term dirty、selection、term cursor/viewport、input mainline 和 ABI/Test sweep 当前都没有安全的小代码切片。后续只能在选定单一 owner 边界后重开，不再重复做宽泛扫描。
 
@@ -123,7 +123,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - C 侧长期只保留平台桥接、系统调用、资源生命周期、最终副作用执行和必要的兼容 ABI。
 - Zig 侧不仅承载纯计划和解析逻辑，还要逐步承载 `term` / `sel` / `search` 的权威状态模型。
 - 后续新增行为如果只依赖值参数并返回计划结果，应直接进入 Zig 内部类型；如果当前仍需要访问 C 全局状态，应优先设计新的快照/更新结构，为后续搬迁所有权做准备，而不是新增长期 C 逻辑。
-- 下一阶段工作应从 `search`、`selection` 或 `term` 中选择一个明确 owner 边界，一次只迁一个状态族；不再把多个 ownership、buffer 生命周期和平台 effect 混在同一批里。
+- 下一阶段工作已选择 `term` 的 Dirty + Cursor + Draw 作为明确 owner seam；继续一次只迁这个状态族，不把 line buffer ownership、history ownership 或平台 effect 混进同一批。
 
 ## 验证基线
 

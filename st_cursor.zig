@@ -1,6 +1,6 @@
 //! st_cursor.zig 负责光标移动 clamp、换行、绘制光标和保存恢复规划。
 //! [输入]: 目标坐标、光标状态、滚动区域、dirty/line 指针和保存恢复 mode。
-//! [输出]: `ZigCursorMove`、`ZigNewlinePlan`、draw frame/region plan 和 cursor store plan。
+//! [输出]: `ZigCursorMove`、`ZigNewlinePlan`、term frame snapshot、draw frame/region plan 和 cursor store plan。
 //! [副作用边界]: 不调用 `tmoveto(...)` / `tmoveato(...)`，不修改 `term.c`；C 侧 executor 负责真实移动。
 //! [定位]: 支撑 C executor 的光标副作用边界；CSI 顶层分类已收敛到 `st_csi.zig`。
 
@@ -35,19 +35,33 @@ const ZigGlyph = extern struct {
 
 pub const ZigDrawCursorPlan = extern struct {
     cx: c_int,
+    cy: c_int,
     ocx: c_int,
     ocy: c_int,
 };
 
 pub const ZigDrawRegionPlan = extern struct {
     draw: c_int,
+    clear_dirty: c_int,
     y: c_int,
     next_y: c_int,
+};
+
+pub const ZigTermFrameSnapshot = extern struct {
+    search_active: c_int,
+    scr: c_int,
+    cx: c_int,
+    current_y: c_int,
+    ocx: c_int,
+    ocy: c_int,
+    col: c_int,
+    row: c_int,
 };
 
 pub const ZigDrawFramePlan = extern struct {
     search_scan: c_int,
     cx: c_int,
+    cy: c_int,
     ocx: c_int,
     ocy: c_int,
     cursor_active: c_int,
@@ -57,6 +71,7 @@ pub const ZigDrawFramePlan = extern struct {
 pub const ZigDrawExecPlan = extern struct {
     search_scan: c_int,
     cx: c_int,
+    cy: c_int,
     ocx: c_int,
     ocy: c_int,
     cursor_active: c_int,
@@ -154,6 +169,7 @@ fn DrawCursor(comptime Glyph: type) type {
         fn plan(self: Self) ZigDrawCursorPlan {
             var result = ZigDrawCursorPlan{
                 .cx = self.cx,
+                .cy = limitInt(self.current_y, 0, self.row - 1),
                 .ocx = limitInt(self.ocx, 0, self.col - 1),
                 .ocy = limitInt(self.ocy, 0, self.row - 1),
             };
@@ -161,7 +177,7 @@ fn DrawCursor(comptime Glyph: type) type {
             if ((self.lines[@intCast(result.ocy)][@intCast(result.ocx)].mode & attr_wdummy) != 0) {
                 result.ocx -= 1;
             }
-            if ((self.lines[@intCast(self.current_y)][@intCast(result.cx)].mode & attr_wdummy) != 0) {
+            if ((self.lines[@intCast(result.cy)][@intCast(result.cx)].mode & attr_wdummy) != 0) {
                 result.cx -= 1;
             }
             return result;
@@ -194,10 +210,10 @@ const DrawRegion = struct {
         var y = self.start_y;
         while (y < self.end_y) : (y += 1) {
             if (self.dirty[@intCast(y)] != 0) {
-                return .{ .draw = 1, .y = y, .next_y = y + 1 };
+                return .{ .draw = 1, .clear_dirty = 1, .y = y, .next_y = y + 1 };
             }
         }
-        return .{ .draw = 0, .y = self.end_y, .next_y = self.end_y };
+        return .{ .draw = 0, .clear_dirty = 0, .y = self.end_y, .next_y = self.end_y };
     }
 };
 
@@ -213,24 +229,26 @@ export fn st_treverseindex(x: c_int, y: c_int, top: c_int) ZigNewlinePlan {
     return (CursorLine{ .x = x, .y = y, .top = top, .bot = top }).reverseIndex();
 }
 
-fn drawFramePlan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
-    const cursor = (DrawCursor(ZigGlyph){ .cx = cx, .current_y = current_y, .ocx = ocx, .ocy = ocy, .col = col, .row = row, .lines = lines[0..@intCast(row)] }).plan();
+fn drawFramePlan(snapshot: ZigTermFrameSnapshot, lines: [*]const [*]const ZigGlyph) ZigDrawFramePlan {
+    const cursor = (DrawCursor(ZigGlyph){ .cx = snapshot.cx, .current_y = snapshot.current_y, .ocx = snapshot.ocx, .ocy = snapshot.ocy, .col = snapshot.col, .row = snapshot.row, .lines = lines[0..@intCast(snapshot.row)] }).plan();
     return .{
-        .search_scan = if (search_active != 0) 1 else 0,
+        .search_scan = if (snapshot.search_active != 0) 1 else 0,
         .cx = cursor.cx,
+        .cy = cursor.cy,
         .ocx = cursor.ocx,
         .ocy = cursor.ocy,
-        .cursor_active = if (scr == 0) 1 else 0,
-        .imspot_active = if (ocx != cursor.cx or ocy != current_y) 1 else 0,
+        .cursor_active = if (snapshot.scr == 0) 1 else 0,
+        .imspot_active = if (snapshot.ocx != cursor.cx or snapshot.ocy != snapshot.current_y) 1 else 0,
     };
 }
 
-export fn st_drawexecplan(search_active: c_int, scr: c_int, cx: c_int, current_y: c_int, ocx: c_int, ocy: c_int, col: c_int, row: c_int, lines: [*]const [*]const ZigGlyph, dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawExecPlan {
-    const frame = drawFramePlan(search_active, scr, cx, current_y, ocx, ocy, col, row, lines);
+export fn st_drawexecplan(snapshot: ZigTermFrameSnapshot, lines: [*]const [*]const ZigGlyph, dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawExecPlan {
+    const frame = drawFramePlan(snapshot, lines);
     const region = (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y1, .end_y = y2 }).plan();
     return .{
         .search_scan = frame.search_scan,
         .cx = frame.cx,
+        .cy = frame.cy,
         .ocx = frame.ocx,
         .ocy = frame.ocy,
         .cursor_active = frame.cursor_active,
@@ -308,10 +326,12 @@ test "draw cursor plan clamps old cursor and adjusts dummy cells" {
         .{ .u = '试', .mode = attr_wdummy, .fg = 0, .bg = 0 },
     };
     const lines = [_][*]const ZigGlyph{ &row0, &row1 };
-    const plan = drawFramePlan(1, 0, 1, 1, 9, 0, 2, 2, &lines);
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 1, .scr = 0, .cx = 1, .current_y = 1, .ocx = 9, .ocy = 0, .col = 2, .row = 2 };
+    const plan = drawFramePlan(snapshot, &lines);
 
     try std.testing.expectEqual(@as(c_int, 1), plan.search_scan);
     try std.testing.expectEqual(@as(c_int, 0), plan.cx);
+    try std.testing.expectEqual(@as(c_int, 1), plan.cy);
     try std.testing.expectEqual(@as(c_int, 0), plan.ocx);
     try std.testing.expectEqual(@as(c_int, 0), plan.ocy);
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_active);
@@ -324,9 +344,11 @@ test "draw region plan finds next dirty line" {
     const empty = st_drawregionplan(&dirty, 3, dirty.len);
 
     try std.testing.expectEqual(@as(c_int, 1), found.draw);
+    try std.testing.expectEqual(@as(c_int, 1), found.clear_dirty);
     try std.testing.expectEqual(@as(c_int, 2), found.y);
     try std.testing.expectEqual(@as(c_int, 3), found.next_y);
     try std.testing.expectEqual(@as(c_int, 0), empty.draw);
+    try std.testing.expectEqual(@as(c_int, 0), empty.clear_dirty);
     try std.testing.expectEqual(@as(c_int, 4), empty.next_y);
 }
 
@@ -335,9 +357,11 @@ test "draw exec plan combines frame and first dirty region" {
     var row1 = [_]ZigGlyph{.{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 }};
     const lines = [_][*]const ZigGlyph{ &row0, &row1 };
     const dirty = [_]c_int{ 0, 1 };
-    const plan = st_drawexecplan(1, 0, 0, 0, 0, 0, 1, 2, &lines, &dirty, 0, dirty.len);
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 1, .scr = 0, .cx = 0, .current_y = 0, .ocx = 0, .ocy = 0, .col = 1, .row = 2 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
 
     try std.testing.expectEqual(@as(c_int, 1), plan.search_scan);
+    try std.testing.expectEqual(@as(c_int, 0), plan.cy);
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_active);
     try std.testing.expectEqual(@as(c_int, 1), plan.region_draw);
     try std.testing.expectEqual(@as(c_int, 1), plan.region_y);
@@ -347,7 +371,8 @@ test "draw exec plan combines frame and first dirty region" {
 test "draw plans gate search scan and cursor" {
     var row0 = [_]ZigGlyph{.{ .u = 'a', .mode = 0, .fg = 0, .bg = 0 }};
     const lines = [_][*]const ZigGlyph{&row0};
-    const inactive = drawFramePlan(0, 2, 0, 0, 0, 0, 1, 1, &lines);
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 2, .cx = 0, .current_y = 0, .ocx = 0, .ocy = 0, .col = 1, .row = 1 };
+    const inactive = drawFramePlan(snapshot, &lines);
 
     try std.testing.expectEqual(@as(c_int, 0), inactive.search_scan);
     try std.testing.expectEqual(@as(c_int, 0), inactive.cursor_active);

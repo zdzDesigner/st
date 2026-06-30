@@ -187,10 +187,11 @@ flowchart TD
     Rows --> Tabs[st.c tabs]
     Tabs --> Clear[st.c tclearregion]
 
-    Draw[draw] --> Frame[st_cursor.zig DrawExecPlan]
+    Draw[draw] --> Snapshot[ZigTermFrameSnapshot]
+    Snapshot --> Frame[st_cursor.zig DrawExecPlan]
     Frame --> SearchScan[searchscan]
     Frame --> Region[drawregion]
-    Region --> DirtyGate[st_cursor.zig DrawRegionPlan]
+    Region --> DirtyGate[st_cursor.zig DrawRegionPlan / clear_dirty update]
     DirtyGate --> XDraw[xdrawline]
     Frame --> XCursor[xdrawcursor]
     Frame --> ImeSpot[xximspot]
@@ -224,10 +225,10 @@ flowchart LR
 - **Search 第一优先级**：主流程纯逻辑已稳定，且小 ABI 已大幅收薄；`SearchSnapshot`、`SearchStateUpdate`、`ZigSearchInputState` 和 `SearchEffectPlan` 已让 Zig 接管主要 search 状态决策，C 侧通过集中 helper 执行 resource/view/flow effect、query replace transaction、input buffer mutation 和 scan match reset。下一步若继续推进，应优先让 input delete/clear 也消费更完整的 Zig input transaction，再评估 buffer ownership。
 - **Selection 定版**：主流程完成，`selected/getsel` 已改为 snapshot interface，line snap step 和 word snap loop step 已 plan 化，selection adapter implementation 与 export 已下沉到 `st_selection.zig`；C 侧 result executor 统一执行 selection state/dirty/clear effect，仍只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
 - **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
-- **Draw 收口**：draw frame gate、cursor 调整和首个 dirty region 查询已收敛为 `ZigDrawExecPlan`；C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链，旧 `st_drawframeplan` ABI 已删除。
+- **Draw/TermState 首批收口**：draw frame gate、cursor 调整和首个 dirty region 查询已收敛为 `ZigDrawExecPlan`；draw 入口现在通过 `ZigTermFrameSnapshot` 传递 search/screen/cursor/viewport 标量，dirty draw consumption 通过 `DrawRegionPlan.clear_dirty` 显式返回 state update，最终 cursor y 写回也通过 `ZigDrawExecPlan.cy` 返回。C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链，旧 `st_drawframeplan` ABI 和头文件中的旧 `ZigDrawFramePlan` typedef 已删除。
 - **CSI 聚合**：`csihandle` 已改为 `ZigCsiExecPlan` 顶层分发，六个旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除；C 继续执行真实副作用。
 - **ExternalPipe 聚合**：行长度、write/skip、lastpos 和 wrap newline 已合并为 `st_externalpipeplan`；C 继续负责 `tlinehist`、`utf8encode` 和 `xwrite`。`tlinehist` 的 history plan export 已下沉到 `st_search.zig`。
 - **ABI 瘦身**：`st_zig.h` 仍只保留 C shim 实际调用入口；已清理多轮旧 `st_plan*`、search/mode/strhandle 小 helper，以及 `st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_drawframeplan` 等 pass-through/obsolete exports。后续新增边界优先是 snapshot/update/effect 结构，而不是新的零碎 `st_*` 导出。
 - **批次边界**：低风险 shim-thinning 已完成批量收口；Batch 2-6 均关闭或延期到 deliberate state ownership project。下一步不再规划新的浅 candidate，而应选择一个状态族进入 ownership design。
-- **主线边界**：Search ownership pilot、Term dirty ownership、Selection ownership review、Term cursor/viewport ownership、Input/mainline ownership 和 ABI/Test final sweep 已完成复查；当前没有安全的小切片。后续只能选择一个明确 owner 边界进入设计，不再重复做主线扫描。
+- **主线边界**：Search ownership pilot、Term dirty ownership、Selection ownership review、Term cursor/viewport ownership、Input/mainline ownership 和 ABI/Test final sweep 已完成复查；当前已选择 `TermState Owner` 的 Dirty + Cursor + Draw 范围进入首批切片。后续继续沿这个 owner seam 扩展，不再重复做主线扫描或新增浅 candidate。
 - **验证要求**：每批迁移后执行 `zig fmt`、`zig build abi-check`、`zig build test`、`zig build`；提交或发布前补 `timeout 5 ./zig-out/bin/st`。
