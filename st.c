@@ -34,7 +34,7 @@
 #define UTF_SIZ 4
 #define ESC_BUF_SIZ (128 * UTF_SIZ)
 #define ESC_ARG_SIZ 16
-#define STR_BUF_SIZ ESC_BUF_SIZ
+#define STR_BUF_SIZ ST_ZIG_STR_BUF_SIZ
 #define STR_ARG_SIZ ESC_ARG_SIZ
 #define HISTSIZE 2000
 
@@ -225,6 +225,9 @@ static void csireset(void);
 static int eschandle(uchar);
 static void strdump(void);
 static void strhandle(void);
+static void strapplyplan(const ZigStrHandlePlan *, int);
+static char *strarg(const ZigStrHandlePlan *, int, int, const char *);
+static char *strargpar(int, int);
 static void strparse(void);
 static void strreset(void);
 
@@ -253,6 +256,8 @@ static void tsetattr(int *, int);
 static void tsetchar(Rune, Glyph *, int, int);
 static void tsetdirt(int, int);
 static void termapplydirtyrange(ZigLineRange);
+static void termapplyresetstate(const ZigResetPlan *);
+static void termapplyscrollregion(ZigScrollRegion);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
@@ -1428,17 +1433,8 @@ void treset(void) {
     ZigResetExecPlan plan;
 
     plan = st_tresetexecplan(defaultfg, defaultbg, term.row);
-    term.c = (TCursor){{.mode = plan.state.cursor_attr_mode, .fg = plan.state.cursor_fg, .bg = plan.state.cursor_bg},
-                       .x = plan.state.cursor_x,
-                       .y = plan.state.cursor_y,
-                       .state = plan.state.cursor_state};
-
+    termapplyresetstate(&plan.state);
     st_tresettabs(term.tabs, term.col, tabspaces);
-    term.top = plan.state.top;
-    term.bot = plan.state.bot;
-    term.mode = plan.state.mode;
-    memset(term.trantbl, plan.state.trantbl, sizeof(term.trantbl));
-    term.charset = plan.state.charset;
 
     if (plan.screen_step_count != 2)
         die("invalid reset screen step count: %d\n", plan.screen_step_count);
@@ -1453,6 +1449,18 @@ void treset(void) {
         if (step->swap_screen)
             tswapscreen();
     }
+}
+
+void termapplyresetstate(const ZigResetPlan *state) {
+    term.c = (TCursor){{.mode = state->cursor_attr_mode, .fg = state->cursor_fg, .bg = state->cursor_bg},
+                       .x = state->cursor_x,
+                       .y = state->cursor_y,
+                       .state = state->cursor_state};
+    term.top = state->top;
+    term.bot = state->bot;
+    term.mode = state->mode;
+    memset(term.trantbl, state->trantbl, sizeof(term.trantbl));
+    term.charset = state->charset;
 }
 
 void tnew(int col, int row) {
@@ -1504,24 +1512,24 @@ void tscrolldown(int orig, int n, int copyhist) {
     plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 0, copyhist, term.histi);
     n = plan.count;
 
-    if (copyhist) {
+    if (plan.hist_swap) {
         term.histi = plan.new_histi;
         temp = term.hist[term.histi];
-        term.hist[term.histi] = term.line[term.bot];
-        term.line[term.bot] = temp;
+        term.hist[term.histi] = term.line[plan.hist_line];
+        term.line[plan.hist_line] = temp;
     }
 
     tsetdirt(orig, term.bot - n);
     tclearregion(0, term.bot - n + 1, term.col - 1, term.bot);
 
-    for (i = term.bot; i >= orig + n; i--) {
+    for (i = plan.line_start; i >= plan.line_end; i += plan.line_step) {
         temp = term.line[i];
-        term.line[i] = term.line[i - n];
-        term.line[i - n] = temp;
+        term.line[i] = term.line[i + plan.line_offset];
+        term.line[i + plan.line_offset] = temp;
     }
 
-    if (term.scr == 0)
-        selscroll(orig, n);
+    if (plan.selscroll_delta)
+        selscroll(orig, plan.selscroll_delta);
 }
 
 void tscrollup(int orig, int n, int copyhist) {
@@ -1532,11 +1540,11 @@ void tscrollup(int orig, int n, int copyhist) {
     plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 1, copyhist, term.histi);
     n = plan.count;
 
-    if (copyhist) {
+    if (plan.hist_swap) {
         term.histi = plan.new_histi;
         temp = term.hist[term.histi];
-        term.hist[term.histi] = term.line[orig];
-        term.line[orig] = temp;
+        term.hist[term.histi] = term.line[plan.hist_line];
+        term.line[plan.hist_line] = temp;
     }
 
     term.scr = plan.new_scr;
@@ -1544,14 +1552,14 @@ void tscrollup(int orig, int n, int copyhist) {
     tclearregion(0, orig, term.col - 1, orig + n - 1);
     tsetdirt(orig + n, term.bot);
 
-    for (i = orig; i <= term.bot - n; i++) {
+    for (i = plan.line_start; i <= plan.line_end; i += plan.line_step) {
         temp = term.line[i];
-        term.line[i] = term.line[i + n];
-        term.line[i + n] = temp;
+        term.line[i] = term.line[i + plan.line_offset];
+        term.line[i + plan.line_offset] = temp;
     }
 
-    if (term.scr == 0)
-        selscroll(orig, -n);
+    if (plan.selscroll_delta)
+        selscroll(orig, plan.selscroll_delta);
 }
 
 void selscroll(int orig, int n) {
@@ -1706,12 +1714,16 @@ void tsetattr(int *attr, int l) {
     }
 }
 
+void termapplyscrollregion(ZigScrollRegion region) {
+    term.top = region.top;
+    term.bot = region.bottom;
+}
+
 void tsetscroll(int t, int b) {
     ZigScrollRegion region;
 
     region = st_tsetscroll(t, b, term.row);
-    term.top = region.top;
-    term.bot = region.bottom;
+    termapplyscrollregion(region);
 }
 
 void tapplyerase(const ZigErasePlan *plan) {
@@ -2003,35 +2015,46 @@ void csidump(void) {
 
 void csireset(void) { memset(&csiescseq, 0, sizeof(csiescseq)); }
 
-void strhandle(void) {
-    ZigStrHandlePlan plan;
+char *strarg(const ZigStrHandlePlan *plan, int index, int narg, const char *label) {
+    if (index < 0 || index >= narg) {
+        if (plan)
+            die("invalid str arg index label=%s index=%d narg=%d kind=%d\n", label, index, narg, plan->kind);
+        die("invalid str arg index label=%s index=%d narg=%d plan=NULL\n", label, index, narg);
+    }
+    return strescseq.args[index];
+}
+
+char *strargpar(int index, int narg) {
+    if (index < 0 || index >= narg)
+        die("invalid str par arg index=%d narg=%d\n", index, narg);
+    return strescseq.args[index];
+}
+
+void strapplyplan(const ZigStrHandlePlan *plan, int narg) {
     char *p = NULL, *dec;
-    int j, narg, par;
+    int j;
 
-    term.esc &= ~(ESC_STR_END | ESC_STR);
-    strparse();
-    par = (narg = strescseq.narg) ? atoi(strescseq.args[0]) : 0;
-    plan = st_strhandleplan(strescseq.type, narg, par, allowwindowops);
+    /* strarg() 将旧版空参数 UB 收敛为带上下文的显式错误。 */
 
-    switch (plan.kind) {
+    switch (plan->kind) {
     case 1:
-        xsettitle(strescseq.args[1]);
-        xseticontitle(strescseq.args[1]);
+        xsettitle(strarg(plan, plan->payload_arg, narg, "title"));
+        xseticontitle(strarg(plan, plan->payload_arg, narg, "icon-title"));
         return;
     case 2:
-        xseticontitle(strescseq.args[1]);
+        xseticontitle(strarg(plan, plan->payload_arg, narg, "icon-title"));
         return;
     case 3:
-        xsettitle(strescseq.args[1]);
+        xsettitle(strarg(plan, plan->payload_arg, narg, "title"));
         return;
     case 4:
-        xsettitle(strescseq.args[0]);
+        xsettitle(strarg(plan, plan->payload_arg, narg, "old-title"));
         return;
     case 5:
         return;
     case 0:
-        if (plan.clipboard_run) {
-            dec = base64dec(strescseq.args[2]);
+        if (plan->clipboard_run) {
+            dec = base64dec(strarg(plan, plan->color_arg, narg, "clipboard"));
             if (dec) {
                 xsetsel(dec);
                 xclipcopy();
@@ -2041,8 +2064,8 @@ void strhandle(void) {
         }
         return;
     case 7:
-        p = strescseq.args[2];
-        j = plan.arg1_present ? atoi(strescseq.args[1]) : -1;
+        p = strarg(plan, plan->color_arg, narg, "color-value");
+        j = plan->arg1_present ? atoi(strarg(plan, plan->payload_arg, narg, "color-index")) : -1;
         if (xsetcolorname(j, p)) {
             fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
         } else {
@@ -2050,10 +2073,11 @@ void strhandle(void) {
         }
         return;
     case 8:
-        j = plan.arg1_present ? atoi(strescseq.args[1]) : -1;
+        if (!plan->arg1_present)
+            return;
+        j = atoi(strarg(plan, plan->payload_arg, narg, "color-index"));
+        /* OSC 104 带参数时重置指定颜色槽；NULL 要求 xsetcolorname 恢复默认值。 */
         if (xsetcolorname(j, p)) {
-            if (!plan.arg1_present)
-                return;
             fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
         } else {
             redraw();
@@ -2071,11 +2095,23 @@ void strhandle(void) {
     strdump();
 }
 
+void strhandle(void) {
+    ZigStrHandleParPlan par_plan;
+    ZigStrHandlePlan plan;
+    int narg, par;
+
+    term.esc &= ~(ESC_STR_END | ESC_STR);
+    strparse();
+    narg = strescseq.narg;
+    par_plan = st_strhandleparplan(narg);
+    par = par_plan.use_arg ? atoi(strargpar(par_plan.arg, narg)) : par_plan.default_value;
+    plan = st_strhandleplan(strescseq.type, narg, par, allowwindowops);
+    strapplyplan(&plan, narg);
+}
+
 void strparse(void) {
     ZigStrParse parsed;
-    char *p;
     int i;
-    size_t start;
 
     strescseq.buf[strescseq.len] = '\0';
     strescseq.narg = 0;
@@ -2085,13 +2121,10 @@ void strparse(void) {
 
     parsed = st_strparse((const unsigned char *)strescseq.buf, strescseq.len);
     strescseq.narg = parsed.narg;
-    start = 0;
     for (i = 0; i < strescseq.narg; ++i) {
-        strescseq.args[i] = &strescseq.buf[start];
-        p = &strescseq.buf[parsed.ends[i]];
-        if (*p == ';')
-            *p = '\0';
-        start = parsed.ends[i] + 1;
+        strescseq.args[i] = &strescseq.buf[parsed.starts[i]];
+        if (parsed.nul_terms[i])
+            strescseq.buf[parsed.ends[i]] = '\0';
     }
 }
 
@@ -2176,9 +2209,11 @@ void strdump(void) {
 }
 
 void strreset(void) {
+    ZigStrResetPlan plan = st_strresetplan();
+
     strescseq = (STREscape){
-        .buf = xrealloc(strescseq.buf, STR_BUF_SIZ),
-        .siz = STR_BUF_SIZ,
+        .buf = xrealloc(strescseq.buf, plan.size),
+        .siz = plan.size,
     };
 }
 
@@ -2396,6 +2431,7 @@ void tputc(Rune u) {
     ZigPutcDecode decoded;
     ZigPutcWriteResult write;
     ZigPutcPreparePlan prepare;
+    ZigStrCollectApplyPlan collect_plan;
     ZigStrCollectExec collect_exec;
     ZigInputEscFlowPlan escflow;
     int control;
@@ -2419,8 +2455,9 @@ void tputc(Rune u) {
      * character.
      */
     if (term.esc & ESC_STR) {
-        collect_exec = st_tcollectstr(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
-                                      (const unsigned char *)c, len, strescseq.siz);
+        collect_plan = st_tcollectstrapply(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
+                                           (const unsigned char *)c, len, strescseq.siz);
+        collect_exec = collect_plan.first;
         if (collect_exec.kind == ST_ZIG_STR_COLLECT_FINISH) {
             term.esc = collect_exec.new_esc;
             goto check_control_code;
@@ -2445,8 +2482,13 @@ void tputc(Rune u) {
              */
             strescseq.siz = collect_exec.new_size;
             strescseq.buf = xrealloc(strescseq.buf, strescseq.siz);
-            collect_exec = st_tcollectstr(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
-                                          (const unsigned char *)c, len, strescseq.siz);
+            if (collect_plan.retry) {
+                collect_exec = st_tcollectstr(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
+                                              (const unsigned char *)c, len, strescseq.siz);
+                if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW)
+                    die("str collect retry still needs growth: len=%zu chunk=%zu size=%zu\n", strescseq.len,
+                        (size_t)len, strescseq.siz);
+            }
         }
 
         strescseq.len = collect_exec.new_len;
@@ -2653,29 +2695,27 @@ void drawregion(int x1, int y1, int x2, int y2) {
 }
 
 void draw(void) {
-    int cursor_x = term.c.x;
     ZigTermFrameSnapshot snapshot;
     ZigDrawExecPlan frame;
 
     if (!xstartdraw())
         return;
     snapshot =
-        (ZigTermFrameSnapshot){search.active, term.scr, cursor_x, term.c.y, term.ocx, term.ocy, term.col, term.row};
+        (ZigTermFrameSnapshot){search.active, term.scr, term.c.x, term.c.y, term.ocx, term.ocy, term.col, term.row};
     frame = st_drawexecplan(snapshot, (const ZigGlyph *const *)term.line, term.dirty, 0, term.row);
     if (frame.search_scan)
         searchscan();
 
-    cursor_x = frame.cx;
     term.ocx = frame.ocx;
     term.ocy = frame.ocy;
 
     if (frame.region_draw)
         drawregion(0, frame.region_y, term.col, term.row);
     if (frame.cursor_active)
-        xdrawcursor(cursor_x, term.c.y, term.line[term.c.y][cursor_x], term.ocx, term.ocy,
+        xdrawcursor(frame.cx, term.c.y, term.line[term.c.y][frame.cx], term.ocx, term.ocy,
                     term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
-    term.ocx = cursor_x;
-    term.ocy = frame.cy;
+    term.ocx = frame.new_ocx;
+    term.ocy = frame.new_ocy;
     xfinishdraw();
     if (frame.imspot_active)
         xximspot(term.ocx, term.ocy);

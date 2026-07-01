@@ -222,16 +222,29 @@ flowchart LR
     F --> G[再评估 PTY/X11/clipboard 所有权]
 ```
 
+当前最终目标拆成四个 owner project，按风险从低到高执行：
+
+1. **STR/Input owner**：完成 STR collection、parse、handle 的决策收口，再评估 `strescseq.buf` transaction ownership。
+2. **Line/History owner**：单独处理 `term.line`、`term.alt`、`term.hist`、`term.histi` 的 pointer swap、resize 和 scroll transaction。
+3. **TermState owner**：合并 cursor、dirty、mode、scroll、reset、resize 的标量 update/effect plan。
+4. **Platform shim**：最后评估 X11、PTY、clipboard、IO 的 effect ordering 和 C shim 缩减。
+
+Platform shim 的实现入口当前只开放 effect-ordering plan，不迁移 X11 display、PTY fd、clipboard selection 或 IO fd ownership；真实平台资源 ownership 必须等前三个 owner project 稳定后再评估。
+
 - **Search 第一优先级**：主流程纯逻辑已稳定，且小 ABI 已大幅收薄；`SearchSnapshot`、`SearchStateUpdate`、`ZigSearchInputState` 和 `SearchEffectPlan` 已让 Zig 接管主要 search 状态决策，C 侧通过集中 helper 执行 resource/view/flow effect、query replace transaction、input buffer mutation 和 scan match reset。下一步若继续推进，应优先让 input delete/clear 也消费更完整的 Zig input transaction，再评估 buffer ownership。
 - **Selection 定版**：主流程完成，`selected/getsel` 已改为 snapshot interface，line snap step 和 word snap loop step 已 plan 化，selection adapter implementation 与 export 已下沉到 `st_selection.zig`；C 侧 result executor 统一执行 selection state/dirty/clear effect，仍只保留 `TLINE(...)` glyph 读取、delimiter 判断、selection 全局状态写回和 clipboard 文本输出。
 - **Resize 收口**：`tresize` 已按 `ZigResizeExecPlan` 执行 slide/free、container realloc、hist resize/fill、line resize/alloc、tabs 和 clear；C 继续执行 `xrealloc/free/memmove/xmalloc/memset/tclearregion`。
-- **Draw/TermState 大步收口**：draw frame gate、cursor 调整和 dirty region 查询已收敛为 `ZigDrawExecPlan`；draw 入口通过 `ZigTermFrameSnapshot` 传递 search/screen/cursor/viewport 标量，cursor move、origin-mode y 调整、newline、reverse-index 和 save/load 已合并为 `ZigTermCursorSnapshot -> st_termcursorplan`。dirty draw consumption 通过 `ZigDrawExecPlan.region_clear_dirty` 显式返回 state update，最终 cursor y 写回也通过 `ZigDrawExecPlan.cy` 返回。C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链，旧 `st_tmoveto`、`st_tcursororiginy`、`st_tnewline`、`st_treverseindex`、`st_tcursorplan`、`st_drawregionplan`、`st_drawframeplan` ABI 和头文件中的旧 `ZigDrawFramePlan` typedef 已删除。
+- **Draw/TermState 大步收口**：draw frame gate、cursor 调整和 dirty region 查询已收敛为 `ZigDrawExecPlan`；draw 入口通过 `ZigTermFrameSnapshot` 传递 search/screen/cursor/viewport 标量，cursor move、origin-mode y 调整、newline、reverse-index 和 save/load 已合并为 `ZigTermCursorSnapshot -> st_termcursorplan`。dirty draw consumption 通过 `ZigDrawExecPlan.region_clear_dirty` 显式返回 state update，draw 完成后的 old-cursor state 写回通过 `ZigDrawExecPlan.new_ocx/new_ocy` 返回。C 侧只表达 `xstartdraw`、searchscan、drawregion、cursor、IME 和 `xfinishdraw` 副作用链，旧 `st_tmoveto`、`st_tcursororiginy`、`st_tnewline`、`st_treverseindex`、`st_tcursorplan`、`st_drawregionplan`、`st_drawframeplan` ABI 和头文件中的旧 `ZigDrawFramePlan` typedef 已删除。
 - **CSI 聚合**：`csihandle` 已改为 `ZigCsiExecPlan` 顶层分发，六个旧 `st_plan*` 小 ABI、旧私有 planner 和 `st_light.zig` 重复模块已删除；C 继续执行真实副作用。
 - **Mode/State 标量收口**：`tsetmode` 的 WRAP/INSERT/ECHO/CRLF 位写入由 `ZigModePlan.mode_mask/mode_bits` 驱动，`tdefutf8` / `tdeftran` 复用 `st_mode.zig` 的 selector 逻辑，media print mode、`toggleprinter()` 和 `ttynew(out)` 初始打印位写入由 `ZigMiscPlan.mode_mask/mode_bits` 驱动；ESC flow 完成后的 `term.esc` 写回由 `ZigInputEscFlowPlan.finish_esc` 驱动；C 侧只执行最终标量写回和平台 mode 副作用。
+- **STR collection 收口**：`st_tcollectstrapply()` 返回 STR append/grow 后是否 retry，`st_strresetplan()` 返回由 `ST_ZIG_STR_BUF_SIZ` 同步的初始 buffer size，`st_strparse()` 返回参数 start/end 和 NUL 分隔写入元数据，`st_strhandleparplan()` / `st_strhandleplan()` 返回主参数解析规则和 payload/color 参数索引；C 侧通过 `strapplyplan()` 集中执行 title/clipboard/color 副作用，仍执行 `xrealloc`、持有 `strescseq.buf` 指针并按 plan 原地写入 NUL 分隔符。
 - **Scroll State 收口**：CSI `SET_SCROLL` 的 scroll region 更新与 cursor home 耦合已通过 `ZigStatePlan.cursor_home` 表达；C 侧 `tapplystate()` 只执行 `tsetscroll` 和按 plan 触发 `tmoveato(0, 0)`。
+- **TermState 写回收口**：scroll region 标量写回集中到 `termapplyscrollregion()`；后续同类 `term.*` 标量写回优先进入集中 apply helper。
 - **Light/Tab State 收口**：CSI tab clear 的 current/all tab 写回由 `ZigLightPlan.tab_clear_current/tab_clear_all` 驱动；C 侧只执行数组写入或 `memset`。
 - **Keyboard Scroll 收口**：`kscrolldown` / `kscrollup` 的 scrollback 目标、selection scroll delta 和 full dirty effect 已由 `ZigKScrollPlan` 显式返回；C 侧只写回 `term.scr` 并按 plan 执行 `selscroll` / `tfulldirt`。
+- **Line/History Scroll 收口**：`tscrollup` / `tscrolldown` 的 history swap 行、line swap loop 范围和 selection scroll delta 已由 `ZigScrollPlan` 显式返回；当 history 不可用时 Zig 禁止 history swap，C 侧仍执行真实 pointer swap、clear 和 dirty 副作用。
 - **Reset ordering 收口**：`treset()` 的默认状态和双屏 reset loop 已由 `ZigResetExecPlan` 统一返回；C 侧只执行 `tmoveto`、`tcursor`、`tclearregion` 和 `tswapscreen` 真实副作用，不再硬编码 reset action 顺序。
+- **Reset State 写回收口**：`treset()` 的 cursor、scroll region、mode、charset 和 translation table 写回集中到 `termapplyresetstate()`。
 - **ExternalPipe 聚合**：行长度、write/skip、lastpos 和 wrap newline 已合并为 `st_externalpipeplan`；C 继续负责 `tlinehist`、`utf8encode` 和 `xwrite`。`tlinehist` 的 history plan export 已下沉到 `st_search.zig`。
 - **ABI 瘦身**：`st_zig.h` 仍只保留 C shim 实际调用入口；已清理多轮旧 `st_plan*`、search/mode/strhandle 小 helper，以及 `st_tdectest`、`st_ttywritecount`、`st_tprinterwrite`、`st_sttyfits`、`st_ttyreadpending`、`st_tscrollselplan`、`st_csiprivbool`、`st_drawframeplan` 等 pass-through/obsolete exports。后续新增边界优先是 snapshot/update/effect 结构，而不是新的零碎 `st_*` 导出。
 - **批次边界**：低风险 shim-thinning 已完成批量收口；Batch 2-6 均关闭或延期到 deliberate state ownership project。下一步不再规划新的浅 candidate，而应选择一个状态族进入 ownership design。

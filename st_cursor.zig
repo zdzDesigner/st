@@ -75,6 +75,8 @@ pub const ZigDrawExecPlan = extern struct {
     cy: c_int,
     ocx: c_int,
     ocy: c_int,
+    new_ocx: c_int,
+    new_ocy: c_int,
     cursor_active: c_int,
     imspot_active: c_int,
     region_draw: c_int,
@@ -212,10 +214,10 @@ const DrawRegion = struct {
         var y = self.start_y;
         while (y < self.end_y) : (y += 1) {
             if (self.dirty[@intCast(y)] != 0) {
-                return .{ .search_scan = 0, .cx = 0, .cy = 0, .ocx = 0, .ocy = 0, .cursor_active = 0, .imspot_active = 0, .region_draw = 1, .region_clear_dirty = 1, .region_y = y, .region_next_y = y + 1 };
+                return .{ .search_scan = 0, .cx = 0, .cy = 0, .ocx = 0, .ocy = 0, .new_ocx = 0, .new_ocy = 0, .cursor_active = 0, .imspot_active = 0, .region_draw = 1, .region_clear_dirty = 1, .region_y = y, .region_next_y = y + 1 };
             }
         }
-        return .{ .search_scan = 0, .cx = 0, .cy = 0, .ocx = 0, .ocy = 0, .cursor_active = 0, .imspot_active = 0, .region_draw = 0, .region_clear_dirty = 0, .region_y = self.end_y, .region_next_y = self.end_y };
+        return .{ .search_scan = 0, .cx = 0, .cy = 0, .ocx = 0, .ocy = 0, .new_ocx = 0, .new_ocy = 0, .cursor_active = 0, .imspot_active = 0, .region_draw = 0, .region_clear_dirty = 0, .region_y = self.end_y, .region_next_y = self.end_y };
     }
 };
 
@@ -266,6 +268,8 @@ export fn st_drawexecplan(snapshot: ZigTermFrameSnapshot, lines: [*]const [*]con
         .cy = frame.cy,
         .ocx = frame.ocx,
         .ocy = frame.ocy,
+        .new_ocx = frame.cx,
+        .new_ocy = frame.cy,
         .cursor_active = frame.cursor_active,
         .imspot_active = frame.imspot_active,
         .region_draw = region.region_draw,
@@ -390,11 +394,26 @@ test "draw exec plan combines frame and first dirty region" {
     const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
 
     try std.testing.expectEqual(@as(c_int, 1), plan.search_scan);
+    try std.testing.expectEqual(@as(c_int, 0), plan.new_ocx);
+    try std.testing.expectEqual(@as(c_int, 0), plan.new_ocy);
     try std.testing.expectEqual(@as(c_int, 0), plan.cy);
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_active);
     try std.testing.expectEqual(@as(c_int, 1), plan.region_draw);
     try std.testing.expectEqual(@as(c_int, 1), plan.region_y);
     try std.testing.expectEqual(@as(c_int, 2), plan.region_next_y);
+}
+
+test "draw exec plan returns post draw cursor state without dirty region" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    var row1 = [_]ZigGlyph{.{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{ &row0, &row1 };
+    const dirty = [_]c_int{ 0, 0 };
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 0, .cx = 0, .current_y = 1, .ocx = 0, .ocy = 0, .col = 1, .row = 2 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 0), plan.region_draw);
+    try std.testing.expectEqual(@as(c_int, 0), plan.new_ocx);
+    try std.testing.expectEqual(@as(c_int, 1), plan.new_ocy);
 }
 
 test "draw plans gate search scan and cursor" {

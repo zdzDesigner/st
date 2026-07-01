@@ -32,6 +32,15 @@ pub const ZigStrCollectExec = extern struct {
     new_size: usize,
 };
 
+pub const ZigStrCollectApplyPlan = extern struct {
+    first: ZigStrCollectExec,
+    retry: c_int,
+};
+
+pub const ZigStrResetPlan = extern struct {
+    size: usize,
+};
+
 pub const ZigInputEscFlowPlan = extern struct {
     kind: c_int,
     handle_csi: c_int,
@@ -87,6 +96,11 @@ const str_collect_append = 0;
 const str_collect_finish = 1;
 const str_collect_grow = 2;
 const str_collect_abort = 3;
+const str_buf_size: usize = 128 * 4;
+
+comptime {
+    std.debug.assert(str_buf_size == 512);
+}
 const esc_start = control_esc.esc_start;
 const esc_csi = control_esc.esc_csi;
 const esc_altcharset = control_esc.esc_altcharset;
@@ -323,6 +337,15 @@ export fn st_tputcprepare(selected_current: c_int, mode_wrap: c_int, cursor_stat
 
 export fn st_tcollectstr(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectExec {
     return (StringCollector{ .rune = rune, .esc = esc, .buf = buf, .len = len, .chunk = chunk, .chunk_len = chunk_len, .size = size }).exec();
+}
+
+export fn st_tcollectstrapply(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectApplyPlan {
+    const first = st_tcollectstr(rune, esc, buf, len, chunk, chunk_len, size);
+    return .{ .first = first, .retry = if (first.kind == str_collect_grow) 1 else 0 };
+}
+
+export fn st_strresetplan() ZigStrResetPlan {
+    return .{ .size = str_buf_size };
 }
 
 export fn st_inputescflowplan(esc: c_int, rune: u32, csi_len: usize, csi_cap: usize) ZigInputEscFlowPlan {
@@ -570,6 +593,69 @@ test "tcollectstr requests growth without appending" {
     try std.testing.expectEqual(@as(c_int, str_collect_grow), exec.kind);
     try std.testing.expectEqual(@as(usize, 8), exec.new_size);
     try std.testing.expectEqual(@as(usize, 3), exec.new_len);
+}
+
+test "tcollectstr apply marks retry after growth" {
+    var buf = [_]u8{ 0, 0, 0, 0 };
+    const chunk = [_]u8{'A'};
+
+    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, 3, &chunk, chunk.len, buf.len);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_grow), plan.first.kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.retry);
+}
+
+test "tcollectstr apply skips retry after append" {
+    var buf = [_]u8{ 0, 0, 0, 0 };
+    const chunk = [_]u8{'A'};
+
+    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, 1, &chunk, chunk.len, buf.len);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_append), plan.first.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.retry);
+}
+
+test "tcollectstr apply retry cycle appends after growth" {
+    var buf = [_]u8{ 0, 0, 0, 0 };
+    const chunk = [_]u8{'A'};
+    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, 3, &chunk, chunk.len, buf.len);
+
+    var grown = [_]u8{0} ** 8;
+    @memcpy(grown[0..3], buf[0..3]);
+    const retry = st_tcollectstr('A', esc_start | esc_str, &grown, 3, &chunk, chunk.len, grown.len);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_grow), plan.first.kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.retry);
+    try std.testing.expectEqual(@as(c_int, str_collect_append), retry.kind);
+    try std.testing.expectEqual(@as(usize, 4), retry.new_len);
+    try std.testing.expectEqual(@as(u8, 'A'), grown[3]);
+}
+
+test "tcollectstr apply skips retry after finish" {
+    var buf = [_]u8{ 0, 0, 0, 0 };
+    const chunk = [_]u8{};
+
+    const plan = st_tcollectstrapply(0x07, esc_start | esc_str, &buf, 0, &chunk, chunk.len, buf.len);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_finish), plan.first.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.retry);
+}
+
+test "tcollectstr apply skips retry after abort" {
+    var buf = [_]u8{0};
+    const chunk = [_]u8{'A'};
+    const near_limit = (std.math.maxInt(usize) - 4) / 2 + 1;
+
+    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, near_limit, &chunk, chunk.len, near_limit);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_abort), plan.first.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.retry);
+}
+
+test "strreset plan matches C string buffer size" {
+    const plan = st_strresetplan();
+
+    try std.testing.expectEqual(@as(usize, str_buf_size), plan.size);
 }
 
 test "tcollectstr aborts when growth would overflow" {

@@ -13,6 +13,10 @@ typedef struct {
 
 #define ST_ZIG_CSI_ARG_SIZ 16
 
+enum {
+	ST_ZIG_STR_BUF_SIZ = 512,
+};
+
 typedef struct {
 	char priv;
 	int arg[ST_ZIG_CSI_ARG_SIZ];
@@ -109,6 +113,8 @@ typedef struct {
 	int cy;
 	int ocx;
 	int ocy;
+	int new_ocx;
+	int new_ocy;
 	int cursor_active;
 	int imspot_active;
 	int region_draw;
@@ -141,6 +147,13 @@ typedef struct {
 	int count;
 	int new_scr;
 	int new_histi;
+	int hist_swap;
+	int hist_line;
+	int line_start;
+	int line_end;
+	int line_step;
+	int line_offset;
+	int selscroll_delta;
 } ZigScrollPlan;
 
 typedef struct {
@@ -286,14 +299,24 @@ typedef struct {
 
 typedef struct {
 	int narg;
+	size_t starts[ST_ZIG_CSI_ARG_SIZ];
 	size_t ends[ST_ZIG_CSI_ARG_SIZ];
+	int nul_terms[ST_ZIG_CSI_ARG_SIZ];
 } ZigStrParse;
 
 typedef struct {
 	int kind;
 	int arg1_present;
 	int clipboard_run;
+	int payload_arg;
+	int color_arg;
 } ZigStrHandlePlan;
+
+typedef struct {
+	int arg;
+	int default_value;
+	int use_arg;
+} ZigStrHandleParPlan;
 
 typedef struct {
 	unsigned char seq_type;
@@ -769,6 +792,15 @@ typedef struct {
 	size_t new_size;
 } ZigStrCollectExec;
 
+typedef struct {
+	ZigStrCollectExec first;
+	int retry;
+} ZigStrCollectApplyPlan;
+
+typedef struct {
+	size_t size;
+} ZigStrResetPlan;
+
 enum {
 	ST_ZIG_STR_COLLECT_APPEND = 0,
 	ST_ZIG_STR_COLLECT_FINISH = 1,
@@ -930,6 +962,7 @@ int st_tdefutf8plan(char, int);
 int st_tdeftranplan(char);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrSequence st_tstrsequence(unsigned char, int);
+ZigStrHandleParPlan st_strhandleparplan(int);
 ZigStrHandlePlan st_strhandleplan(char, int, int, int);
 ZigInputControlPlan st_inputcontrolplan(unsigned char, int, int, int);
 ZigInputEscPlan st_inputescplan(unsigned char, int, int, int, int);
@@ -940,6 +973,8 @@ void st_tclearglyph(ZigGlyph *, int, const ZigGlyph *);
 ZigPutcWriteResult st_tputcwrite(uint32_t, int, const ZigGlyph *, ZigGlyph *, int *, int, int, int, int);
 ZigPutcPreparePlan st_tputcprepare(int, int, int, int, int, int);
 ZigStrCollectExec st_tcollectstr(uint32_t, int, unsigned char *, size_t, const unsigned char *, size_t, size_t);
+ZigStrCollectApplyPlan st_tcollectstrapply(uint32_t, int, unsigned char *, size_t, const unsigned char *, size_t, size_t);
+ZigStrResetPlan st_strresetplan(void);
 ZigInputEscFlowPlan st_inputescflowplan(int, uint32_t, size_t, size_t);
 int st_tlinelen(const ZigGlyph *, int);
 int st_tputtab(int, int, int, const int *);

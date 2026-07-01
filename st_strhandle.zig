@@ -11,11 +11,20 @@ pub const ZigStrHandlePlan = extern struct {
     kind: c_int,
     arg1_present: c_int,
     clipboard_run: c_int,
+    payload_arg: c_int,
+    // OSC 4 使用 color spec，OSC 52 使用 base64 clipboard payload。
+    color_arg: c_int,
 };
 
 pub const ZigStrSequence = extern struct {
     seq_type: u8,
     esc: c_int,
+};
+
+pub const ZigStrHandleParPlan = extern struct {
+    arg: c_int,
+    default_value: c_int,
+    use_arg: c_int,
 };
 
 pub const str_plan_osc_52 = 0;
@@ -57,38 +66,56 @@ const StringAction = struct {
     fn plan(self: StringAction, allow_window_ops: bool) ZigStrHandlePlan {
         const arg1_present: c_int = if (self.narg > 1) 1 else 0;
         const clipboard_run: c_int = if (self.seq_type == ']' and self.par == 52 and self.narg > 2 and allow_window_ops) 1 else 0;
+        const payload_arg: c_int = if (self.seq_type == 'k') 0 else 1;
+        const color_arg: c_int = if ((self.par == 4 and self.narg >= 3) or (self.par == 52 and clipboard_run != 0)) 2 else 0;
 
         return switch (self.seq_type) {
             ']' => switch (self.par) {
                 0 => if (self.narg > 1)
-                    .{ .kind = str_plan_osc_both_titles, .arg1_present = arg1_present, .clipboard_run = 0 }
+                    result(str_plan_osc_both_titles, arg1_present, 0, payload_arg, color_arg)
                 else
-                    .{ .kind = str_plan_ignore, .arg1_present = arg1_present, .clipboard_run = 0 },
+                    result(str_plan_ignore, arg1_present, 0, payload_arg, color_arg),
                 1 => if (self.narg > 1)
-                    .{ .kind = str_plan_osc_icon_title, .arg1_present = arg1_present, .clipboard_run = 0 }
+                    result(str_plan_osc_icon_title, arg1_present, 0, payload_arg, color_arg)
                 else
-                    .{ .kind = str_plan_ignore, .arg1_present = arg1_present, .clipboard_run = 0 },
+                    result(str_plan_ignore, arg1_present, 0, payload_arg, color_arg),
                 2 => if (self.narg > 1)
-                    .{ .kind = str_plan_osc_window_title, .arg1_present = arg1_present, .clipboard_run = 0 }
+                    result(str_plan_osc_window_title, arg1_present, 0, payload_arg, color_arg)
                 else
-                    .{ .kind = str_plan_ignore, .arg1_present = arg1_present, .clipboard_run = 0 },
-                52 => .{ .kind = str_plan_osc_52, .arg1_present = arg1_present, .clipboard_run = clipboard_run },
+                    result(str_plan_ignore, arg1_present, 0, payload_arg, color_arg),
+                52 => result(str_plan_osc_52, arg1_present, clipboard_run, payload_arg, color_arg),
                 4 => if (self.narg >= 3)
-                    .{ .kind = str_plan_osc_4, .arg1_present = arg1_present, .clipboard_run = 0 }
+                    result(str_plan_osc_4, arg1_present, 0, payload_arg, color_arg)
                 else
-                    .{ .kind = str_plan_unknown, .arg1_present = arg1_present, .clipboard_run = 0 },
-                104 => .{ .kind = str_plan_osc_104, .arg1_present = arg1_present, .clipboard_run = 0 },
-                else => .{ .kind = str_plan_unknown, .arg1_present = arg1_present, .clipboard_run = 0 },
+                    result(str_plan_unknown, arg1_present, 0, payload_arg, color_arg),
+                104 => result(str_plan_osc_104, arg1_present, 0, payload_arg, color_arg),
+                else => result(str_plan_unknown, arg1_present, 0, payload_arg, color_arg),
             },
-            'k' => .{ .kind = str_plan_old_title, .arg1_present = arg1_present, .clipboard_run = 0 },
-            'P', '_', '^' => .{ .kind = str_plan_ignore, .arg1_present = arg1_present, .clipboard_run = 0 },
-            else => .{ .kind = str_plan_unknown, .arg1_present = arg1_present, .clipboard_run = 0 },
+            'k' => result(str_plan_old_title, arg1_present, 0, payload_arg, color_arg),
+            'P', '_', '^' => result(str_plan_ignore, arg1_present, 0, payload_arg, color_arg),
+            else => result(str_plan_unknown, arg1_present, 0, payload_arg, color_arg),
         };
     }
 };
 
+const StringPar = struct {
+    narg: c_int,
+
+    fn plan(self: StringPar) ZigStrHandleParPlan {
+        return .{ .arg = 0, .default_value = 0, .use_arg = if (self.narg > 0) 1 else 0 };
+    }
+};
+
+fn result(kind: c_int, arg1_present: c_int, clipboard_run: c_int, payload_arg: c_int, color_arg: c_int) ZigStrHandlePlan {
+    return .{ .kind = kind, .arg1_present = arg1_present, .clipboard_run = clipboard_run, .payload_arg = payload_arg, .color_arg = color_arg };
+}
+
 export fn st_tstrsequence(c: u8, esc: c_int) ZigStrSequence {
     return (StringSequence{ .control = c, .esc = esc }).start();
+}
+
+export fn st_strhandleparplan(narg: c_int) ZigStrHandleParPlan {
+    return (StringPar{ .narg = narg }).plan();
 }
 
 export fn st_strhandleplan(seq_type: c_char, narg: c_int, par: c_int, allow_window_ops: c_int) ZigStrHandlePlan {
@@ -114,12 +141,31 @@ test "osc 0 with second arg sets both titles" {
     try std.testing.expectEqual(@as(c_int, str_plan_osc_both_titles), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.arg1_present);
     try std.testing.expectEqual(@as(c_int, 0), plan.clipboard_run);
+    try std.testing.expectEqual(@as(c_int, 1), plan.payload_arg);
+    try std.testing.expectEqual(@as(c_int, 0), plan.color_arg);
+}
+
+test "strhandle par plan uses first arg when present" {
+    const plan = st_strhandleparplan(1);
+
+    try std.testing.expectEqual(@as(c_int, 0), plan.arg);
+    try std.testing.expectEqual(@as(c_int, 1), plan.use_arg);
+    try std.testing.expectEqual(@as(c_int, 0), plan.default_value);
+}
+
+test "strhandle par plan falls back to zero" {
+    const plan = st_strhandleparplan(0);
+
+    try std.testing.expectEqual(@as(c_int, 0), plan.use_arg);
+    try std.testing.expectEqual(@as(c_int, 0), plan.default_value);
 }
 
 test "osc 1 without payload is ignored" {
     const plan = st_strhandleplan(']', 1, 1, 0);
     try std.testing.expectEqual(@as(c_int, str_plan_ignore), plan.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.arg1_present);
+    try std.testing.expectEqual(@as(c_int, 1), plan.payload_arg);
+    try std.testing.expectEqual(@as(c_int, 0), plan.color_arg);
 }
 
 test "osc 52 maps to clipboard action" {
@@ -127,21 +173,52 @@ test "osc 52 maps to clipboard action" {
     try std.testing.expectEqual(@as(c_int, str_plan_osc_52), plan.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.arg1_present);
     try std.testing.expectEqual(@as(c_int, 1), plan.clipboard_run);
+    try std.testing.expectEqual(@as(c_int, 2), plan.color_arg);
+}
+
+test "osc 52 without window ops has no color arg" {
+    const plan = st_strhandleplan(']', 3, 52, 0);
+
+    try std.testing.expectEqual(@as(c_int, str_plan_osc_52), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.clipboard_run);
+    try std.testing.expectEqual(@as(c_int, 1), plan.payload_arg);
+    try std.testing.expectEqual(@as(c_int, 0), plan.color_arg);
+}
+
+test "strhandle plan with zero args returns safe indices" {
+    const plan = st_strhandleplan(']', 0, 0, 0);
+
+    try std.testing.expectEqual(@as(c_int, str_plan_ignore), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.payload_arg);
+    try std.testing.expectEqual(@as(c_int, 0), plan.color_arg);
 }
 
 test "osc 4 with enough args maps to color set" {
     const plan = st_strhandleplan(']', 3, 4, 0);
     try std.testing.expectEqual(@as(c_int, str_plan_osc_4), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.payload_arg);
+    try std.testing.expectEqual(@as(c_int, 2), plan.color_arg);
 }
 
 test "osc 104 maps to color reset" {
     const plan = st_strhandleplan(']', 1, 104, 0);
     try std.testing.expectEqual(@as(c_int, str_plan_osc_104), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.arg1_present);
+    try std.testing.expectEqual(@as(c_int, 0), plan.color_arg);
+}
+
+test "osc 104 with arg resets one color" {
+    const plan = st_strhandleplan(']', 2, 104, 0);
+
+    try std.testing.expectEqual(@as(c_int, str_plan_osc_104), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.arg1_present);
+    try std.testing.expectEqual(@as(c_int, 1), plan.payload_arg);
 }
 
 test "old title sequence maps to old title action" {
     const plan = st_strhandleplan('k', 1, 0, 0);
     try std.testing.expectEqual(@as(c_int, str_plan_old_title), plan.kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.payload_arg);
 }
 
 test "dcs style strings are ignored" {

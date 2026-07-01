@@ -31,6 +31,13 @@ pub const ZigScrollPlan = extern struct {
     count: c_int,
     new_scr: c_int,
     new_histi: c_int,
+    hist_swap: c_int,
+    hist_line: c_int,
+    line_start: c_int,
+    line_end: c_int,
+    line_step: c_int,
+    line_offset: c_int,
+    selscroll_delta: c_int,
 };
 
 pub const ZigKScrollPlan = extern struct {
@@ -93,7 +100,18 @@ const LineRegion = struct {
             scr;
         const delta: c_int = if (scroll_up) 1 else -1;
         const new_histi = if (copyhist and histsize > 0) @mod(histi + delta, histsize) else histi;
-        return .{ .count = count, .new_scr = new_scr, .new_histi = new_histi };
+        return .{
+            .count = count,
+            .new_scr = new_scr,
+            .new_histi = new_histi,
+            .hist_swap = if (copyhist and histsize > 0) 1 else 0,
+            .hist_line = if (scroll_up) self.top else self.bot,
+            .line_start = if (scroll_up) self.top else self.bot,
+            .line_end = if (scroll_up) self.bot - count else self.top + count,
+            .line_step = if (scroll_up) 1 else -1,
+            .line_offset = if (scroll_up) count else -count,
+            .selscroll_delta = if (scr == 0) (if (scroll_up) -count else count) else 0,
+        };
     }
 };
 
@@ -167,6 +185,7 @@ test "scroll plan clamps count to scroll region" {
     try std.testing.expectEqual(@as(c_int, 6), plan.count);
     try std.testing.expectEqual(@as(c_int, 0), plan.new_scr);
     try std.testing.expectEqual(@as(c_int, 7), plan.new_histi);
+    try std.testing.expectEqual(@as(c_int, 0), plan.hist_swap);
 }
 
 test "scroll up plan advances scrollback view" {
@@ -175,12 +194,44 @@ test "scroll up plan advances scrollback view" {
     try std.testing.expectEqual(@as(c_int, 5), plan.count);
     try std.testing.expectEqual(@as(c_int, 99), plan.new_scr);
     try std.testing.expectEqual(@as(c_int, 0), plan.new_histi);
+    try std.testing.expectEqual(@as(c_int, 1), plan.hist_swap);
+    try std.testing.expectEqual(@as(c_int, 0), plan.hist_line);
+    try std.testing.expectEqual(@as(c_int, 0), plan.line_start);
+    try std.testing.expectEqual(@as(c_int, 4), plan.line_end);
+    try std.testing.expectEqual(@as(c_int, 1), plan.line_step);
+    try std.testing.expectEqual(@as(c_int, 5), plan.line_offset);
+    try std.testing.expectEqual(@as(c_int, 0), plan.selscroll_delta);
+}
+
+test "scroll plan with zero count keeps no-op line loop" {
+    const plan = st_tscrollplan(0, 5, 10, 0, 100, 1, 0, 0);
+
+    try std.testing.expectEqual(@as(c_int, 0), plan.count);
+    try std.testing.expectEqual(@as(c_int, 5), plan.line_start);
+    try std.testing.expectEqual(@as(c_int, 10), plan.line_end);
+    try std.testing.expectEqual(@as(c_int, 1), plan.line_step);
+    try std.testing.expectEqual(@as(c_int, 0), plan.line_offset);
+    try std.testing.expectEqual(@as(c_int, 0), plan.selscroll_delta);
 }
 
 test "scroll down plan wraps history head backward" {
     const plan = st_tscrollplan(1, 0, 9, 0, 100, 0, 1, 0);
 
     try std.testing.expectEqual(@as(c_int, 99), plan.new_histi);
+    try std.testing.expectEqual(@as(c_int, 1), plan.hist_swap);
+    try std.testing.expectEqual(@as(c_int, 9), plan.hist_line);
+    try std.testing.expectEqual(@as(c_int, 9), plan.line_start);
+    try std.testing.expectEqual(@as(c_int, 1), plan.line_end);
+    try std.testing.expectEqual(@as(c_int, -1), plan.line_step);
+    try std.testing.expectEqual(@as(c_int, -1), plan.line_offset);
+    try std.testing.expectEqual(@as(c_int, 1), plan.selscroll_delta);
+}
+
+test "scroll plan skips history swap when history is unavailable" {
+    const plan = st_tscrollplan(1, 0, 9, 0, 0, 0, 1, 0);
+
+    try std.testing.expectEqual(@as(c_int, 0), plan.hist_swap);
+    try std.testing.expectEqual(@as(c_int, 0), plan.new_histi);
 }
 
 test "keyboard scroll down clamps to current scroll" {
