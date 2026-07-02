@@ -524,7 +524,7 @@ pub fn startResult(snapshot: SelectionSnapshot, point: model.Point, snap: i32, a
     const plan = startPlan(point, snap, alt_screen);
     return .{
         .update = .{
-            .mode = plan.mode,
+            .mode = plan.final_mode,
             .selection_type = plan.selection_type,
             .alt = plan.alt,
             .snap = plan.snap,
