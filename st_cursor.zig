@@ -203,20 +203,13 @@ const TermCursor = struct {
     fn backspace(self: TermCursor) ZigBackspacePlan {
         const next_state = self.state & ~@as(c_int, cursor_wrapnext);
 
-        if ((self.state & cursor_wrapnext) != 0) {
-            return dirtyBackspacePlan(self.x, self.y, next_state, self.y, self.y);
-        }
         if (self.x > 0) {
-            return dirtyBackspacePlan(self.x - 1, self.y, next_state, self.y, self.y);
+            return .{ .x = self.x - 1, .y = self.y, .state = next_state, .dirty = 0, .dirty_top = 0, .dirty_bot = 0 };
         }
 
         return .{ .x = self.x, .y = self.y, .state = next_state, .dirty = 0, .dirty_top = 0, .dirty_bot = 0 };
     }
 };
-
-fn dirtyBackspacePlan(x: c_int, y: c_int, state: c_int, dirty_top: c_int, dirty_bot: c_int) ZigBackspacePlan {
-    return .{ .x = x, .y = y, .state = state, .dirty = 1, .dirty_top = dirty_top, .dirty_bot = dirty_bot };
-}
 
 fn DrawCursor(comptime Glyph: type) type {
     return struct {
@@ -428,16 +421,14 @@ test "treverseindex scrolls at top otherwise moves up" {
     try std.testing.expectEqual(@as(c_int, 3), move.y);
 }
 
-test "backspace clears wrapnext and dirties current row" {
+test "backspace with wrapnext still moves left" {
     const snapshot = ZigTermCursorSnapshot{ .state = cursor_wrapnext, .x = 9, .y = 2, .col = 10, .row = 6, .top = 0, .bot = 5 };
     const plan = st_backspaceplan(snapshot);
 
-    try std.testing.expectEqual(@as(c_int, 9), plan.x);
+    try std.testing.expectEqual(@as(c_int, 8), plan.x);
     try std.testing.expectEqual(@as(c_int, 2), plan.y);
     try std.testing.expectEqual(@as(c_int, 0), plan.state);
-    try std.testing.expectEqual(@as(c_int, 1), plan.dirty);
-    try std.testing.expectEqual(@as(c_int, 2), plan.dirty_top);
-    try std.testing.expectEqual(@as(c_int, 2), plan.dirty_bot);
+    try std.testing.expectEqual(@as(c_int, 0), plan.dirty);
 }
 
 test "backspace moves left on same row" {
@@ -446,9 +437,7 @@ test "backspace moves left on same row" {
 
     try std.testing.expectEqual(@as(c_int, 3), plan.x);
     try std.testing.expectEqual(@as(c_int, 2), plan.y);
-    try std.testing.expectEqual(@as(c_int, 1), plan.dirty);
-    try std.testing.expectEqual(@as(c_int, 2), plan.dirty_top);
-    try std.testing.expectEqual(@as(c_int, 2), plan.dirty_bot);
+    try std.testing.expectEqual(@as(c_int, 0), plan.dirty);
 }
 
 test "backspace at first column does not cross soft wrapped row" {
