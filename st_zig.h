@@ -1169,7 +1169,7 @@ ZigIoEffectList st_ttywriteeffects(const unsigned char *, size_t, int);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigTermCursorPlan st_termcursorplan(int, ZigTermCursorSnapshot, int, int);
-ZigBackspacePlan st_backspaceplan(ZigTermCursorSnapshot, unsigned short);
+ZigBackspacePlan st_backspaceplan(ZigTermCursorSnapshot);
 ZigDrawExecPlan st_drawexecplan(ZigTermFrameSnapshot, const ZigGlyph * const *, const int *, int, int);
 ZigDrawRegionTransaction st_drawregiontransaction(const int *, int, int);
 ZigEditMove st_tdeletechar(int, int, int);

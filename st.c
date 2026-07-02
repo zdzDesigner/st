@@ -2273,7 +2273,8 @@ int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, 
         drawregion(0, effect.arg, term.col, term.row);
         break;
     case ST_ZIG_PLATFORM_EFFECT_DRAW_CURSOR:
-        xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx]);
+        xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx], term.ocx, term.ocy,
+                    term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
         break;
     case ST_ZIG_PLATFORM_EFFECT_FINISH_DRAW:
         term.ocx = frame->new_ocx;
@@ -2585,11 +2586,9 @@ void tcontrolcode(uchar ascii) {
 void tbackspace(void) {
     ZigTermCursorSnapshot snapshot;
     ZigBackspacePlan plan;
-    ushort prev_line_last_mode;
 
     snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
-    prev_line_last_mode = term.c.y > 0 ? TLINE(term.c.y - 1)[term.col - 1].mode : 0;
-    plan = st_backspaceplan(snapshot, prev_line_last_mode);
+    plan = st_backspaceplan(snapshot);
 
     term.c.state = plan.state;
     term.c.x = plan.x;

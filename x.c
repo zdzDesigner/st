@@ -1546,9 +1546,16 @@ void xdrawsearchbar(void)
     }
 }
 
-void xdrawcursor(int cx, int cy, Glyph g)
+void xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og, Line line, int len)
 {
     Color drawcol;
+
+    /* remove the old cursor */
+    if (selected(ox, oy) || searchmatch(ox, oy)) og.mode ^= ATTR_REVERSE;
+
+    /* Redraw the line where cursor was previously.
+     * It will restore the ligatures broken by the cursor. */
+    xdrawline(line, 0, oy, len);
 
     if (IS_SET(MODE_HIDE)) return;
 
