@@ -1,11 +1,14 @@
 //! st_strhandle.zig 负责 OSC/DCS 字符串序列的启动规划和动作分类。
 //! [输入]: 原始字符串序列控制码、当前 ESC 状态、字符串序列类型、参数数量和第一个参数的整数值。
-//! [输出]: `ZigStrSequence` / `ZigStrHandlePlan`，告诉 C 侧应启动哪类 STR，或应设置标题、图标标题、selection、忽略/unknown。
+//! [输出]: `ZigStrSequence` / `ZigStrHandlePlan` / `ZigPlatformEffectList`，告诉 C 侧应启动哪类 STR，或应设置标题、图标标题、selection、忽略/unknown。
 //! [副作用边界]: 不调用 `xsettitle(...)`、`xsetsel(...)`、`xclipcopy(...)`；X11/clipboard 副作用留在 C。
 //! [定位]: 收薄 `tstrsequence(...)` / `strhandle(...)` 的分支判断，但保留 C 对外部 UI 状态的控制。
 
 const std = @import("std");
 const control_esc = @import("st_control_esc.zig");
+const platform = @import("st_platform.zig");
+
+const ZigPlatformEffectList = platform.ZigPlatformEffectList;
 
 pub const ZigStrHandlePlan = extern struct {
     kind: c_int,
@@ -27,17 +30,6 @@ pub const ZigStrHandleParPlan = extern struct {
     use_arg: c_int,
 };
 
-pub const ZigStrApplyEffect = extern struct {
-    kind: c_int,
-    arg: c_int,
-    index_arg: c_int,
-};
-
-pub const ZigStrApplyEffectList = extern struct {
-    count: c_int,
-    effects: [8]ZigStrApplyEffect,
-};
-
 pub const str_plan_osc_52 = 0;
 pub const str_plan_osc_both_titles = 1;
 pub const str_plan_osc_icon_title = 2;
@@ -47,17 +39,6 @@ pub const str_plan_ignore = 5;
 pub const str_plan_unknown = 6;
 pub const str_plan_osc_4 = 7;
 pub const str_plan_osc_104 = 8;
-
-const str_effect_none = 0;
-const str_effect_set_title = 1;
-const str_effect_set_icon_title = 2;
-const str_effect_decode_clipboard = 3;
-const str_effect_set_selection = 4;
-const str_effect_copy_clipboard = 5;
-const str_effect_set_color = 6;
-const str_effect_reset_color = 7;
-const str_effect_redraw = 8;
-const str_effect_unknown = 9;
 
 // STR 启动复用共享 ESC 状态位，避免与 `st_setchar.zig` 的字符串收集状态漂移。
 const esc_str = control_esc.esc_str;
@@ -135,35 +116,35 @@ const StringApply = struct {
     payload_arg: c_int,
     color_arg: c_int,
 
-    fn plan(self: StringApply) ZigStrApplyEffectList {
-        var list = emptyEffectList();
+    fn plan(self: StringApply) ZigPlatformEffectList {
+        var list = platform.emptyEffects();
         switch (self.kind) {
             str_plan_osc_both_titles => {
-                addEffect(&list, str_effect_set_title, self.payload_arg, -1);
-                addEffect(&list, str_effect_set_icon_title, self.payload_arg, -1);
+                platform.addEffect(&list, platform.effect_set_title, self.payload_arg, -1);
+                platform.addEffect(&list, platform.effect_set_icon_title, self.payload_arg, -1);
             },
-            str_plan_osc_icon_title => addEffect(&list, str_effect_set_icon_title, self.payload_arg, -1),
-            str_plan_osc_window_title, str_plan_old_title => addEffect(&list, str_effect_set_title, self.payload_arg, -1),
-            str_plan_ignore => addEffect(&list, str_effect_none, -1, -1),
+            str_plan_osc_icon_title => platform.addEffect(&list, platform.effect_set_icon_title, self.payload_arg, -1),
+            str_plan_osc_window_title, str_plan_old_title => platform.addEffect(&list, platform.effect_set_title, self.payload_arg, -1),
+            str_plan_ignore => platform.addEffect(&list, platform.effect_none, -1, -1),
             str_plan_osc_52 => if (self.clipboard_run) {
-                addEffect(&list, str_effect_decode_clipboard, self.color_arg, -1);
-                addEffect(&list, str_effect_set_selection, -1, -1);
-                addEffect(&list, str_effect_copy_clipboard, -1, -1);
+                platform.addEffect(&list, platform.effect_decode_clipboard, self.color_arg, -1);
+                platform.addEffect(&list, platform.effect_set_selection, -1, -1);
+                platform.addEffect(&list, platform.effect_copy_clipboard, -1, -1);
             } else {
-                addEffect(&list, str_effect_none, -1, -1);
+                platform.addEffect(&list, platform.effect_none, -1, -1);
             },
             str_plan_osc_4 => {
-                addEffect(&list, str_effect_set_color, self.color_arg, if (self.arg1_present) self.payload_arg else -1);
-                addEffect(&list, str_effect_redraw, -1, -1);
+                platform.addEffect(&list, platform.effect_set_color, self.color_arg, if (self.arg1_present) self.payload_arg else -1);
+                platform.addEffect(&list, platform.effect_redraw, -1, -1);
             },
             str_plan_osc_104 => if (self.arg1_present) {
-                addEffect(&list, str_effect_reset_color, -1, self.payload_arg);
-                addEffect(&list, str_effect_redraw, -1, -1);
+                platform.addEffect(&list, platform.effect_reset_color, -1, self.payload_arg);
+                platform.addEffect(&list, platform.effect_redraw, -1, -1);
             } else {
-                addEffect(&list, str_effect_none, -1, -1);
+                platform.addEffect(&list, platform.effect_none, -1, -1);
             },
-            str_plan_unknown => addEffect(&list, str_effect_unknown, -1, -1),
-            else => addEffect(&list, str_effect_unknown, -1, -1),
+            str_plan_unknown => platform.addEffect(&list, platform.effect_unknown_str, -1, -1),
+            else => platform.addEffect(&list, platform.effect_unknown_str, -1, -1),
         }
         return list;
     }
@@ -171,16 +152,6 @@ const StringApply = struct {
 
 fn result(kind: c_int, arg1_present: c_int, clipboard_run: c_int, payload_arg: c_int, color_arg: c_int) ZigStrHandlePlan {
     return .{ .kind = kind, .arg1_present = arg1_present, .clipboard_run = clipboard_run, .payload_arg = payload_arg, .color_arg = color_arg };
-}
-
-fn emptyEffectList() ZigStrApplyEffectList {
-    return .{ .count = 0, .effects = std.mem.zeroes([8]ZigStrApplyEffect) };
-}
-
-fn addEffect(list: *ZigStrApplyEffectList, kind: c_int, arg: c_int, index_arg: c_int) void {
-    if (@as(usize, @intCast(list.count)) >= list.effects.len) return;
-    list.effects[@intCast(list.count)] = .{ .kind = kind, .arg = arg, .index_arg = index_arg };
-    list.count += 1;
 }
 
 export fn st_tstrsequence(c: u8, esc: c_int) ZigStrSequence {
@@ -195,7 +166,7 @@ export fn st_strhandleplan(seq_type: c_char, narg: c_int, par: c_int, allow_wind
     return (StringAction{ .seq_type = seq_type, .narg = narg, .par = par }).plan(allow_window_ops != 0);
 }
 
-export fn st_strapplyplan(kind: c_int, clipboard_run: c_int, arg1_present: c_int, payload_arg: c_int, color_arg: c_int) ZigStrApplyEffectList {
+export fn st_strapplyplan(kind: c_int, clipboard_run: c_int, arg1_present: c_int, payload_arg: c_int, color_arg: c_int) ZigPlatformEffectList {
     return (StringApply{ .kind = kind, .clipboard_run = clipboard_run != 0, .arg1_present = arg1_present != 0, .payload_arg = payload_arg, .color_arg = color_arg }).plan();
 }
 
@@ -313,14 +284,14 @@ test "strapply maps title and clipboard effects" {
     const clipboard = st_strapplyplan(str_plan_osc_52, 1, 1, 1, 2);
 
     try std.testing.expectEqual(@as(c_int, 2), title.count);
-    try std.testing.expectEqual(@as(c_int, str_effect_set_title), title.effects[0].kind);
-    try std.testing.expectEqual(@as(c_int, str_effect_set_icon_title), title.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_set_title), title.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_set_icon_title), title.effects[1].kind);
     try std.testing.expectEqual(@as(c_int, 1), title.effects[0].arg);
     try std.testing.expectEqual(@as(c_int, 3), clipboard.count);
-    try std.testing.expectEqual(@as(c_int, str_effect_decode_clipboard), clipboard.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_decode_clipboard), clipboard.effects[0].kind);
     try std.testing.expectEqual(@as(c_int, 2), clipboard.effects[0].arg);
-    try std.testing.expectEqual(@as(c_int, str_effect_set_selection), clipboard.effects[1].kind);
-    try std.testing.expectEqual(@as(c_int, str_effect_copy_clipboard), clipboard.effects[2].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_set_selection), clipboard.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_copy_clipboard), clipboard.effects[2].kind);
 }
 
 test "strapply maps color effects and ignored reset" {
@@ -329,12 +300,12 @@ test "strapply maps color effects and ignored reset" {
     const ignored_reset = st_strapplyplan(str_plan_osc_104, 0, 0, 1, 0);
 
     try std.testing.expectEqual(@as(c_int, 2), set_color.count);
-    try std.testing.expectEqual(@as(c_int, str_effect_set_color), set_color.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_set_color), set_color.effects[0].kind);
     try std.testing.expectEqual(@as(c_int, 2), set_color.effects[0].arg);
     try std.testing.expectEqual(@as(c_int, 1), set_color.effects[0].index_arg);
-    try std.testing.expectEqual(@as(c_int, str_effect_redraw), set_color.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_redraw), set_color.effects[1].kind);
     try std.testing.expectEqual(@as(c_int, 2), reset_color.count);
-    try std.testing.expectEqual(@as(c_int, str_effect_reset_color), reset_color.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_reset_color), reset_color.effects[0].kind);
     try std.testing.expectEqual(@as(c_int, 1), reset_color.effects[0].index_arg);
-    try std.testing.expectEqual(@as(c_int, str_effect_none), ignored_reset.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform.effect_none), ignored_reset.effects[0].kind);
 }

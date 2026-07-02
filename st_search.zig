@@ -131,6 +131,11 @@ pub const ZigSearchScanLineStep = extern struct {
     match: SearchMatch,
 };
 
+pub const ZigSearchMatchesTransaction = extern struct {
+    step_count: c_int,
+    steps: [4]c_int,
+};
+
 fn boolInt(value: bool) c_int {
     return if (value) 1 else 0;
 }
@@ -499,6 +504,11 @@ pub const MatchAppendKind = enum(i32) {
     // 需要先扩容再追加。
     grow_append = 2,
 };
+
+pub const search_matches_step_reset = 1;
+pub const search_matches_step_scan_visible = 2;
+pub const search_matches_step_scan_history = 3;
+pub const search_matches_step_finalize = 4;
 
 pub const GrowAppend = struct {
     // 扩容后的新容量。
@@ -1521,6 +1531,10 @@ export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLin
     return .{ .hist = boolInt(plan.hist), .index = plan.index };
 }
 
+export fn st_historyringindex(head: c_int, scroll: c_int, size: c_int) c_int {
+    return historyIndex(head, scroll, size);
+}
+
 pub fn zigSearchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).cursor(input[0..snapshot.inputlen], @enumFromInt(action));
     const update = zigStateUpdate(result.update);
@@ -1548,6 +1562,16 @@ pub fn zigSearchscanupdate(snapshot: ZigSearchSnapshot, nmatches: c_int, current
 
 export fn st_searchscanupdate(snapshot: ZigSearchSnapshot, nmatches: c_int, current: c_int) ZigSearchScanResult {
     return zigSearchscanupdate(snapshot, nmatches, current);
+}
+
+export fn st_searchmatchestransaction(active: c_int, query_len: c_int) ZigSearchMatchesTransaction {
+    var tx = ZigSearchMatchesTransaction{ .step_count = 1, .steps = .{ search_matches_step_reset, 0, 0, 0 } };
+    if (active == 0 or query_len <= 0) return tx;
+    tx.steps[1] = search_matches_step_scan_visible;
+    tx.steps[2] = search_matches_step_scan_history;
+    tx.steps[3] = search_matches_step_finalize;
+    tx.step_count = 4;
+    return tx;
 }
 
 pub fn zigSearchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
@@ -1660,6 +1684,7 @@ test "search scan line and append decisions use typed actions" {
 test "search history index wraps ring buffer" {
     try std.testing.expectEqual(@as(i32, 6), historyIndex(7, 2, 10));
     try std.testing.expectEqual(@as(i32, 9), historyIndex(0, 2, 10));
+    try std.testing.expectEqual(@as(c_int, 9), st_historyringindex(0, 2, 10));
     try std.testing.expectEqual(@as(i32, 4), visibleHistoryIndex(3, 7, 7, 10));
     try std.testing.expectEqual(@as(i32, 9), visibleHistoryIndex(0, 0, 2, 10));
 }
@@ -1983,6 +2008,23 @@ test "search scalar boundary behaviours stay stable across step jump and scan" {
     try std.testing.expectEqual(base.nmatches, scan.update.nmatches);
     try std.testing.expectEqual(base.current, scan.update.current);
     try std.testing.expectEqual(base.match_cap, scan.update.match_cap);
+}
+
+test "search matches transaction skips scans when inactive" {
+    const tx = st_searchmatchestransaction(0, 3);
+
+    try std.testing.expectEqual(@as(c_int, 1), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, search_matches_step_reset), tx.steps[0]);
+}
+
+test "search matches transaction orders full scan" {
+    const tx = st_searchmatchestransaction(1, 2);
+
+    try std.testing.expectEqual(@as(c_int, 4), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, search_matches_step_reset), tx.steps[0]);
+    try std.testing.expectEqual(@as(c_int, search_matches_step_scan_visible), tx.steps[1]);
+    try std.testing.expectEqual(@as(c_int, search_matches_step_scan_history), tx.steps[2]);
+    try std.testing.expectEqual(@as(c_int, search_matches_step_finalize), tx.steps[3]);
 }
 
 test "search history line adapter smoke test" {

@@ -86,6 +86,35 @@ typedef struct {
 } ZigTermCursorSnapshot;
 
 typedef struct {
+	int set_cursor;
+	unsigned short cursor_attr_mode;
+	uint32_t cursor_fg;
+	uint32_t cursor_bg;
+	int cursor_x;
+	int cursor_y;
+	int cursor_state;
+	int mode_mask;
+	int mode_bits;
+	int cursor_state_mask;
+	int cursor_state_bits;
+	int set_charset;
+	int charset;
+	int set_trantbl;
+	int trantbl_slot;
+	int trantbl_charset;
+	int set_all_trantbl;
+	int all_trantbl_charset;
+	int set_scroll_region;
+	int top;
+	int bot;
+	int set_dimensions;
+	int col;
+	int maxcol;
+	int row;
+	int clamp_cursor;
+} ZigTermStateUpdate;
+
+typedef struct {
 	int action;
 	int x;
 	int y;
@@ -108,6 +137,17 @@ typedef struct {
 } ZigTermFrameSnapshot;
 
 typedef struct {
+	int kind;
+	int arg;
+	int index_arg;
+} ZigPlatformEffect;
+
+typedef struct {
+	int count;
+	ZigPlatformEffect effects[8];
+} ZigPlatformEffectList;
+
+typedef struct {
 	int search_scan;
 	int cx;
 	int cy;
@@ -121,6 +161,7 @@ typedef struct {
 	int region_clear_dirty;
 	int region_y;
 	int region_next_y;
+	ZigPlatformEffectList platform;
 } ZigDrawExecPlan;
 
 enum {
@@ -248,6 +289,7 @@ typedef struct {
 	ZigResetPlan state;
 	int screen_step_count;
 	ZigResetScreenStep screen_steps[2];
+	ZigTermStateUpdate term_update;
 } ZigResetExecPlan;
 
 typedef struct {
@@ -283,6 +325,7 @@ typedef struct {
 	ZigResizeClearPlan clear;
 	int step_count;
 	int steps[10];
+	ZigTermStateUpdate term_update;
 } ZigResizeExecPlan;
 
 enum {
@@ -308,6 +351,18 @@ typedef struct {
 
 typedef struct {
 	int kind;
+	size_t offset;
+	size_t len;
+} ZigIoEffect;
+
+typedef struct {
+	int count;
+	size_t consumed;
+	ZigIoEffect effects[32];
+} ZigIoEffectList;
+
+typedef struct {
+	int kind;
 	int mode_set;
 	ZigEditPlan edit;
 	ZigCursorPlan cursor;
@@ -316,6 +371,48 @@ typedef struct {
 	ZigErasePlan erase;
 	ZigStatePlan state;
 } ZigCsiExecPlan;
+
+enum {
+	ST_ZIG_PLATFORM_EFFECT_NONE = 0,
+	ST_ZIG_PLATFORM_EFFECT_SET_TITLE = 1,
+	ST_ZIG_PLATFORM_EFFECT_SET_ICON_TITLE = 2,
+	ST_ZIG_PLATFORM_EFFECT_DECODE_CLIPBOARD = 3,
+	ST_ZIG_PLATFORM_EFFECT_SET_SELECTION = 4,
+	ST_ZIG_PLATFORM_EFFECT_COPY_CLIPBOARD = 5,
+	ST_ZIG_PLATFORM_EFFECT_SET_COLOR = 6,
+	ST_ZIG_PLATFORM_EFFECT_RESET_COLOR = 7,
+	ST_ZIG_PLATFORM_EFFECT_REDRAW = 8,
+	ST_ZIG_PLATFORM_EFFECT_UNKNOWN_STR = 9,
+	ST_ZIG_PLATFORM_EFFECT_XSETMODE = 10,
+	ST_ZIG_PLATFORM_EFFECT_POINTER_MOTION = 11,
+	ST_ZIG_PLATFORM_EFFECT_CURSOR = 12,
+	ST_ZIG_PLATFORM_EFFECT_CLEAR_SCREEN = 13,
+	ST_ZIG_PLATFORM_EFFECT_SWAP_SCREEN = 14,
+	ST_ZIG_PLATFORM_EFFECT_MOVE_ORIGIN = 15,
+	ST_ZIG_PLATFORM_EFFECT_SEARCH_SCAN = 16,
+	ST_ZIG_PLATFORM_EFFECT_DRAW_REGION = 17,
+	ST_ZIG_PLATFORM_EFFECT_DRAW_CURSOR = 18,
+	ST_ZIG_PLATFORM_EFFECT_FINISH_DRAW = 19,
+	ST_ZIG_PLATFORM_EFFECT_IME_SPOT = 20,
+	ST_ZIG_PLATFORM_EFFECT_MODE_UNKNOWN_PRIVATE = 21,
+	ST_ZIG_PLATFORM_EFFECT_MODE_UNKNOWN_REGULAR = 22,
+};
+
+enum {
+	ST_ZIG_PLATFORM_MODE_APPCURSOR = 1,
+	ST_ZIG_PLATFORM_MODE_REVERSE = 2,
+	ST_ZIG_PLATFORM_MODE_HIDE = 3,
+	ST_ZIG_PLATFORM_MODE_MOUSE = 4,
+	ST_ZIG_PLATFORM_MODE_MOUSEX10 = 5,
+	ST_ZIG_PLATFORM_MODE_MOUSEBTN = 6,
+	ST_ZIG_PLATFORM_MODE_MOUSEMOTION = 7,
+	ST_ZIG_PLATFORM_MODE_MOUSEMANY = 8,
+	ST_ZIG_PLATFORM_MODE_FOCUS = 9,
+	ST_ZIG_PLATFORM_MODE_MOUSESGR = 10,
+	ST_ZIG_PLATFORM_MODE_8BIT = 11,
+	ST_ZIG_PLATFORM_MODE_BRCKTPASTE = 12,
+	ST_ZIG_PLATFORM_MODE_KBDLOCK = 13,
+};
 
 typedef struct {
 	int kind;
@@ -337,6 +434,8 @@ typedef struct {
 	int mode_bits;
 	int xsetmode_action;
 	int xsetmode_set;
+	ZigPlatformEffectList platform;
+	ZigTermStateUpdate term_update;
 } ZigModePlan;
 
 typedef struct {
@@ -353,17 +452,6 @@ typedef struct {
 	int payload_arg;
 	int color_arg;
 } ZigStrHandlePlan;
-
-typedef struct {
-	int kind;
-	int arg;
-	int index_arg;
-} ZigStrApplyEffect;
-
-typedef struct {
-	int count;
-	ZigStrApplyEffect effects[8];
-} ZigStrApplyEffectList;
 
 typedef struct {
 	int arg;
@@ -384,6 +472,7 @@ typedef struct {
 	int icharset;
 	int tab_set;
 	int tab_x;
+	ZigTermStateUpdate term_update;
 } ZigInputScalarStateUpdate;
 
 typedef struct {
@@ -411,10 +500,63 @@ typedef struct {
 } ZigInputEscPlan;
 
 typedef struct {
+	int kind;
+	int new_esc;
+	size_t new_len;
+	size_t new_size;
+} ZigStrCollectExec;
+
+typedef struct {
+	ZigStrCollectExec first;
+	int step_count;
+	int steps[2];
+} ZigStrCollectTransaction;
+
+typedef struct {
+	int kind;
+	int action_count;
+	int actions[3];
+	int handle_csi;
+	int csi_write;
+	unsigned char csi_byte;
+	size_t new_csi_len;
+	int finish_esc;
+} ZigInputEscFlowPlan;
+
+typedef struct {
+	int clear_selection;
+	int wrapnext_newline;
+	int overflow_newline;
+	int write_glyph;
+	int mark_dirty;
+	int advance;
+	int next_x;
+	int cursor_state_mask;
+	int cursor_state_bits;
+} ZigPutcStepPlan;
+
+typedef struct {
 	int is_str;
 	int is_control;
 	int is_esc;
 } ZigInputRoutingPlan;
+
+typedef struct {
+	int route;
+	int print;
+	ZigInputRoutingPlan routing;
+	ZigStrCollectTransaction collect;
+	ZigInputControlPlan control;
+	ZigInputEscFlowPlan esc_flow;
+	ZigPutcStepPlan putc;
+} ZigInputStepPlan;
+
+enum {
+	ST_ZIG_INPUT_ROUTE_GRAPHIC = 0,
+	ST_ZIG_INPUT_ROUTE_STR = 1,
+	ST_ZIG_INPUT_ROUTE_CONTROL = 2,
+	ST_ZIG_INPUT_ROUTE_ESC = 3,
+};
 
 enum {
 	ST_ZIG_CTL_ACTION_TAB = 1,
@@ -457,17 +599,6 @@ typedef struct {
 	int caret;
 	int bracket;
 } ZigWriteControlPlan;
-
-typedef struct {
-	int kind;
-	int action_count;
-	int actions[3];
-	int handle_csi;
-	int csi_write;
-	unsigned char csi_byte;
-	size_t new_csi_len;
-	int finish_esc;
-} ZigInputEscFlowPlan;
 
 enum {
 	ST_ZIG_ESC_FLOW_CSI = 1,
@@ -633,6 +764,20 @@ typedef struct {
 } ZigGetSelExecPlan;
 
 typedef struct {
+	int bufsize;
+	int start_y;
+	int end_y;
+	int step_count;
+	int steps[3];
+} ZigSelectionExtractTransaction;
+
+enum {
+	ST_ZIG_SELECTION_EXTRACT_ALLOC_BUFFER = 1,
+	ST_ZIG_SELECTION_EXTRACT_COPY_LINES = 2,
+	ST_ZIG_SELECTION_EXTRACT_FINISH_NUL = 3,
+};
+
+typedef struct {
 	int run;
 	int current;
 } ZigSearchStepPlan;
@@ -683,10 +828,22 @@ typedef struct {
 	ZigSearchMatch match;
 } ZigSearchScanLineStep;
 
+typedef struct {
+	int step_count;
+	int steps[4];
+} ZigSearchMatchesTransaction;
+
 enum {
 	ST_ZIG_SEARCH_APPEND_SKIP = 0,
 	ST_ZIG_SEARCH_APPEND = 1,
 	ST_ZIG_SEARCH_APPEND_GROW = 2,
+};
+
+enum {
+	ST_ZIG_SEARCH_MATCHES_STEP_RESET = 1,
+	ST_ZIG_SEARCH_MATCHES_STEP_SCAN_VISIBLE = 2,
+	ST_ZIG_SEARCH_MATCHES_STEP_SCAN_HISTORY = 3,
+	ST_ZIG_SEARCH_MATCHES_STEP_FINALIZE = 4,
 };
 
 enum {
@@ -854,25 +1011,6 @@ typedef struct {
 } ZigPutcPreparePlan;
 
 typedef struct {
-	int clear_selection;
-	int wrapnext_newline;
-	int overflow_newline;
-	int write_glyph;
-	int mark_dirty;
-	int advance;
-	int next_x;
-	int cursor_state_mask;
-	int cursor_state_bits;
-} ZigPutcStepPlan;
-
-typedef struct {
-	int kind;
-	int new_esc;
-	size_t new_len;
-	size_t new_size;
-} ZigStrCollectExec;
-
-typedef struct {
 	ZigStrCollectExec first;
 	int retry;
 } ZigStrCollectApplyPlan;
@@ -886,6 +1024,11 @@ enum {
 	ST_ZIG_STR_COLLECT_FINISH = 1,
 	ST_ZIG_STR_COLLECT_GROW = 2,
 	ST_ZIG_STR_COLLECT_ABORT = 3,
+};
+
+enum {
+	ST_ZIG_STR_COLLECT_STEP_APPLY_FIRST = 1,
+	ST_ZIG_STR_COLLECT_STEP_RETRY_AFTER_GROW = 2,
 };
 
 enum {
@@ -936,6 +1079,11 @@ enum {
 	ST_ZIG_MISC_REPEAT_LAST = 6,
 	ST_ZIG_MISC_SET_CURSOR_STYLE = 7,
 	ST_ZIG_MISC_UNKNOWN = 8,
+};
+
+enum {
+	ST_ZIG_IO_EFFECT_RAW = 1,
+	ST_ZIG_IO_EFFECT_CRLF = 2,
 };
 
 enum {
@@ -1024,10 +1172,12 @@ ZigCsiParse st_csiparse(const unsigned char *, size_t);
 ZigCsiExecPlan st_csiexecplan(char, char, char, const int *, int, int, int, int, int);
 ZigMiscPlan st_toggleprinterplan(int);
 ZigMiscPlan st_startprinterplan(void);
+ZigIoEffectList st_ttywriteeffects(const unsigned char *, size_t, int);
 ZigAttrUpdate st_tsetattr(ZigAttrState, uint32_t, uint32_t, const int *, int);
 ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigTermCursorPlan st_termcursorplan(int, ZigTermCursorSnapshot, int, int);
 ZigDrawExecPlan st_drawexecplan(ZigTermFrameSnapshot, const ZigGlyph * const *, const int *, int, int);
+ZigDrawExecPlan st_drawregionnext(const int *, int, int);
 ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 ZigScrollPlan st_tscrollplan(int, int, int, int, int, int, int, int);
@@ -1037,27 +1187,24 @@ ZigScrollRegion st_tsetscroll(int, int, int);
 ZigResizeExecPlan st_tresizeexecplan(const int *, int, int, int, int, int, int, int);
 ZigResetExecPlan st_tresetexecplan(uint32_t, uint32_t, int);
 void st_tresettabs(int *, int, unsigned int);
-ZigModePlan st_modeplan(int, int, int, int);
+ZigModePlan st_modeplan(int, int, int, int, int);
 int st_tdefutf8plan(char, int);
 int st_tdeftranplan(char);
 ZigStrParse st_strparse(const unsigned char *, size_t);
 ZigStrSequence st_tstrsequence(unsigned char, int);
 ZigStrHandleParPlan st_strhandleparplan(int);
 ZigStrHandlePlan st_strhandleplan(char, int, int, int);
-ZigStrApplyEffectList st_strapplyplan(int, int, int, int, int);
+ZigPlatformEffectList st_strapplyplan(int, int, int, int, int);
 ZigInputControlPlan st_inputcontrolplan(unsigned char, int, int, int);
 ZigInputEscPlan st_inputescplan(unsigned char, int, int, int, int);
 ZigPutcDecode st_putcdecode(uint32_t, int);
 ZigWriteControlPlan st_twritecontrol(uint32_t, int);
-ZigInputRoutingPlan st_inputroutingplan(int, int);
+ZigInputStepPlan st_inputstepplan(int, int, int, uint32_t, unsigned char *, size_t, const unsigned char *, size_t, size_t, size_t, size_t, int, int, int, int, int, int, int, int);
 void st_tsetchar(uint32_t, const ZigGlyph *, ZigGlyph *, int, int, int);
 void st_tclearglyph(ZigGlyph *, int, const ZigGlyph *);
 ZigPutcWriteResult st_tputcwrite(uint32_t, int, const ZigGlyph *, ZigGlyph *, int, int, int, int);
-ZigPutcStepPlan st_tputcstepplan(int, int, int, int, int, int);
 ZigStrCollectExec st_tcollectstr(uint32_t, int, unsigned char *, size_t, const unsigned char *, size_t, size_t);
-ZigStrCollectApplyPlan st_tcollectstrapply(uint32_t, int, unsigned char *, size_t, const unsigned char *, size_t, size_t);
 ZigStrResetPlan st_strresetplan(void);
-ZigInputEscFlowPlan st_inputescflowplan(int, uint32_t, size_t, size_t);
 int st_tlinelen(const ZigGlyph *, int);
 int st_tputtab(int, int, int, const int *);
 int st_tattrset(const ZigGlyph * const *, int, int, int);
@@ -1079,7 +1226,9 @@ int st_selected(ZigSelectionSnapshot, int, int, int);
 int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
 ZigSearchScanLineStep st_searchscanlineiter(const ZigGlyph *, int, const uint32_t *, int, ZigSearchScanLineState);
+ZigSearchMatchesTransaction st_searchmatchestransaction(int, int);
 ZigHistoryLinePlan st_tlinehistplan(int, int, int);
+int st_historyringindex(int, int, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
 ZigSearchJumpPlan st_searchjumpplan(int, int, int, int, int);
 ZigSearchCursorResult st_searchcursorupdate(ZigSearchSnapshot, const unsigned char *, int);
@@ -1090,5 +1239,6 @@ ZigSearchPromptResult st_searchpromptupdate(ZigSearchSnapshot);
 ZigSearchInputResult st_searchinputupdate(ZigSearchSnapshot, size_t);
 ZigSearchSetResult st_searchsetupdate(ZigSearchSnapshot, size_t, int);
 ZigGetSelExecPlan st_getselexecplan(ZigSelectionSnapshot, int, int, const ZigGlyph *, int);
+ZigSelectionExtractTransaction st_selectionextracttransaction(ZigSelectionSnapshot, int, int);
 
 #endif

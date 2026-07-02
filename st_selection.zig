@@ -119,6 +119,18 @@ pub const ZigGetSelExecPlan = extern struct {
     bufsize: c_int,
 };
 
+pub const ZigSelectionExtractTransaction = extern struct {
+    bufsize: c_int,
+    start_y: c_int,
+    end_y: c_int,
+    step_count: c_int,
+    steps: [3]c_int,
+};
+
+pub const selection_extract_alloc_buffer = 1;
+pub const selection_extract_copy_lines = 2;
+pub const selection_extract_finish_nul = 3;
+
 fn boolInt(value: bool) c_int {
     return if (value) 1 else 0;
 }
@@ -865,6 +877,16 @@ export fn st_getselexecplan(snapshot: ZigSelectionSnapshot, y: c_int, col: c_int
     return zigGetselexecplan(snapshot, y, col, line, utf_siz);
 }
 
+export fn st_selectionextracttransaction(snapshot: ZigSelectionSnapshot, col: c_int, utf_siz: c_int) ZigSelectionExtractTransaction {
+    return .{
+        .bufsize = getBufferSize(col, .{ .start = .{ .x = 0, .y = snapshot.nb_y }, .end = .{ .x = 0, .y = snapshot.ne_y } }, utf_siz),
+        .start_y = snapshot.nb_y,
+        .end_y = snapshot.ne_y,
+        .step_count = 3,
+        .steps = .{ selection_extract_alloc_buffer, selection_extract_copy_lines, selection_extract_finish_nul },
+    };
+}
+
 pub fn snapWordPlan(point: model.Point, direction: i32, size: model.Size) SnapWordPlan {
     var next = model.Point{ .x = point.x + direction, .y = point.y };
     var wrapped = false;
@@ -1149,6 +1171,17 @@ test "get selection exec plan adapter keeps rectangular and wrap behaviour" {
     const wrapped_rect = st_getselexecplan(testSelectionSnapshot(.rectangular, .ready, false, 0, .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }), 0, wrapped.len, &wrapped, 4);
     try std.testing.expectEqual(@as(c_int, 0), wrapped_regular.newline);
     try std.testing.expectEqual(@as(c_int, 1), wrapped_rect.newline);
+}
+
+test "selection extract transaction orders allocation copy and finish" {
+    const tx = st_selectionextracttransaction(testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 1, .y = 2 }, .{ .x = 4, .y = 5 }), 10, 4);
+
+    try std.testing.expectEqual(@as(c_int, 2), tx.start_y);
+    try std.testing.expectEqual(@as(c_int, 5), tx.end_y);
+    try std.testing.expectEqual(@as(c_int, 3), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, selection_extract_alloc_buffer), tx.steps[0]);
+    try std.testing.expectEqual(@as(c_int, selection_extract_copy_lines), tx.steps[1]);
+    try std.testing.expectEqual(@as(c_int, selection_extract_finish_nul), tx.steps[2]);
 }
 
 test "snap word step accepts and stops" {

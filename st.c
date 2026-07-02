@@ -44,9 +44,7 @@
 #define ISCONTROLC1(c) (BETWEEN(c, 0x80, 0x9f))
 #define ISCONTROL(c) (ISCONTROLC0(c) || ISCONTROLC1(c))
 #define ISDELIM(u) (u && wcschr(worddelimiters, u))
-#define TLINE(y)                                                                                                       \
-    ((y) < term.scr ? term.hist[(int)((((y) + term.histi - term.scr + HISTSIZE + 1) % HISTSIZE))]                      \
-                    : term.line[(y) - term.scr])
+#define TLINE(y) tlineviewport(y)
 
 enum term_mode {
     MODE_WRAP = 1 << 0,
@@ -80,6 +78,23 @@ typedef struct {
     int y;
     char state;
 } TCursor;
+
+enum platform_context_kind {
+    PLATFORM_CONTEXT_STR,
+    PLATFORM_CONTEXT_MODE,
+    PLATFORM_CONTEXT_DRAW,
+};
+
+typedef struct {
+    int kind;
+    const ZigStrHandlePlan *str_plan;
+    int str_narg;
+    char *str_dec;
+    char *str_color_value;
+    int str_color_failed;
+    int mode_set;
+    const ZigDrawExecPlan *draw_frame;
+} PlatformContext;
 
 typedef struct {
     int mode;
@@ -123,30 +138,6 @@ typedef struct {
     int *tabs;
     Rune lastc; /* last printed char outside of sequence, 0 if control */
 } Term;
-
-typedef struct {
-    int set_cursor;
-    TCursor cursor;
-    int mode_mask;
-    int mode_bits;
-    int cursor_state_mask;
-    int cursor_state_bits;
-    int set_charset;
-    int charset;
-    int set_trantbl;
-    int trantbl_slot;
-    int trantbl_charset;
-    int set_all_trantbl;
-    int all_trantbl_charset;
-    int set_scroll_region;
-    int top;
-    int bot;
-    int set_dimensions;
-    int col;
-    int maxcol;
-    int row;
-    int clamp_cursor;
-} TermStateUpdate;
 
 /* CSI Escape sequence structs */
 /* ESC '[' [[ [<priv>] <arg> [;]] <mode> [<mode>]] */
@@ -228,20 +219,22 @@ typedef struct {
 } SelectionSnapPoint;
 
 typedef struct {
-    int kind;
-    int arg;
-    int index_arg;
-} PlatformEffect;
+    int set_scr;
+    int scr;
+    int set_histi;
+    int histi;
+} HistoryStateUpdate;
 
 typedef struct {
-    int count;
-    PlatformEffect effects[8];
-} PlatformEffectList;
+    const char *data;
+    size_t len;
+} IoWriteEffect;
 
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
 static void ttywriteraw(const char *, size_t);
+static void ioapplyttywrite(IoWriteEffect);
 static SearchScalarState searchscalarstate(void);
 static void searchwritescalarstate(SearchScalarState);
 static ZigSearchSnapshot zigsearchsnapshot(SearchScalarState);
@@ -263,7 +256,11 @@ static int eschandle(uchar);
 static void strdump(void);
 static void strhandle(void);
 static void strapplyplan(const ZigStrHandlePlan *, int);
-static void platformapplyeffects(const PlatformEffectList *, const ZigStrHandlePlan *, int);
+static void platformapplyeffects(const ZigPlatformEffectList *, PlatformContext);
+static int platformapplystreffect(PlatformContext *, ZigPlatformEffect, int, int);
+static int platformapplymodeeffect(PlatformContext *, ZigPlatformEffect, int, int);
+static int platformapplydraweffect(PlatformContext *, ZigPlatformEffect, int, int);
+static const char *platformcontextname(int);
 static char *strarg(const ZigStrHandlePlan *, int, int, const char *);
 static char *strargpar(int, int);
 static void strparse(void);
@@ -282,6 +279,7 @@ static void tinsertblank(int);
 static void tinsertblankline(int);
 static int tlinelen(int);
 static Line tlinehist(int);
+static Line tlineviewport(int);
 static void tmoveto(int, int);
 static void tmoveato(int, int);
 static void tnewline(int);
@@ -291,13 +289,20 @@ static void treset(void);
 static void tscrollup(int, int, int);
 static void tscrolldown(int, int, int);
 static void tapplyscrollplan(const ZigScrollPlan *, int);
+static void linepointerfreerowpair(int);
+static void linepointermemmoverows(int, int);
+static void linepointerreallocarrays(int, int);
+static void linepointerreallocrowpair(int, int);
+static void linepointerallocrowpair(int, int);
+static void linepointerswaphistory(int);
+static void linepointerswaprow(int, int);
 static void tsetattr(int *, int);
 static void tsetchar(Rune, Glyph *, int, int);
 static void tsetdirt(int, int);
 static void termapplydirtyrange(ZigLineRange);
 static void termapplycursorplan(const ZigTermCursorPlan *);
-static void termapplystateupdate(TermStateUpdate);
-static void termapplyresetstate(const ZigResetPlan *);
+static void termapplystateupdate(ZigTermStateUpdate);
+static void historyapplystateupdate(HistoryStateUpdate);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
@@ -320,6 +325,7 @@ static void searchapplyresourceeffect(ZigSearchEffectPlan);
 static void searchapplyvieweffect(ZigSearchEffectPlan);
 static void searchapplyfloweffect(ZigSearchEffectPlan);
 static int searchresetscanmatches(void);
+static void searchapplymatchestransaction(void);
 static void searchresetstate(void);
 static void searchapplycursor(int);
 static void searchapplystate(int);
@@ -332,6 +338,7 @@ static void selectionapplystate(ZigSelectionStateUpdate);
 static void selectionapplybounds(ZigSelectionStateUpdate);
 static void selectionapplyresult(ZigSelectionStateResult);
 static void selectionapplyscrollresult(ZigSelectionStateResult);
+static char *selectioncopyline(char *, int, ZigGetSelExecPlan);
 
 static void selnormalize(void);
 static void selscroll(int, int);
@@ -416,6 +423,12 @@ Line tlinehist(int y) {
 
     plan = st_tlinehistplan(y, HISTSIZE, term.row);
     return plan.hist ? term.hist[plan.index] : term.line[plan.index];
+}
+
+Line tlineviewport(int y) {
+    if (y < term.scr)
+        return term.hist[st_historyringindex(term.histi, term.scr - y, HISTSIZE)];
+    return term.line[y - term.scr];
 }
 
 void selstart(int col, int row, int snap) {
@@ -897,31 +910,43 @@ void searchset(const char *query) {
 }
 
 void searchscan(void) {
-    int y, scr, oldcurrent;
+    searchapplymatchestransaction();
+}
+
+void searchapplymatchestransaction(void) {
+    int step_index, y, scr, oldcurrent;
     SearchMatchesState matches;
     SearchScalarState state;
     ZigSearchScanResult result;
+    ZigSearchMatchesTransaction transaction;
 
-    /* scan 会重建整份 matches 数组。
-     * 先记住旧 current，扫描结束后再决定保留旧索引、回退到 0，还是置为 -1。 */
     state = searchscalarstate();
-    oldcurrent = searchresetscanmatches();
-    if (!state.active || state.query_len <= 0)
-        return;
-
-    for (y = 0; y < term.row; ++y) {
-        searchscanline(term.line[y], 0, y);
+    oldcurrent = state.current;
+    transaction = st_searchmatchestransaction(state.active, state.query_len);
+    for (step_index = 0; step_index < transaction.step_count; step_index++) {
+        switch (transaction.steps[step_index]) {
+        case ST_ZIG_SEARCH_MATCHES_STEP_RESET:
+            oldcurrent = searchresetscanmatches();
+            break;
+        case ST_ZIG_SEARCH_MATCHES_STEP_SCAN_VISIBLE:
+            for (y = 0; y < term.row; ++y)
+                searchscanline(term.line[y], 0, y);
+            break;
+        case ST_ZIG_SEARCH_MATCHES_STEP_SCAN_HISTORY:
+            for (scr = 1; scr < HISTSIZE; ++scr)
+                searchscanline(searchhistline(scr), scr, 0);
+            break;
+        case ST_ZIG_SEARCH_MATCHES_STEP_FINALIZE:
+            matches = searchmatchesstate();
+            result = st_searchscanupdate(searchsnapshot(), matches.count, oldcurrent);
+            searchapplyresourceeffect(result.effect);
+            searchapplyupdate(result.update);
+            break;
+        default:
+            die("invalid search matches transaction step: step=%d index=%d count=%d\n", transaction.steps[step_index],
+                step_index, transaction.step_count);
+        }
     }
-    for (scr = 1; scr < HISTSIZE; ++scr) {
-        searchscanline(searchhistline(scr), scr, 0);
-    }
-
-    /* matches 重新生成后的 current/nmatches 收口也交给 Zig，
-     * C 只保留数组写入和最终状态落回。 */
-    matches = searchmatchesstate();
-    result = st_searchscanupdate(searchsnapshot(), matches.count, oldcurrent);
-    searchapplyresourceeffect(result.effect);
-    searchapplyupdate(result.update);
 }
 
 void searchscanline(Line line, int scr, int y) {
@@ -965,7 +990,7 @@ void searchscanline(Line line, int scr, int y) {
     }
 }
 
-Line searchhistline(int scr) { return term.hist[(int)(((term.histi - scr + HISTSIZE + 1) % HISTSIZE))]; }
+Line searchhistline(int scr) { return term.hist[st_historyringindex(term.histi, scr, HISTSIZE)]; }
 
 void searchjump(void) {
     SearchMatch *match;
@@ -983,7 +1008,7 @@ void searchjump(void) {
     match = &search.matches[state.current];
     plan = st_searchjumpplan(state.active, state.current, matches.count, term.scr, match->scr);
     if (plan.run && term.scr != plan.new_scr) {
-        term.scr = plan.new_scr;
+        historyapplystateupdate((HistoryStateUpdate){.set_scr = 1, .scr = plan.new_scr});
         tfulldirt();
     }
 }
@@ -1063,48 +1088,54 @@ SelectionSnapPoint selsnappoint(int x, int y, int direction) {
 
 char *getsel(void) {
     char *str, *ptr;
-    int y;
-    Glyph *gp, *last;
+    int step_index, y;
+    ZigSelectionExtractTransaction transaction;
     ZigGetSelExecPlan plan;
 
     if (sel.ob.x == -1)
         return NULL;
 
-    plan = st_getselexecplan(selectionsnapshot(), sel.nb.y, term.col, (const ZigGlyph *)TLINE(sel.nb.y), UTF_SIZ);
-    ptr = str = xmalloc(plan.bufsize);
-
-    /* append every set & selected glyph to the selection */
-    for (y = sel.nb.y; y <= sel.ne.y; y++) {
-        plan = st_getselexecplan(selectionsnapshot(), y, term.col, (const ZigGlyph *)TLINE(y), UTF_SIZ);
-        if (plan.empty) {
-            *ptr++ = '\n';
-            continue;
+    transaction = st_selectionextracttransaction(selectionsnapshot(), term.col, UTF_SIZ);
+    str = ptr = NULL;
+    for (step_index = 0; step_index < transaction.step_count; step_index++) {
+        switch (transaction.steps[step_index]) {
+        case ST_ZIG_SELECTION_EXTRACT_ALLOC_BUFFER:
+            ptr = str = xmalloc(transaction.bufsize);
+            break;
+        case ST_ZIG_SELECTION_EXTRACT_COPY_LINES:
+            for (y = transaction.start_y; y <= transaction.end_y; y++) {
+                plan = st_getselexecplan(selectionsnapshot(), y, term.col, (const ZigGlyph *)TLINE(y), UTF_SIZ);
+                if (plan.empty) {
+                    *ptr++ = '\n';
+                    continue;
+                }
+                ptr = selectioncopyline(ptr, y, plan);
+            }
+            break;
+        case ST_ZIG_SELECTION_EXTRACT_FINISH_NUL:
+            *ptr = 0;
+            break;
+        default:
+            die("invalid selection extract step: step=%d index=%d count=%d\n", transaction.steps[step_index], step_index,
+                transaction.step_count);
         }
-
-        gp = &TLINE(y)[plan.start_x];
-        last = &TLINE(y)[plan.last_index];
-
-        for (; gp <= last; ++gp) {
-            if (gp->mode & ATTR_WDUMMY)
-                continue;
-
-            ptr += utf8encode(gp->u, ptr);
-        }
-
-        /*
-         * Copy and pasting of line endings is inconsistent
-         * in the inconsistent terminal and GUI world.
-         * The best solution seems like to produce '\n' when
-         * something is copied from st and convert '\n' to
-         * '\r', when something to be pasted is received by
-         * st.
-         * FIXME: Fix the computer world.
-         */
-        if (plan.newline)
-            *ptr++ = '\n';
     }
-    *ptr = 0;
     return str;
+}
+
+char *selectioncopyline(char *ptr, int y, ZigGetSelExecPlan plan) {
+    Glyph *gp, *last;
+
+    gp = &TLINE(y)[plan.start_x];
+    last = &TLINE(y)[plan.last_index];
+    for (; gp <= last; ++gp) {
+        if (gp->mode & ATTR_WDUMMY)
+            continue;
+        ptr += utf8encode(gp->u, ptr);
+    }
+    if (plan.newline)
+        *ptr++ = '\n';
+    return ptr;
 }
 
 void selclear(void) {
@@ -1297,34 +1328,41 @@ size_t ttyread(void) {
 }
 
 void ttywrite(const char *s, size_t n, int may_echo) {
-    const char *next;
     Arg arg = (Arg){.i = term.scr};
+    ZigIoEffectList effects;
+    ZigIoEffect effect;
+    size_t offset;
+    int i;
 
     kscrolldown(&arg);
 
     if (may_echo && IS_SET(MODE_ECHO))
         twrite(s, n, 1);
 
-    if (!IS_SET(MODE_CRLF)) {
-        ttywriteraw(s, n);
-        return;
-    }
-
-    /* This is similar to how the kernel handles ONLCR for ttys */
-    while (n > 0) {
-        if (*s == '\r') {
-            next = s + 1;
-            ttywriteraw("\r\n", 2);
-        } else {
-            next = s;
-            while ((size_t)(next - s) < n && *next != '\r')
-                next++;
-            ttywriteraw(s, next - s);
+    offset = 0;
+    while (offset < n) {
+        effects = st_ttywriteeffects((const unsigned char *)s + offset, n - offset, IS_SET(MODE_CRLF));
+        if (effects.consumed == 0 && effects.count == 0)
+            die("ttywrite made no progress: offset=%zu len=%zu crlf=%d\n", offset, n, IS_SET(MODE_CRLF));
+        for (i = 0; i < effects.count; i++) {
+            effect = effects.effects[i];
+            switch (effect.kind) {
+            case ST_ZIG_IO_EFFECT_RAW:
+                ioapplyttywrite((IoWriteEffect){.data = s + offset + effect.offset, .len = effect.len});
+                break;
+            case ST_ZIG_IO_EFFECT_CRLF:
+                ioapplyttywrite((IoWriteEffect){.data = "\r\n", .len = 2});
+                break;
+            default:
+                die("invalid ttywrite io effect: kind=%d index=%d count=%d offset=%zu len=%zu\n", effect.kind, i,
+                    effects.count, offset, n);
+            }
         }
-        n -= next - s;
-        s = next;
+        offset += effects.consumed;
     }
 }
+
+void ioapplyttywrite(IoWriteEffect effect) { ttywriteraw(effect.data, effect.len); }
 
 void ttywriteraw(const char *s, size_t n) {
     fd_set wfd, rfd;
@@ -1445,7 +1483,7 @@ void treset(void) {
     ZigResetExecPlan plan;
 
     plan = st_tresetexecplan(defaultfg, defaultbg, term.row);
-    termapplyresetstate(&plan.state);
+    termapplystateupdate(plan.term_update);
     st_tresettabs(term.tabs, term.col, tabspaces);
 
     if (plan.screen_step_count != 2)
@@ -1461,25 +1499,6 @@ void treset(void) {
         if (step->swap_screen)
             tswapscreen();
     }
-}
-
-void termapplyresetstate(const ZigResetPlan *state) {
-    termapplystateupdate((TermStateUpdate){
-        .set_cursor = 1,
-        .cursor = (TCursor){{.mode = state->cursor_attr_mode, .fg = state->cursor_fg, .bg = state->cursor_bg},
-                            .x = state->cursor_x,
-                            .y = state->cursor_y,
-                            .state = state->cursor_state},
-        .mode_mask = ~0,
-        .mode_bits = state->mode,
-        .set_charset = 1,
-        .charset = state->charset,
-        .set_all_trantbl = 1,
-        .all_trantbl_charset = state->trantbl,
-        .set_scroll_region = 1,
-        .top = state->top,
-        .bot = state->bot,
-    });
 }
 
 void tnew(int col, int row) {
@@ -1502,7 +1521,7 @@ void kscrolldown(const Arg *a) {
 
     plan = st_kscrolldownplan(a->i, term.row, term.scr);
     if (plan.run) {
-        term.scr = plan.new_scr;
+        historyapplystateupdate((HistoryStateUpdate){.set_scr = 1, .scr = plan.new_scr});
         if (plan.selscroll_delta)
             selscroll(0, plan.selscroll_delta);
         if (plan.full_dirty)
@@ -1515,7 +1534,7 @@ void kscrollup(const Arg *a) {
 
     plan = st_kscrollupplan(a->i, term.row, term.scr, HISTSIZE);
     if (plan.run) {
-        term.scr = plan.new_scr;
+        historyapplystateupdate((HistoryStateUpdate){.set_scr = 1, .scr = plan.new_scr});
         if (plan.selscroll_delta)
             selscroll(0, plan.selscroll_delta);
         if (plan.full_dirty)
@@ -1539,20 +1558,17 @@ void tscrollup(int orig, int n, int copyhist) {
 
 void tapplyscrollplan(const ZigScrollPlan *plan, int orig) {
     int i, step_index;
-    Line temp;
     ZigScrollStep step;
 
     for (step_index = 0; step_index < plan->step_count; step_index++) {
         step = plan->steps[step_index];
         switch (step.kind) {
         case ST_ZIG_SCROLL_STEP_HIST_SWAP:
-            term.histi = step.a;
-            temp = term.hist[term.histi];
-            term.hist[term.histi] = term.line[step.b];
-            term.line[step.b] = temp;
+            historyapplystateupdate((HistoryStateUpdate){.set_histi = 1, .histi = step.a});
+            linepointerswaphistory(step.b);
             break;
         case ST_ZIG_SCROLL_STEP_SCR_UPDATE:
-            term.scr = step.a;
+            historyapplystateupdate((HistoryStateUpdate){.set_scr = 1, .scr = step.a});
             break;
         case ST_ZIG_SCROLL_STEP_CLEAR_RECT:
             tclearregion(step.a, step.b, term.col + step.c, step.d);
@@ -1563,15 +1579,11 @@ void tapplyscrollplan(const ZigScrollPlan *plan, int orig) {
         case ST_ZIG_SCROLL_STEP_LINE_SWAP_LOOP:
             if (step.c > 0) {
                 for (i = step.a; i <= step.b; i += step.c) {
-                    temp = term.line[i];
-                    term.line[i] = term.line[i + step.d];
-                    term.line[i + step.d] = temp;
+                    linepointerswaprow(i, i + step.d);
                 }
             } else {
                 for (i = step.a; i >= step.b; i += step.c) {
-                    temp = term.line[i];
-                    term.line[i] = term.line[i + step.d];
-                    term.line[i + step.d] = temp;
+                    linepointerswaprow(i, i + step.d);
                 }
             }
             break;
@@ -1582,6 +1594,51 @@ void tapplyscrollplan(const ZigScrollPlan *plan, int orig) {
             die("invalid scroll step: kind=%d index=%d count=%d\n", step.kind, step_index, plan->step_count);
         }
     }
+}
+
+void linepointerswaphistory(int line_index) {
+    Line temp;
+
+    temp = term.hist[term.histi];
+    term.hist[term.histi] = term.line[line_index];
+    term.line[line_index] = temp;
+}
+
+void linepointerswaprow(int first, int second) {
+    Line temp;
+
+    temp = term.line[first];
+    term.line[first] = term.line[second];
+    term.line[second] = temp;
+}
+
+void linepointerfreerowpair(int row) {
+    free(term.line[row]);
+    free(term.alt[row]);
+}
+
+void linepointermemmoverows(int slide_count, int row) {
+    if (slide_count > 0) {
+        memmove(term.line, term.line + slide_count, row * sizeof(Line));
+        memmove(term.alt, term.alt + slide_count, row * sizeof(Line));
+    }
+}
+
+void linepointerreallocarrays(int row, int col) {
+    term.line = xrealloc(term.line, row * sizeof(Line));
+    term.alt = xrealloc(term.alt, row * sizeof(Line));
+    term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
+    term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
+}
+
+void linepointerreallocrowpair(int row, int col) {
+    term.line[row] = xrealloc(term.line[row], col * sizeof(Glyph));
+    term.alt[row] = xrealloc(term.alt[row], col * sizeof(Glyph));
+}
+
+void linepointerallocrowpair(int row, int col) {
+    term.line[row] = xmalloc(col * sizeof(Glyph));
+    term.alt[row] = xmalloc(col * sizeof(Glyph));
 }
 
 void selscroll(int orig, int n) {
@@ -1612,9 +1669,12 @@ void termapplycursorplan(const ZigTermCursorPlan *plan) {
     term.c.y = plan->y;
 }
 
-void termapplystateupdate(TermStateUpdate update) {
+void termapplystateupdate(ZigTermStateUpdate update) {
     if (update.set_cursor)
-        term.c = update.cursor;
+        term.c = (TCursor){{.mode = update.cursor_attr_mode, .fg = update.cursor_fg, .bg = update.cursor_bg},
+                           .x = update.cursor_x,
+                           .y = update.cursor_y,
+                           .state = update.cursor_state};
     if (update.mode_mask)
         term.mode = (term.mode & ~update.mode_mask) | update.mode_bits;
     if (update.cursor_state_mask)
@@ -1636,6 +1696,13 @@ void termapplystateupdate(TermStateUpdate update) {
     }
     if (update.clamp_cursor)
         tmoveto(term.c.x, term.c.y);
+}
+
+void historyapplystateupdate(HistoryStateUpdate update) {
+    if (update.set_scr)
+        term.scr = update.scr;
+    if (update.set_histi)
+        term.histi = update.histi;
 }
 
 void csiparse(void) {
@@ -1770,7 +1837,7 @@ void tsetscroll(int t, int b) {
     ZigScrollRegion region;
 
     region = st_tsetscroll(t, b, term.row);
-    termapplystateupdate((TermStateUpdate){.set_scroll_region = 1, .top = region.top, .bot = region.bottom});
+    termapplystateupdate((ZigTermStateUpdate){.set_scroll_region = 1, .top = region.top, .bot = region.bottom});
 }
 
 void tapplyerase(const ZigErasePlan *plan) {
@@ -1880,7 +1947,7 @@ void tapplymisc(const ZigMiscPlan *plan) {
             tputc(term.lastc);
         break;
     }
-    termapplystateupdate((TermStateUpdate){.mode_mask = plan->mode_mask, .mode_bits = plan->mode_bits});
+    termapplystateupdate((ZigTermStateUpdate){.mode_mask = plan->mode_mask, .mode_bits = plan->mode_bits});
 }
 
 void tsetmode(int priv, int set, int *args, int narg) {
@@ -1888,105 +1955,9 @@ void tsetmode(int priv, int set, int *args, int narg) {
     int *lim;
 
     for (lim = args + narg; args < lim; ++args) {
-        plan = st_modeplan(priv, *args, set, IS_SET(MODE_ALTSCREEN));
-
-        switch (plan.kind) {
-        case ST_ZIG_MODE_IGNORE:
-            break;
-        case ST_ZIG_MODE_APPCURSOR:
-            xsetmode(set, MODE_APPCURSOR);
-            break;
-        case ST_ZIG_MODE_REVERSE:
-            xsetmode(set, MODE_REVERSE);
-            break;
-        case ST_ZIG_MODE_ORIGIN:
-            termapplystateupdate((TermStateUpdate){.cursor_state_mask = plan.cursor_state_mask,
-                                                   .cursor_state_bits = plan.cursor_state_bits});
-            if (plan.move_origin_home)
-                tmoveato(0, 0);
-            break;
-        case ST_ZIG_MODE_WRAP:
-            break;
-        case ST_ZIG_MODE_CURSOR_VISIBILITY:
-            if (plan.xsetmode_action == ST_ZIG_XSETMODE_HIDE)
-                xsetmode(plan.xsetmode_set, MODE_HIDE);
-            break;
-        case ST_ZIG_MODE_MOUSE_X10:
-        case ST_ZIG_MODE_MOUSE_BTN:
-        case ST_ZIG_MODE_MOUSE_MOTION:
-        case ST_ZIG_MODE_MOUSE_MANY:
-            if (plan.pointer_motion >= 0)
-                xsetpointermotion(plan.pointer_motion);
-            if (plan.clear_mouse_mode)
-                xsetmode(0, MODE_MOUSE);
-            switch (plan.mouse_mode) {
-            case ST_ZIG_MOUSE_X10:
-                xsetmode(set, MODE_MOUSEX10);
-                break;
-            case ST_ZIG_MOUSE_BUTTON:
-                xsetmode(set, MODE_MOUSEBTN);
-                break;
-            case ST_ZIG_MOUSE_MOTION:
-                xsetmode(set, MODE_MOUSEMOTION);
-                break;
-            case ST_ZIG_MOUSE_MANY:
-                xsetmode(set, MODE_MOUSEMANY);
-                break;
-            }
-            break;
-        case ST_ZIG_MODE_FOCUS:
-            xsetmode(set, MODE_FOCUS);
-            break;
-        case ST_ZIG_MODE_MOUSE_SGR:
-            if (plan.mouse_mode == ST_ZIG_MOUSE_SGR)
-                xsetmode(set, MODE_MOUSESGR);
-            break;
-        case ST_ZIG_MODE_8BIT:
-            xsetmode(set, MODE_8BIT);
-            break;
-        case ST_ZIG_MODE_ALT1049:
-            if (!allowaltscreen)
-                break;
-            if (plan.cursor_before >= 0)
-                tcursor(plan.cursor_before);
-            if (plan.clear_before_swap)
-                tclearregion(0, 0, term.col - 1, term.row - 1);
-            if (plan.swap_screen)
-                tswapscreen();
-            if (plan.cursor_after >= 0)
-                tcursor(plan.cursor_after);
-            break;
-        case ST_ZIG_MODE_ALT47:
-            if (!allowaltscreen)
-                break;
-            if (plan.clear_before_swap)
-                tclearregion(0, 0, term.col - 1, term.row - 1);
-            if (plan.swap_screen)
-                tswapscreen();
-            break;
-        case ST_ZIG_MODE_CURSOR1048:
-            if (plan.cursor_after >= 0)
-                tcursor(plan.cursor_after);
-            break;
-        case ST_ZIG_MODE_BRACKETED_PASTE:
-            xsetmode(set, MODE_BRCKTPASTE);
-            break;
-        case ST_ZIG_MODE_KBDLOCK:
-            if (plan.xsetmode_action == ST_ZIG_XSETMODE_KBDLOCK)
-                xsetmode(plan.xsetmode_set, MODE_KBDLOCK);
-            break;
-        case ST_ZIG_MODE_INSERT:
-        case ST_ZIG_MODE_ECHO:
-        case ST_ZIG_MODE_CRLF:
-            break;
-        case ST_ZIG_MODE_PRIVATE_UNKNOWN:
-            fprintf(stderr, "erresc: unknown private set/reset mode %d\n", *args);
-            break;
-        case ST_ZIG_MODE_REGULAR_UNKNOWN:
-            fprintf(stderr, "erresc: unknown set/reset mode %d\n", *args);
-            break;
-        }
-        termapplystateupdate((TermStateUpdate){.mode_mask = plan.mode_mask, .mode_bits = plan.mode_bits});
+        plan = st_modeplan(priv, *args, set, IS_SET(MODE_ALTSCREEN), allowaltscreen);
+        platformapplyeffects(&plan.platform, (PlatformContext){.kind = PLATFORM_CONTEXT_MODE, .mode_set = set});
+        termapplystateupdate(plan.term_update);
     }
 }
 
@@ -2076,84 +2047,224 @@ char *strargpar(int index, int narg) {
 }
 
 void strapplyplan(const ZigStrHandlePlan *plan, int narg) {
-    ZigStrApplyEffectList exec;
-    ZigStrApplyEffect effect;
-    PlatformEffectList platform;
-    int i;
+    ZigPlatformEffectList platform;
 
     /* strarg() 将旧版空参数 UB 收敛为带上下文的显式错误。 */
-    exec = st_strapplyplan(plan->kind, plan->clipboard_run, plan->arg1_present, plan->payload_arg, plan->color_arg);
-    platform.count = exec.count;
-    for (i = 0; i < exec.count; i++) {
-        effect = exec.effects[i];
-        platform.effects[i] = (PlatformEffect){.kind = effect.kind, .arg = effect.arg, .index_arg = effect.index_arg};
-    }
-    platformapplyeffects(&platform, plan, narg);
+    platform = st_strapplyplan(plan->kind, plan->clipboard_run, plan->arg1_present, plan->payload_arg, plan->color_arg);
+    platformapplyeffects(&platform, (PlatformContext){.kind = PLATFORM_CONTEXT_STR, .str_plan = plan, .str_narg = narg});
 }
 
-void platformapplyeffects(const PlatformEffectList *platform, const ZigStrHandlePlan *plan, int narg) {
-    PlatformEffect effect;
-    char *p = NULL, *dec;
-    int color_failed, i, j;
+const char *platformcontextname(int kind) {
+    switch (kind) {
+    case PLATFORM_CONTEXT_STR:
+        return "str";
+    case PLATFORM_CONTEXT_MODE:
+        return "mode";
+    case PLATFORM_CONTEXT_DRAW:
+        return "draw";
+    default:
+        return "unknown";
+    }
+}
 
-    dec = NULL;
-    color_failed = 0;
+void platformapplyeffects(const ZigPlatformEffectList *platform, PlatformContext context) {
+    ZigPlatformEffect effect;
+    int i;
+
     for (i = 0; i < platform->count; i++) {
         effect = platform->effects[i];
-        switch (effect.kind) {
-        case 0:
+        switch (context.kind) {
+        case PLATFORM_CONTEXT_STR:
+            if (!platformapplystreffect(&context, effect, i, platform->count))
+                return;
             break;
-        case 1:
-            xsettitle(strarg(plan, effect.arg, narg, "title"));
+        case PLATFORM_CONTEXT_MODE:
+            if (!platformapplymodeeffect(&context, effect, i, platform->count))
+                return;
             break;
-        case 2:
-            xseticontitle(strarg(plan, effect.arg, narg, "icon-title"));
+        case PLATFORM_CONTEXT_DRAW:
+            if (!platformapplydraweffect(&context, effect, i, platform->count))
+                return;
             break;
-        case 3:
-            dec = base64dec(strarg(plan, effect.arg, narg, "clipboard"));
-            if (!dec)
-                fprintf(stderr, "erresc: invalid base64\n");
-            break;
-        case 4:
-            if (dec)
-                xsetsel(dec);
-            break;
-        case 5:
-            if (dec)
-                xclipcopy();
-            break;
-        case 6:
-            p = strarg(plan, effect.arg, narg, "color-value");
-            j = effect.index_arg >= 0 ? atoi(strarg(plan, effect.index_arg, narg, "color-index")) : -1;
-            if (xsetcolorname(j, p)) {
-                color_failed = 1;
-                fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
-            }
-            break;
-        case 7:
-            j = atoi(strarg(plan, effect.index_arg, narg, "color-index"));
-            /* OSC 104 带参数时重置指定颜色槽；NULL 要求 xsetcolorname 恢复默认值。 */
-            if (xsetcolorname(j, p)) {
-                color_failed = 1;
-                fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
-            }
-            break;
-        case 8:
-            if (!color_failed)
-                redraw();
-            break;
-        case 9:
-            fprintf(stderr, "erresc: unknown str ");
-            strdump();
-            return;
         default:
-            fprintf(stderr, "erresc: invalid str effect kind=%d\n", effect.kind);
-            strdump();
-            return;
+            die("invalid platform context: context=%d kind=%d index=%d count=%d\n", context.kind, effect.kind, i,
+                platform->count);
         }
     }
+}
 
-    return;
+int platformapplystreffect(PlatformContext *context, ZigPlatformEffect effect, int index, int count) {
+    int j;
+
+    switch (effect.kind) {
+    case ST_ZIG_PLATFORM_EFFECT_NONE:
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_SET_TITLE:
+        xsettitle(strarg(context->str_plan, effect.arg, context->str_narg, "title"));
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_SET_ICON_TITLE:
+        xseticontitle(strarg(context->str_plan, effect.arg, context->str_narg, "icon-title"));
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_DECODE_CLIPBOARD:
+        context->str_dec = base64dec(strarg(context->str_plan, effect.arg, context->str_narg, "clipboard"));
+        if (!context->str_dec)
+            fprintf(stderr, "erresc: invalid base64\n");
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_SET_SELECTION:
+        if (context->str_dec)
+            xsetsel(context->str_dec);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_COPY_CLIPBOARD:
+        if (context->str_dec)
+            xclipcopy();
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_SET_COLOR:
+        context->str_color_value = strarg(context->str_plan, effect.arg, context->str_narg, "color-value");
+        j = effect.index_arg >= 0 ? atoi(strarg(context->str_plan, effect.index_arg, context->str_narg, "color-index")) : -1;
+        if (xsetcolorname(j, context->str_color_value)) {
+            context->str_color_failed = 1;
+            fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j,
+                    context->str_color_value ? context->str_color_value : "(null)");
+        }
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_RESET_COLOR:
+        j = atoi(strarg(context->str_plan, effect.index_arg, context->str_narg, "color-index"));
+        /* OSC 104 带参数时重置指定颜色槽；NULL 要求 xsetcolorname 恢复默认值。 */
+        if (xsetcolorname(j, context->str_color_value)) {
+            context->str_color_failed = 1;
+            fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j,
+                    context->str_color_value ? context->str_color_value : "(null)");
+        }
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_REDRAW:
+        if (!context->str_color_failed)
+            redraw();
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_UNKNOWN_STR:
+        fprintf(stderr, "erresc: unknown str ");
+        strdump();
+        return 0;
+    default:
+        die("invalid platform effect: context=%s kind=%d index=%d count=%d\n", platformcontextname(context->kind),
+            effect.kind, index, count);
+    }
+
+    return 1;
+}
+
+int platformapplymodeeffect(PlatformContext *context, ZigPlatformEffect effect, int index, int count) {
+    int mode;
+
+    switch (effect.kind) {
+    case ST_ZIG_PLATFORM_EFFECT_XSETMODE:
+        switch (effect.index_arg) {
+        case ST_ZIG_PLATFORM_MODE_APPCURSOR:
+            mode = MODE_APPCURSOR;
+            break;
+        case ST_ZIG_PLATFORM_MODE_REVERSE:
+            mode = MODE_REVERSE;
+            break;
+        case ST_ZIG_PLATFORM_MODE_HIDE:
+            mode = MODE_HIDE;
+            break;
+        case ST_ZIG_PLATFORM_MODE_MOUSE:
+            mode = MODE_MOUSE;
+            break;
+        case ST_ZIG_PLATFORM_MODE_MOUSEX10:
+            mode = MODE_MOUSEX10;
+            break;
+        case ST_ZIG_PLATFORM_MODE_MOUSEBTN:
+            mode = MODE_MOUSEBTN;
+            break;
+        case ST_ZIG_PLATFORM_MODE_MOUSEMOTION:
+            mode = MODE_MOUSEMOTION;
+            break;
+        case ST_ZIG_PLATFORM_MODE_MOUSEMANY:
+            mode = MODE_MOUSEMANY;
+            break;
+        case ST_ZIG_PLATFORM_MODE_FOCUS:
+            mode = MODE_FOCUS;
+            break;
+        case ST_ZIG_PLATFORM_MODE_MOUSESGR:
+            mode = MODE_MOUSESGR;
+            break;
+        case ST_ZIG_PLATFORM_MODE_8BIT:
+            mode = MODE_8BIT;
+            break;
+        case ST_ZIG_PLATFORM_MODE_BRCKTPASTE:
+            mode = MODE_BRCKTPASTE;
+            break;
+        case ST_ZIG_PLATFORM_MODE_KBDLOCK:
+            mode = MODE_KBDLOCK;
+            break;
+        default:
+            die("invalid platform xsetmode target: context=%s kind=%d index=%d count=%d target=%d\n",
+                platformcontextname(context->kind), effect.kind, index, count, effect.index_arg);
+        }
+        xsetmode(effect.arg, mode);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_POINTER_MOTION:
+        xsetpointermotion(effect.arg);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_CURSOR:
+        tcursor(effect.arg);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_CLEAR_SCREEN:
+        tclearregion(0, 0, term.col - 1, term.row - 1);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_SWAP_SCREEN:
+        tswapscreen();
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_MOVE_ORIGIN:
+        tmoveato(0, 0);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_MODE_UNKNOWN_PRIVATE:
+        fprintf(stderr, "erresc: unknown private set/reset mode %d\n", effect.arg);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_MODE_UNKNOWN_REGULAR:
+        fprintf(stderr, "erresc: unknown set/reset mode %d\n", effect.arg);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_NONE:
+        break;
+    default:
+        die("invalid platform effect: context=%s kind=%d index=%d count=%d\n", platformcontextname(context->kind),
+            effect.kind, index, count);
+    }
+
+    return 1;
+}
+
+int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, int index, int count) {
+    const ZigDrawExecPlan *frame;
+
+    frame = context->draw_frame;
+    switch (effect.kind) {
+    case ST_ZIG_PLATFORM_EFFECT_SEARCH_SCAN:
+        searchscan();
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_DRAW_REGION:
+        drawregion(0, effect.arg, term.col, term.row);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_DRAW_CURSOR:
+        xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx], term.ocx, term.ocy,
+                    term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_FINISH_DRAW:
+        term.ocx = frame->new_ocx;
+        term.ocy = frame->new_ocy;
+        xfinishdraw();
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_IME_SPOT:
+        xximspot(term.ocx, term.ocy);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_NONE:
+        break;
+    default:
+        die("invalid platform effect: context=%s kind=%d index=%d count=%d\n", platformcontextname(context->kind),
+            effect.kind, index, count);
+    }
+
+    return 1;
 }
 
 void strhandle(void) {
@@ -2295,7 +2406,7 @@ void toggleprinter(const Arg *arg) {
     ZigMiscPlan plan;
 
     plan = st_toggleprinterplan(term.mode);
-    termapplystateupdate((TermStateUpdate){.mode_mask = plan.mode_mask, .mode_bits = plan.mode_bits});
+    termapplystateupdate((ZigTermStateUpdate){.mode_mask = plan.mode_mask, .mode_bits = plan.mode_bits});
 }
 
 void printscreen(const Arg *arg) { tdump(); }
@@ -2336,7 +2447,7 @@ void tdump(void) {
 void tputtab(int n) { term.c.x = st_tputtab(term.c.x, term.col, n, term.tabs); }
 
 void tdefutf8(char ascii) {
-    termapplystateupdate((TermStateUpdate){.mode_mask = ~0, .mode_bits = st_tdefutf8plan(ascii, term.mode)});
+    termapplystateupdate((ZigTermStateUpdate){.mode_mask = ~0, .mode_bits = st_tdefutf8plan(ascii, term.mode)});
 }
 
 void tdeftran(char ascii) {
@@ -2346,7 +2457,7 @@ void tdeftran(char ascii) {
         fprintf(stderr, "esc unhandled charset: ESC ( %c\n", ascii);
     } else {
         termapplystateupdate(
-            (TermStateUpdate){.set_trantbl = 1, .trantbl_slot = term.icharset, .trantbl_charset = charset});
+            (ZigTermStateUpdate){.set_trantbl = 1, .trantbl_slot = term.icharset, .trantbl_charset = charset});
     }
 }
 
@@ -2373,7 +2484,7 @@ void tstrsequence(uchar c) {
 void applyinputscalarwriteback(const ZigInputScalarStateUpdate *update) {
     term.esc = update->esc;
     if (update->charset_set)
-        termapplystateupdate((TermStateUpdate){.set_charset = 1, .charset = update->charset});
+        termapplystateupdate(update->term_update);
     if (update->icharset_set)
         term.icharset = update->icharset;
     if (update->tab_set)
@@ -2490,12 +2601,12 @@ void tputc(Rune u) {
     char c[UTF_SIZ];
     ZigPutcDecode decoded;
     ZigPutcStepPlan putc_step;
-    ZigInputRoutingPlan route;
-    ZigStrCollectApplyPlan collect_plan;
+    ZigInputStepPlan input_step;
+    ZigStrCollectTransaction collect_tx;
     ZigStrCollectExec collect_exec;
     ZigInputEscFlowPlan escflow;
     int control;
-    int esc_action_done, esc_action_index;
+    int collect_step_index, esc_action_done, esc_action_index;
     int width, len;
     Glyph *gp;
 
@@ -2504,9 +2615,12 @@ void tputc(Rune u) {
     width = decoded.width;
     len = decoded.len;
     memcpy(c, decoded.bytes, sizeof(decoded.bytes));
-    route = st_inputroutingplan(term.esc, control);
+    input_step = st_inputstepplan(term.esc, control, IS_SET(MODE_PRINT), u, (unsigned char *)strescseq.buf, strescseq.len,
+                                  (const unsigned char *)c, len, strescseq.siz, csiescseq.len, sizeof(csiescseq.buf),
+                                  term.charset, term.c.x, term.icharset, selected(term.c.x, term.c.y), IS_SET(MODE_WRAP),
+                                  term.c.state, width, term.col);
 
-    if (IS_SET(MODE_PRINT))
+    if (input_step.print)
         tprinter(c, len);
 
     /*
@@ -2515,40 +2629,34 @@ void tputc(Rune u) {
      * receives a ESC, a SUB, a ST or any other C1 control
      * character.
      */
-    if (route.is_str) {
-        collect_plan = st_tcollectstrapply(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
-                                           (const unsigned char *)c, len, strescseq.siz);
-        collect_exec = collect_plan.first;
-        if (collect_exec.kind == ST_ZIG_STR_COLLECT_FINISH) {
-            term.esc = collect_exec.new_esc;
-            goto check_control_code;
-        }
-
-        if (collect_exec.kind == ST_ZIG_STR_COLLECT_ABORT)
-            return;
-
-        if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW) {
-            /*
-             * Here is a bug in terminals. If the user never sends
-             * some code to stop the str or esc command, then st
-             * will stop responding. But this is better than
-             * silently failing with unknown characters. At least
-             * then users will report back.
-             *
-             * In the case users ever get fixed, here is the code:
-             */
-            /*
-             * term.esc = 0;
-             * strhandle();
-             */
-            strescseq.siz = collect_exec.new_size;
-            strescseq.buf = xrealloc(strescseq.buf, strescseq.siz);
-            if (collect_plan.retry) {
+    if (input_step.route == ST_ZIG_INPUT_ROUTE_STR) {
+        collect_tx = input_step.collect;
+        for (collect_step_index = 0; collect_step_index < collect_tx.step_count; collect_step_index++) {
+            switch (collect_tx.steps[collect_step_index]) {
+            case ST_ZIG_STR_COLLECT_STEP_APPLY_FIRST:
+                collect_exec = collect_tx.first;
+                break;
+            case ST_ZIG_STR_COLLECT_STEP_RETRY_AFTER_GROW:
                 collect_exec = st_tcollectstr(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
                                               (const unsigned char *)c, len, strescseq.siz);
                 if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW)
                     die("str collect retry still needs growth: len=%zu chunk=%zu size=%zu\n", strescseq.len,
                         (size_t)len, strescseq.siz);
+                break;
+            default:
+                die("invalid str collect transaction step: step=%d index=%d count=%d\n", collect_tx.steps[collect_step_index],
+                    collect_step_index, collect_tx.step_count);
+            }
+
+            if (collect_exec.kind == ST_ZIG_STR_COLLECT_FINISH) {
+                term.esc = collect_exec.new_esc;
+                goto check_control_code;
+            }
+            if (collect_exec.kind == ST_ZIG_STR_COLLECT_ABORT)
+                return;
+            if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW) {
+                strescseq.siz = collect_exec.new_size;
+                strescseq.buf = xrealloc(strescseq.buf, strescseq.siz);
             }
         }
 
@@ -2562,16 +2670,54 @@ check_control_code:
      * because they can be embedded inside a control sequence, and
      * they must not cause conflicts with sequences.
      */
-    if (route.is_control) {
-        tcontrolcode(u);
+    if (input_step.route == ST_ZIG_INPUT_ROUTE_CONTROL) {
+        applyinputscalarwriteback(&input_step.control.state);
+        switch (input_step.control.action) {
+        case ST_ZIG_CTL_ACTION_TAB:
+            tputtab(1);
+            break;
+        case ST_ZIG_CTL_ACTION_BACKSPACE:
+            tmoveto(term.c.x - 1, term.c.y);
+            break;
+        case ST_ZIG_CTL_ACTION_CARRIAGE_RETURN:
+            tmoveto(0, term.c.y);
+            break;
+        case ST_ZIG_CTL_ACTION_LINEFEED:
+            tnewline(IS_SET(MODE_CRLF));
+            break;
+        case ST_ZIG_CTL_ACTION_BELL:
+            if (term.esc & ESC_STR_END) {
+                strhandle();
+            } else {
+                xbell();
+            }
+            break;
+        case ST_ZIG_CTL_ACTION_ESCAPE:
+            csireset();
+            break;
+        case ST_ZIG_CTL_ACTION_SUBSTITUTE:
+        case ST_ZIG_CTL_ACTION_CANCEL:
+            break;
+        case ST_ZIG_CTL_ACTION_NEXT_LINE:
+            tnewline(1);
+            break;
+        case ST_ZIG_CTL_ACTION_DECID:
+            ttywrite(vtiden, strlen(vtiden), 0);
+            break;
+        case ST_ZIG_CTL_ACTION_START_STR:
+            tstrsequence(u);
+            break;
+        default:
+            die("invalid control action: action=%d rune=%u\n", input_step.control.action, u);
+        }
         /*
          * control codes are not shown ever
          */
         if (term.esc == 0)
             term.lastc = 0;
         return;
-    } else if (route.is_esc) {
-        escflow = st_inputescflowplan(term.esc, u, csiescseq.len, sizeof(csiescseq.buf));
+    } else if (input_step.route == ST_ZIG_INPUT_ROUTE_ESC) {
+        escflow = input_step.esc_flow;
         esc_action_done = escflow.kind == ST_ZIG_ESC_FLOW_CSI ? escflow.handle_csi : 1;
         for (esc_action_index = 0; esc_action_index < escflow.action_count; esc_action_index++) {
             switch (escflow.actions[esc_action_index]) {
@@ -2612,7 +2758,7 @@ check_control_code:
          */
         return;
     }
-    putc_step = st_tputcstepplan(selected(term.c.x, term.c.y), IS_SET(MODE_WRAP), term.c.state, term.c.x, width, term.col);
+    putc_step = input_step.putc;
     if (putc_step.clear_selection)
         selclear();
 
@@ -2637,8 +2783,8 @@ check_control_code:
     if (putc_step.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
         tmoveto(putc_step.next_x, term.c.y);
     } else {
-        termapplystateupdate((TermStateUpdate){.cursor_state_mask = putc_step.cursor_state_mask,
-                                               .cursor_state_bits = putc_step.cursor_state_bits});
+        termapplystateupdate((ZigTermStateUpdate){.cursor_state_mask = putc_step.cursor_state_mask,
+                                                  .cursor_state_bits = putc_step.cursor_state_bits});
     }
 }
 
@@ -2688,28 +2834,18 @@ void tresize(int col, int row) {
     for (step_index = 0; step_index < exec_plan.step_count; step_index++) {
         switch (exec_plan.steps[step_index]) {
         case ST_ZIG_RESIZE_STEP_FREE_SLIDE_ROWS:
-            for (i = 0; i < base.slide_count; i++) {
-                free(term.line[i]);
-                free(term.alt[i]);
-            }
+            for (i = 0; i < base.slide_count; i++)
+                linepointerfreerowpair(i);
             break;
         case ST_ZIG_RESIZE_STEP_MEMMOVE_SLIDE_ROWS:
-            if (base.slide_count > 0) {
-                memmove(term.line, term.line + base.slide_count, row * sizeof(Line));
-                memmove(term.alt, term.alt + base.slide_count, row * sizeof(Line));
-            }
+            linepointermemmoverows(base.slide_count, row);
             break;
         case ST_ZIG_RESIZE_STEP_FREE_TAIL_ROWS:
-            for (i = base.tail_start; i < term.row; i++) {
-                free(term.line[i]);
-                free(term.alt[i]);
-            }
+            for (i = base.tail_start; i < term.row; i++)
+                linepointerfreerowpair(i);
             break;
         case ST_ZIG_RESIZE_STEP_REALLOC_ARRAYS:
-            term.line = xrealloc(term.line, row * sizeof(Line));
-            term.alt = xrealloc(term.alt, row * sizeof(Line));
-            term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
-            term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
+            linepointerreallocarrays(row, col);
             break;
         case ST_ZIG_RESIZE_STEP_FILL_HISTORY:
             for (i = 0; i < HISTSIZE; i++) {
@@ -2721,16 +2857,12 @@ void tresize(int col, int row) {
             }
             break;
         case ST_ZIG_RESIZE_STEP_REALLOC_ROWS:
-            for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++) {
-                term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
-                term.alt[i] = xrealloc(term.alt[i], col * sizeof(Glyph));
-            }
+            for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++)
+                linepointerreallocrowpair(i, col);
             break;
         case ST_ZIG_RESIZE_STEP_ALLOC_ROWS:
-            for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++) {
-                term.line[i] = xmalloc(col * sizeof(Glyph));
-                term.alt[i] = xmalloc(col * sizeof(Glyph));
-            }
+            for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++)
+                linepointerallocrowpair(i, col);
             break;
         case ST_ZIG_RESIZE_STEP_TABS:
             if (exec_plan.tabs.grow) {
@@ -2740,16 +2872,7 @@ void tresize(int col, int row) {
             }
             break;
         case ST_ZIG_RESIZE_STEP_UPDATE_DIMENSIONS:
-            termapplystateupdate((TermStateUpdate){
-                .set_dimensions = 1,
-                .col = base.requested_col,
-                .maxcol = base.alloc_col,
-                .row = row,
-                .set_scroll_region = 1,
-                .top = 0,
-                .bot = row - 1,
-                .clamp_cursor = 1,
-            });
+            termapplystateupdate(exec_plan.term_update);
             break;
         case ST_ZIG_RESIZE_STEP_CLEAR_REGIONS:
             cursor = term.c;
@@ -2772,13 +2895,10 @@ void resettitle(void) { xsettitle(NULL); }
 
 void drawregion(int x1, int y1, int x2, int y2) {
     int y = y1;
-    ZigTermFrameSnapshot snapshot;
     ZigDrawExecPlan region;
 
-    snapshot = (ZigTermFrameSnapshot){0, 1, 0, 0, 0, 0, term.col, term.row};
-
     for (;;) {
-        region = st_drawexecplan(snapshot, (const ZigGlyph *const *)term.line, term.dirty, y, y2);
+        region = st_drawregionnext(term.dirty, y, y2);
         if (!region.region_draw)
             break;
         y = region.region_y;
@@ -2798,22 +2918,10 @@ void draw(void) {
     snapshot =
         (ZigTermFrameSnapshot){search.active, term.scr, term.c.x, term.c.y, term.ocx, term.ocy, term.col, term.row};
     frame = st_drawexecplan(snapshot, (const ZigGlyph *const *)term.line, term.dirty, 0, term.row);
-    if (frame.search_scan)
-        searchscan();
 
     term.ocx = frame.ocx;
     term.ocy = frame.ocy;
-
-    if (frame.region_draw)
-        drawregion(0, frame.region_y, term.col, term.row);
-    if (frame.cursor_active)
-        xdrawcursor(frame.cx, term.c.y, term.line[term.c.y][frame.cx], term.ocx, term.ocy,
-                    term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
-    term.ocx = frame.new_ocx;
-    term.ocy = frame.new_ocy;
-    xfinishdraw();
-    if (frame.imspot_active)
-        xximspot(term.ocx, term.ocy);
+    platformapplyeffects(&frame.platform, (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW, .draw_frame = &frame});
 }
 
 void redraw(void) {

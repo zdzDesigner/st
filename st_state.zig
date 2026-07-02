@@ -5,6 +5,7 @@
 //! [定位]: 支撑 C executor 的状态变更边界；CSI state 顶层分类已收敛到 `st_csi.zig`。
 
 const std = @import("std");
+const term_update = @import("st_term_update.zig");
 
 pub const ZigStatePlan = extern struct {
     kind: c_int,
@@ -17,6 +18,8 @@ pub const ZigScrollRegion = extern struct {
     top: c_int,
     bottom: c_int,
 };
+
+pub const ZigTermStateUpdate = term_update.ZigTermStateUpdate;
 
 pub const ZigResizePlan = extern struct {
     invalid: c_int,
@@ -56,6 +59,7 @@ pub const ZigResetExecPlan = extern struct {
     state: ZigResetPlan,
     screen_step_count: c_int,
     screen_steps: [2]ZigResetScreenStep,
+    term_update: ZigTermStateUpdate,
 };
 
 const ZigClearRect = extern struct {
@@ -98,6 +102,7 @@ pub const ZigResizeExecPlan = extern struct {
     clear: ZigResizeClearPlan,
     step_count: c_int,
     steps: [10]c_int,
+    term_update: ZigTermStateUpdate,
 };
 
 pub const resize_step_free_slide_rows = 1;
@@ -238,6 +243,7 @@ const ResizeExec = struct {
             .clear = (ResizeClear{ .mincol = base.mincol, .col = base.alloc_col, .minrow = base.minrow, .row = self.request.requested_row }).plan(),
             .step_count = 0,
             .steps = std.mem.zeroes([10]c_int),
+            .term_update = resizeTermUpdate(base, self.request.requested_row),
         };
         addResizeStep(&result, resize_step_free_slide_rows);
         addResizeStep(&result, resize_step_memmove_slide_rows);
@@ -285,10 +291,12 @@ const ResetExec = struct {
     request: ResetRequest,
 
     fn plan(self: ResetExec) ZigResetExecPlan {
+        const state = self.request.plan();
         return .{
-            .state = self.request.plan(),
+            .state = state,
             .screen_step_count = 2,
             .screen_steps = [_]ZigResetScreenStep{ resetScreenStep(), resetScreenStep() },
+            .term_update = resetTermUpdate(state),
         };
     }
 };
@@ -362,6 +370,40 @@ fn addResizeRect(plan: *ZigResizeClearPlan, x1: c_int, y1: c_int, x2: c_int, y2:
     if (plan.count >= plan.rects.len) return;
     plan.rects[@intCast(plan.count)] = .{ .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2 };
     plan.count += 1;
+}
+
+fn resetTermUpdate(state: ZigResetPlan) ZigTermStateUpdate {
+    var update = std.mem.zeroes(ZigTermStateUpdate);
+    update.set_cursor = 1;
+    update.cursor_attr_mode = state.cursor_attr_mode;
+    update.cursor_fg = state.cursor_fg;
+    update.cursor_bg = state.cursor_bg;
+    update.cursor_x = state.cursor_x;
+    update.cursor_y = state.cursor_y;
+    update.cursor_state = state.cursor_state;
+    update.mode_mask = ~@as(c_int, 0);
+    update.mode_bits = state.mode;
+    update.set_charset = 1;
+    update.charset = state.charset;
+    update.set_all_trantbl = 1;
+    update.all_trantbl_charset = state.trantbl;
+    update.set_scroll_region = 1;
+    update.top = state.top;
+    update.bot = state.bot;
+    return update;
+}
+
+fn resizeTermUpdate(base: ZigResizePlan, row: c_int) ZigTermStateUpdate {
+    var update = std.mem.zeroes(ZigTermStateUpdate);
+    update.set_dimensions = 1;
+    update.col = base.requested_col;
+    update.maxcol = base.alloc_col;
+    update.row = row;
+    update.set_scroll_region = 1;
+    update.top = 0;
+    update.bot = row - 1;
+    update.clamp_cursor = 1;
+    return update;
 }
 
 fn resetScreenStep() ZigResetScreenStep {

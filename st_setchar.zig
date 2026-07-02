@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const control_esc = @import("st_control_esc.zig");
+const term_update = @import("st_term_update.zig");
 
 pub const ZigGlyph = extern struct {
     u: u32,
@@ -51,6 +52,12 @@ pub const ZigStrCollectApplyPlan = extern struct {
     retry: c_int,
 };
 
+pub const ZigStrCollectTransaction = extern struct {
+    first: ZigStrCollectExec,
+    step_count: c_int,
+    steps: [2]c_int,
+};
+
 pub const ZigStrResetPlan = extern struct {
     size: usize,
 };
@@ -74,6 +81,7 @@ pub const ZigInputScalarStateUpdate = extern struct {
     icharset: c_int,
     tab_set: c_int,
     tab_x: c_int,
+    term_update: term_update.ZigTermStateUpdate,
 };
 
 pub const ZigInputControlPlan = extern struct {
@@ -106,6 +114,16 @@ pub const ZigInputRoutingPlan = extern struct {
     is_esc: c_int,
 };
 
+pub const ZigInputStepPlan = extern struct {
+    route: c_int,
+    print: c_int,
+    routing: ZigInputRoutingPlan,
+    collect: ZigStrCollectTransaction,
+    control: ZigInputControlPlan,
+    esc_flow: ZigInputEscFlowPlan,
+    putc: ZigPutcStepPlan,
+};
+
 pub const ZigEscPlan = control_esc.ZigEscPlan;
 
 const cs_graphic0 = 0;
@@ -118,6 +136,8 @@ const str_collect_append = 0;
 const str_collect_finish = 1;
 const str_collect_grow = 2;
 const str_collect_abort = 3;
+const str_collect_step_apply_first = 1;
+const str_collect_step_retry_after_grow = 2;
 const str_buf_size: usize = 128 * 4;
 
 comptime {
@@ -151,6 +171,10 @@ const esc_action_none = control_esc.esc_action_none;
 const esc_action_ind = control_esc.esc_action_ind;
 const ctl_action_none = control_esc.ctl_action_none;
 const ctl_action_escape = control_esc.ctl_action_escape;
+const input_route_graphic = 0;
+const input_route_str = 1;
+const input_route_control = 2;
+const input_route_esc = 3;
 
 const graphic0_map = [_]u32{
     0x2191, 0x2193, 0x2192, 0x2190, 0x2588, 0x259A, 0x2603,
@@ -408,11 +432,11 @@ export fn st_tputcwrite(rune: u32, width: c_int, attr: *const ZigGlyph, line: [*
     return (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).putcWrite(rune, width, attr, x, insert_mode != 0);
 }
 
-export fn st_tputcstepplan(selected_current: c_int, mode_wrap: c_int, cursor_state: c_int, x: c_int, width: c_int, col: c_int) ZigPutcStepPlan {
+fn st_tputcstepplan(selected_current: c_int, mode_wrap: c_int, cursor_state: c_int, x: c_int, width: c_int, col: c_int) ZigPutcStepPlan {
     return (PutcStep{ .selected_current = selected_current != 0, .mode_wrap = mode_wrap != 0, .cursor_state = cursor_state, .x = x, .width = width, .col = col }).plan();
 }
 
-export fn st_inputroutingplan(esc: c_int, control: c_int) ZigInputRoutingPlan {
+fn inputRoutingPlan(esc: c_int, control: c_int) ZigInputRoutingPlan {
     return .{
         .is_str = if ((esc & esc_str) != 0) 1 else 0,
         .is_control = if (control != 0) 1 else 0,
@@ -420,20 +444,44 @@ export fn st_inputroutingplan(esc: c_int, control: c_int) ZigInputRoutingPlan {
     };
 }
 
+export fn st_inputstepplan(esc: c_int, control: c_int, print_mode: c_int, rune: u32, buf: [*]u8, str_len: usize, chunk: [*]const u8, chunk_len: usize, str_size: usize, csi_len: usize, csi_cap: usize, charset: c_int, cursor_x: c_int, icharset: c_int, selected_current: c_int, mode_wrap: c_int, cursor_state: c_int, width: c_int, col: c_int) ZigInputStepPlan {
+    const routing = inputRoutingPlan(esc, control);
+    _ = icharset;
+    return .{
+        .route = if (routing.is_str != 0) input_route_str else if (routing.is_control != 0) input_route_control else if (routing.is_esc != 0) input_route_esc else input_route_graphic,
+        .print = if (print_mode != 0) 1 else 0,
+        .routing = routing,
+        .collect = st_strcollecttransaction(rune, esc, buf, str_len, chunk, chunk_len, str_size),
+        .control = st_inputcontrolplan(@intCast(rune), esc, charset, cursor_x),
+        .esc_flow = st_inputescflowplan(esc, rune, csi_len, csi_cap),
+        .putc = st_tputcstepplan(selected_current, mode_wrap, cursor_state, cursor_x, width, col),
+    };
+}
+
 export fn st_tcollectstr(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectExec {
     return (StringCollector{ .rune = rune, .esc = esc, .buf = buf, .len = len, .chunk = chunk, .chunk_len = chunk_len, .size = size }).exec();
 }
 
-export fn st_tcollectstrapply(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectApplyPlan {
+fn collectStrApply(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectApplyPlan {
     const first = st_tcollectstr(rune, esc, buf, len, chunk, chunk_len, size);
     return .{ .first = first, .retry = if (first.kind == str_collect_grow) 1 else 0 };
+}
+
+fn st_strcollecttransaction(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectTransaction {
+    const plan = collectStrApply(rune, esc, buf, len, chunk, chunk_len, size);
+    var tx = ZigStrCollectTransaction{ .first = plan.first, .step_count = 1, .steps = .{ str_collect_step_apply_first, 0 } };
+    if (plan.retry != 0) {
+        tx.steps[1] = str_collect_step_retry_after_grow;
+        tx.step_count = 2;
+    }
+    return tx;
 }
 
 export fn st_strresetplan() ZigStrResetPlan {
     return .{ .size = str_buf_size };
 }
 
-export fn st_inputescflowplan(esc: c_int, rune: u32, csi_len: usize, csi_cap: usize) ZigInputEscFlowPlan {
+fn st_inputescflowplan(esc: c_int, rune: u32, csi_len: usize, csi_cap: usize) ZigInputEscFlowPlan {
     return (EscFlow{ .esc = esc, .rune = rune, .csi_buf = undefined, .csi_len = csi_len, .csi_cap = csi_cap }).exec();
 }
 
@@ -487,7 +535,12 @@ export fn st_inputcontrolplan(ascii: u8, esc: c_int, charset: c_int, x: c_int) Z
 }
 
 fn inputState(esc: c_int, charset_set: c_int, charset: c_int, icharset_set: c_int, icharset: c_int, tab_set: c_int, tab_x: c_int) ZigInputScalarStateUpdate {
-    return .{ .esc = esc, .charset_set = charset_set, .charset = charset, .icharset_set = icharset_set, .icharset = icharset, .tab_set = tab_set, .tab_x = tab_x };
+    var update = std.mem.zeroes(term_update.ZigTermStateUpdate);
+    if (charset_set != 0) {
+        update.set_charset = 1;
+        update.charset = charset;
+    }
+    return .{ .esc = esc, .charset_set = charset_set, .charset = charset, .icharset_set = icharset_set, .icharset = icharset, .tab_set = tab_set, .tab_x = tab_x, .term_update = update };
 }
 
 fn controlAction(kind: c_int) c_int {
@@ -659,7 +712,7 @@ test "tputcprepare skips flags when conditions fail" {
 }
 
 test "input routing prioritizes string state" {
-    const route = st_inputroutingplan(esc_start | esc_str, 1);
+    const route = inputRoutingPlan(esc_start | esc_str, 1);
 
     try std.testing.expectEqual(@as(c_int, 1), route.is_str);
     try std.testing.expectEqual(@as(c_int, 1), route.is_control);
@@ -667,11 +720,30 @@ test "input routing prioritizes string state" {
 }
 
 test "input routing identifies graphic input" {
-    const route = st_inputroutingplan(0, 0);
+    const route = inputRoutingPlan(0, 0);
 
     try std.testing.expectEqual(@as(c_int, 0), route.is_str);
     try std.testing.expectEqual(@as(c_int, 0), route.is_control);
     try std.testing.expectEqual(@as(c_int, 0), route.is_esc);
+}
+
+test "input step returns route and print effect" {
+    var buf = [_]u8{0} ** 8;
+    const chunk = [_]u8{'A'};
+    const str = st_inputstepplan(esc_start | esc_str, 1, 1, 'A', &buf, 0, &chunk, chunk.len, buf.len, 0, 8, 0, 0, 0, 0, 1, 0, 1, 8);
+    const control = st_inputstepplan(0, 1, 0, '\x0e', &buf, 0, &chunk, chunk.len, buf.len, 0, 8, 0, 0, 0, 0, 1, 0, 1, 8);
+    const esc = st_inputstepplan(esc_start, 0, 0, '[', &buf, 0, &chunk, chunk.len, buf.len, 0, 8, 0, 0, 0, 0, 1, 0, 1, 8);
+    const graphic = st_inputstepplan(0, 0, 0, 'A', &buf, 0, &chunk, chunk.len, buf.len, 0, 8, 0, 0, 0, 0, 1, 0, 1, 8);
+
+    try std.testing.expectEqual(@as(c_int, input_route_str), str.route);
+    try std.testing.expectEqual(@as(c_int, 1), str.print);
+    try std.testing.expectEqual(@as(c_int, str_collect_append), str.collect.first.kind);
+    try std.testing.expectEqual(@as(c_int, input_route_control), control.route);
+    try std.testing.expectEqual(@as(c_int, 1), control.control.charset_set);
+    try std.testing.expectEqual(@as(c_int, input_route_esc), esc.route);
+    try std.testing.expectEqual(@as(c_int, esc_flow_esc), esc.esc_flow.kind);
+    try std.testing.expectEqual(@as(c_int, input_route_graphic), graphic.route);
+    try std.testing.expectEqual(@as(c_int, putc_advance_move), graphic.putc.advance);
 }
 
 test "tcollectstr appends chunk bytes" {
@@ -710,7 +782,7 @@ test "tcollectstr apply marks retry after growth" {
     var buf = [_]u8{ 0, 0, 0, 0 };
     const chunk = [_]u8{'A'};
 
-    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, 3, &chunk, chunk.len, buf.len);
+    const plan = collectStrApply('A', esc_start | esc_str, &buf, 3, &chunk, chunk.len, buf.len);
 
     try std.testing.expectEqual(@as(c_int, str_collect_grow), plan.first.kind);
     try std.testing.expectEqual(@as(c_int, 1), plan.retry);
@@ -720,7 +792,7 @@ test "tcollectstr apply skips retry after append" {
     var buf = [_]u8{ 0, 0, 0, 0 };
     const chunk = [_]u8{'A'};
 
-    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, 1, &chunk, chunk.len, buf.len);
+    const plan = collectStrApply('A', esc_start | esc_str, &buf, 1, &chunk, chunk.len, buf.len);
 
     try std.testing.expectEqual(@as(c_int, str_collect_append), plan.first.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.retry);
@@ -729,7 +801,7 @@ test "tcollectstr apply skips retry after append" {
 test "tcollectstr apply retry cycle appends after growth" {
     var buf = [_]u8{ 0, 0, 0, 0 };
     const chunk = [_]u8{'A'};
-    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, 3, &chunk, chunk.len, buf.len);
+    const plan = collectStrApply('A', esc_start | esc_str, &buf, 3, &chunk, chunk.len, buf.len);
 
     var grown = [_]u8{0} ** 8;
     @memcpy(grown[0..3], buf[0..3]);
@@ -746,7 +818,7 @@ test "tcollectstr apply skips retry after finish" {
     var buf = [_]u8{ 0, 0, 0, 0 };
     const chunk = [_]u8{};
 
-    const plan = st_tcollectstrapply(0x07, esc_start | esc_str, &buf, 0, &chunk, chunk.len, buf.len);
+    const plan = collectStrApply(0x07, esc_start | esc_str, &buf, 0, &chunk, chunk.len, buf.len);
 
     try std.testing.expectEqual(@as(c_int, str_collect_finish), plan.first.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.retry);
@@ -757,7 +829,7 @@ test "tcollectstr apply skips retry after abort" {
     const chunk = [_]u8{'A'};
     const near_limit = (std.math.maxInt(usize) - 4) / 2 + 1;
 
-    const plan = st_tcollectstrapply('A', esc_start | esc_str, &buf, near_limit, &chunk, chunk.len, near_limit);
+    const plan = collectStrApply('A', esc_start | esc_str, &buf, near_limit, &chunk, chunk.len, near_limit);
 
     try std.testing.expectEqual(@as(c_int, str_collect_abort), plan.first.kind);
     try std.testing.expectEqual(@as(c_int, 0), plan.retry);
@@ -790,6 +862,17 @@ test "tcollectstr appends chunk after planning" {
     try std.testing.expectEqual(@as(c_int, str_collect_append), exec.kind);
     try std.testing.expectEqual(@as(u8, 'X'), buf[1]);
     try std.testing.expectEqual(@as(usize, 2), exec.new_len);
+}
+
+test "str collect transaction describes retry after grow" {
+    var buf = [_]u8{0};
+    const chunk = [_]u8{ 'A', 'B' };
+    const tx = st_strcollecttransaction('A', esc_start | esc_str, &buf, 0, &chunk, chunk.len, buf.len);
+
+    try std.testing.expectEqual(@as(c_int, str_collect_grow), tx.first.kind);
+    try std.testing.expectEqual(@as(c_int, 2), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, str_collect_step_apply_first), tx.steps[0]);
+    try std.testing.expectEqual(@as(c_int, str_collect_step_retry_after_grow), tx.steps[1]);
 }
 
 test "tescflow appends csi byte and finishes on final byte" {
@@ -904,6 +987,8 @@ test "controlexec lock shift updates charset" {
     try std.testing.expectEqual(@as(c_int, 1), exec.charset);
     try std.testing.expectEqual(@as(c_int, 1), exec.state.charset_set);
     try std.testing.expectEqual(@as(c_int, 1), exec.state.charset);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.term_update.set_charset);
+    try std.testing.expectEqual(@as(c_int, 1), exec.state.term_update.charset);
     try std.testing.expectEqual(@as(c_int, ctl_action_none), exec.action);
 }
 
