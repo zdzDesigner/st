@@ -1582,43 +1582,32 @@ void tscrollup(int orig, int n, int copyhist) {
 }
 
 void tapplyscrollplan(const ZigScrollPlan *plan, int orig) {
-    int i, step_index;
-    ZigScrollStep step;
+    int i;
 
-    for (step_index = 0; step_index < plan->step_count; step_index++) {
-        step = plan->steps[step_index];
-        switch (step.kind) {
-        case ST_ZIG_SCROLL_STEP_HIST_SWAP:
-            historyapplystateupdate((HistoryStateUpdate){.set_histi = 1, .histi = step.a});
-            linepointerswaphistory(step.b);
-            break;
-        case ST_ZIG_SCROLL_STEP_SCR_UPDATE:
-            historyapplystateupdate((HistoryStateUpdate){.set_scr = 1, .scr = step.a});
-            break;
-        case ST_ZIG_SCROLL_STEP_CLEAR_RECT:
-            tclearregion(step.a, step.b, term.col + step.c, step.d);
-            break;
-        case ST_ZIG_SCROLL_STEP_DIRTY_RANGE:
-            tsetdirt(step.a, step.b);
-            break;
-        case ST_ZIG_SCROLL_STEP_LINE_SWAP_LOOP:
-            if (step.c > 0) {
-                for (i = step.a; i <= step.b; i += step.c) {
-                    linepointerswaprow(i, i + step.d);
-                }
-            } else {
-                for (i = step.a; i >= step.b; i += step.c) {
-                    linepointerswaprow(i, i + step.d);
-                }
-            }
-            break;
-        case ST_ZIG_SCROLL_STEP_SELECTION_SCROLL:
-            selscroll(orig, step.a);
-            break;
-        default:
-            die("invalid scroll step: kind=%d index=%d count=%d\n", step.kind, step_index, plan->step_count);
-        }
+    if (plan->hist_swap) {
+        historyapplystateupdate((HistoryStateUpdate){.set_histi = 1, .histi = plan->new_histi});
+        linepointerswaphistory(plan->hist_line);
     }
+
+    if (plan->new_scr != term.scr)
+        historyapplystateupdate((HistoryStateUpdate){.set_scr = 1, .scr = plan->new_scr});
+
+    if (plan->line_step > 0) {
+        tclearregion(0, orig, term.col - 1, orig + plan->count - 1);
+        tsetdirt(orig + plan->count, term.bot);
+
+        for (i = plan->line_start; i <= plan->line_end; i += plan->line_step)
+            linepointerswaprow(i, i + plan->line_offset);
+    } else {
+        tsetdirt(orig, term.bot - plan->count);
+        tclearregion(0, term.bot - plan->count + 1, term.col - 1, term.bot);
+
+        for (i = plan->line_start; i >= plan->line_end; i += plan->line_step)
+            linepointerswaprow(i, i + plan->line_offset);
+    }
+
+    if (plan->selscroll_delta)
+        selscroll(orig, plan->selscroll_delta);
 }
 
 void linepointerswaphistory(int line_index) {
@@ -1762,7 +1751,7 @@ void tmoveto(int x, int y) {
 
 void tsetchar(Rune u, Glyph *attr, int x, int y) {
     st_tsetchar(u, (const ZigGlyph *)attr, (ZigGlyph *)term.line[y], x, term.col, term.trantbl[term.charset]);
-    tsetdirt(y, y);
+    term.dirty[y] = 1;
     if (isboxdraw(term.line[y][x].u))
         term.line[y][x].mode |= ATTR_BOXDRAW;
 }
@@ -1778,8 +1767,8 @@ void tclearregion(int x1, int y1, int x2, int y2) {
     x2 = rect.x2;
     y2 = rect.y2;
 
-    tsetdirt(y1, y2);
     for (y = y1; y <= y2; y++) {
+        term.dirty[y] = 1;
         for (x = x1; x <= x2; x++) {
             if (selected(x, y))
                 selclear();
@@ -2658,6 +2647,7 @@ int eschandle(uchar ascii) {
 void tputc(Rune u) {
     char c[UTF_SIZ];
     ZigPutcDecode decoded;
+    ZigPutcWriteResult write;
     ZigPutcStepPlan putc_step;
     ZigInputStepPlan input_step;
     ZigStrCollectTransaction collect_tx;
@@ -2797,17 +2787,14 @@ check_control_code:
         gp = &term.line[term.c.y][term.c.x];
     }
 
-    if (putc_step.write_glyph)
-        st_tputcwrite(u, width, (const ZigGlyph *)&term.c.attr, (ZigGlyph *)term.line[term.c.y], term.c.x, term.col,
-                      term.trantbl[term.charset], IS_SET(MODE_INSERT));
-    if (putc_step.mark_dirty)
-        tsetdirt(term.c.y, term.c.y);
+    write = st_tputcwrite(u, width, (const ZigGlyph *)&term.c.attr, (ZigGlyph *)term.line[term.c.y], term.c.x,
+                          term.col, term.trantbl[term.charset], IS_SET(MODE_INSERT));
+    tsetdirt(term.c.y, term.c.y);
     term.lastc = u;
-    if (putc_step.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
-        tmoveto(putc_step.next_x, term.c.y);
+    if (write.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
+        tmoveto(write.next_x, term.c.y);
     } else {
-        termapplystateupdate((ZigTermStateUpdate){.cursor_state_mask = putc_step.cursor_state_mask,
-                                                  .cursor_state_bits = putc_step.cursor_state_bits});
+        term.c.state |= CURSOR_WRAPNEXT;
     }
 }
 
@@ -2839,7 +2826,7 @@ int twrite(const char *buf, int buflen, int show_ctrl) {
 }
 
 void tresize(int col, int row) {
-    int i, j, step_index;
+    int i, j;
     TCursor cursor;
     ZigResizeExecPlan exec_plan;
     ZigResizePlan base;
@@ -2854,80 +2841,65 @@ void tresize(int col, int row) {
         return;
     }
 
-    for (step_index = 0; step_index < exec_plan.step_count; step_index++) {
-        switch (exec_plan.steps[step_index]) {
-        case ST_ZIG_RESIZE_STEP_FREE_SLIDE_ROWS:
-            for (i = 0; i < base.slide_count; i++)
-                linepointerfreerowpair(i);
-            break;
-        case ST_ZIG_RESIZE_STEP_MEMMOVE_SLIDE_ROWS:
-            linepointermemmoverows(base.slide_count, row);
-            break;
-        case ST_ZIG_RESIZE_STEP_FREE_TAIL_ROWS:
-            for (i = base.tail_start; i < term.row; i++)
-                linepointerfreerowpair(i);
-            break;
-        case ST_ZIG_RESIZE_STEP_REALLOC_ARRAYS:
-            linepointerreallocarrays(row, col);
-            break;
-        case ST_ZIG_RESIZE_STEP_FILL_HISTORY:
-            for (i = 0; i < HISTSIZE; i++) {
-                term.hist[i] = xrealloc(term.hist[i], col * sizeof(Glyph));
-                for (j = exec_plan.hist_fill.start; exec_plan.hist_fill.run && j < exec_plan.hist_fill.end; j++) {
-                    term.hist[i][j] = term.c.attr;
-                    term.hist[i][j].u = ' ';
-                }
-            }
-            break;
-        case ST_ZIG_RESIZE_STEP_REALLOC_ROWS:
-            for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++)
-                linepointerreallocrowpair(i, col);
-            break;
-        case ST_ZIG_RESIZE_STEP_ALLOC_ROWS:
-            for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++)
-                linepointerallocrowpair(i, col);
-            break;
-        case ST_ZIG_RESIZE_STEP_TABS:
-            if (exec_plan.tabs.grow) {
-                memset(term.tabs + exec_plan.tabs.clear_start, 0, sizeof(*term.tabs) * exec_plan.tabs.clear_count);
-                for (i = exec_plan.tabs.tab_start; i < col; i += tabspaces)
-                    term.tabs[i] = 1;
-            }
-            break;
-        case ST_ZIG_RESIZE_STEP_UPDATE_DIMENSIONS:
-            termapplystateupdate(exec_plan.term_update);
-            break;
-        case ST_ZIG_RESIZE_STEP_CLEAR_REGIONS:
-            cursor = term.c;
-            for (i = 0; i < 2; i++) {
-                for (j = 0; j < exec_plan.clear.count; j++)
-                    tclearregion(exec_plan.clear.rects[j].x1, exec_plan.clear.rects[j].y1, exec_plan.clear.rects[j].x2,
-                                 exec_plan.clear.rects[j].y2);
-                tswapscreen();
-                tcursor(CURSOR_LOAD);
-            }
-            term.c = cursor;
-            break;
-        default:
-            die("invalid resize step: step=%d index=%d count=%d\n", exec_plan.steps[step_index], step_index, exec_plan.step_count);
+    for (i = 0; i < base.slide_count; i++)
+        linepointerfreerowpair(i);
+    if (i > 0)
+        linepointermemmoverows(i, row);
+    for (i = base.tail_start; i < term.row; i++)
+        linepointerfreerowpair(i);
+
+    linepointerreallocarrays(row, col);
+
+    for (i = 0; i < HISTSIZE; i++) {
+        term.hist[i] = xrealloc(term.hist[i], col * sizeof(Glyph));
+        for (j = exec_plan.hist_fill.start; exec_plan.hist_fill.run && j < exec_plan.hist_fill.end; j++) {
+            term.hist[i][j] = term.c.attr;
+            term.hist[i][j].u = ' ';
         }
     }
+
+    for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++)
+        linepointerreallocrowpair(i, col);
+
+    for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++)
+        linepointerallocrowpair(i, col);
+
+    if (exec_plan.tabs.grow) {
+        memset(term.tabs + exec_plan.tabs.clear_start, 0, sizeof(*term.tabs) * exec_plan.tabs.clear_count);
+        for (i = exec_plan.tabs.tab_start; i < col; i += tabspaces)
+            term.tabs[i] = 1;
+    }
+
+    term.col = base.requested_col;
+    term.maxcol = col;
+    term.row = row;
+    tsetscroll(0, row - 1);
+    tmoveto(term.c.x, term.c.y);
+    cursor = term.c;
+    for (i = 0; i < 2; i++) {
+        for (j = 0; j < exec_plan.clear.count; j++)
+            tclearregion(exec_plan.clear.rects[j].x1, exec_plan.clear.rects[j].y1, exec_plan.clear.rects[j].x2,
+                         exec_plan.clear.rects[j].y2);
+        tswapscreen();
+        tcursor(CURSOR_LOAD);
+    }
+    term.c = cursor;
 }
 
 void resettitle(void) { xsettitle(NULL); }
 
 void drawregion(int x1, int y1, int x2, int y2) {
-    ZigDrawRegionTransaction tx;
-    PlatformContext context;
-    ZigPlatformEffect step;
-    int step_index;
+    int y = y1;
+    ZigDrawRegionPlan region;
 
-    tx = st_drawregiontransaction(term.dirty, y1, y2);
-    context = (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW, .payload.draw = {.frame = NULL, .x1 = x1, .x2 = x2}};
-    for (step_index = 0; step_index < tx.step_count; step_index++) {
-        step = tx.steps[step_index];
-        if (!platformapplydraweffect(&context, step, step_index, tx.step_count))
-            return;
+    for (;;) {
+        region = st_drawregionplan(term.dirty, y, y2);
+        if (!region.draw)
+            break;
+        y = region.y;
+        term.dirty[y] = 0;
+        xdrawline(TLINE(y), x1, y, x2);
+        y = region.next_y;
     }
 }
 
@@ -2941,10 +2913,22 @@ void draw(void) {
         (ZigTermFrameSnapshot){search.active, term.scr, term.c.x, term.c.y, term.ocx, term.ocy, term.col, term.row};
     frame = st_drawexecplan(snapshot, (const ZigGlyph *const *)term.line, term.dirty, 0, term.row);
 
+    if (search.active)
+        searchscan();
+
     term.ocx = frame.ocx;
     term.ocy = frame.ocy;
-    platformapplyeffects(&frame.platform,
-                         (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW, .payload.draw = {.frame = &frame, .x1 = 0, .x2 = term.col}});
+
+    drawregion(0, 0, term.col, term.row);
+    if (term.scr == 0)
+        xdrawcursor(frame.cx, term.c.y, term.line[term.c.y][frame.cx], term.ocx, term.ocy,
+                    term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
+
+    term.ocx = frame.new_ocx;
+    term.ocy = frame.new_ocy;
+    xfinishdraw();
+    if (term.ocx != frame.ocx || term.ocy != frame.ocy)
+        xximspot(term.ocx, term.ocy);
 }
 
 void redraw(void) {

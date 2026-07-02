@@ -94,7 +94,12 @@ pub const ZigDrawExecPlan = extern struct {
 
 const DrawRegionPlan = struct {
     draw: c_int,
-    clear_dirty: c_int,
+    y: c_int,
+    next_y: c_int,
+};
+
+pub const ZigDrawRegionPlan = extern struct {
+    draw: c_int,
     y: c_int,
     next_y: c_int,
 };
@@ -251,10 +256,10 @@ const DrawRegion = struct {
         var y = self.start_y;
         while (y < self.end_y) : (y += 1) {
             if (self.dirty[@intCast(y)] != 0) {
-                return .{ .draw = 1, .clear_dirty = 1, .y = y, .next_y = y + 1 };
+                return .{ .draw = 1, .y = y, .next_y = y + 1 };
             }
         }
-        return .{ .draw = 0, .clear_dirty = 0, .y = self.end_y, .next_y = self.end_y };
+        return .{ .draw = 0, .y = self.end_y, .next_y = self.end_y };
     }
 
     fn transaction(self: DrawRegion) ZigDrawRegionTransaction {
@@ -350,7 +355,12 @@ fn st_drawregionnext(dirty: [*]const c_int, y1: c_int, y2: c_int) DrawRegionPlan
     return (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y1, .end_y = y2 }).plan();
 }
 
-export fn st_drawregiontransaction(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionTransaction {
+export fn st_drawregionplan(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionPlan {
+    const plan = st_drawregionnext(dirty, y1, y2);
+    return .{ .draw = plan.draw, .y = plan.y, .next_y = plan.next_y };
+}
+
+fn st_drawregiontransaction(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionTransaction {
     return (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y1, .end_y = y2 }).transaction();
 }
 
@@ -498,7 +508,6 @@ test "draw region next returns clear then draw ordering" {
     const region = st_drawregionnext(&dirty, 0, dirty.len);
 
     try std.testing.expectEqual(@as(c_int, 1), region.draw);
-    try std.testing.expectEqual(@as(c_int, 1), region.clear_dirty);
     try std.testing.expectEqual(@as(c_int, 1), region.y);
     try std.testing.expectEqual(@as(c_int, 2), region.next_y);
 }
