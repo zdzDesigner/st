@@ -536,7 +536,7 @@ pub fn startResult(snapshot: SelectionSnapshot, point: model.Point, snap: i32, a
     const plan = startPlan(point, snap, alt_screen);
     return .{
         .update = .{
-            .mode = plan.mode,
+            .mode = plan.final_mode,
             .selection_type = plan.selection_type,
             .alt = plan.alt,
             .snap = plan.snap,
@@ -1020,6 +1020,7 @@ test "selection state adapter exports smoke tests" {
 
     const start = st_selstartupdate(testSelectionSnapshot(.regular, .idle, false, -1, .{ .x = 0, .y = 0 }, .{ .x = 0, .y = 0 }), 3, 4, 1, 1);
     try std.testing.expectEqual(@as(c_int, 1), start.effect.dirty);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SelectionMode.ready)), start.update.mode);
 }
 
 test "selection clear and line snap adapter exports" {

@@ -79,21 +79,37 @@ typedef struct {
     char state;
 } TCursor;
 
-enum platform_context_kind {
+typedef enum {
     PLATFORM_CONTEXT_STR,
     PLATFORM_CONTEXT_MODE,
     PLATFORM_CONTEXT_DRAW,
-};
+} PlatformContextKind;
 
 typedef struct {
-    int kind;
-    const ZigStrHandlePlan *str_plan;
-    int str_narg;
-    char *str_dec;
-    char *str_color_value;
-    int str_color_failed;
-    int mode_set;
-    const ZigDrawExecPlan *draw_frame;
+    const ZigStrHandlePlan *plan;
+    int narg;
+    char *dec;
+    char *color_value;
+    int color_failed;
+} PlatformStrContext;
+
+typedef struct {
+    int set;
+} PlatformModeContext;
+
+typedef struct {
+    const ZigDrawExecPlan *frame;
+    int x1;
+    int x2;
+} PlatformDrawContext;
+
+typedef struct {
+    PlatformContextKind kind;
+    union {
+        PlatformStrContext str;
+        PlatformModeContext mode;
+        PlatformDrawContext draw;
+    } payload;
 } PlatformContext;
 
 typedef struct {
@@ -260,11 +276,12 @@ static void platformapplyeffects(const ZigPlatformEffectList *, PlatformContext)
 static int platformapplystreffect(PlatformContext *, ZigPlatformEffect, int, int);
 static int platformapplymodeeffect(PlatformContext *, ZigPlatformEffect, int, int);
 static int platformapplydraweffect(PlatformContext *, ZigPlatformEffect, int, int);
-static const char *platformcontextname(int);
+static const char *platformcontextname(PlatformContextKind);
 static char *strarg(const ZigStrHandlePlan *, int, int, const char *);
 static char *strargpar(int, int);
 static void strparse(void);
 static void strreset(void);
+static void inputapplycontrolplan(const ZigInputControlPlan *, uchar);
 
 static void tprinter(char *, size_t);
 static void tdumpsel(void);
@@ -308,6 +325,7 @@ static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
 static int twrite(const char *, int, int);
 static void tcontrolcode(uchar);
+static void tbackspace(void);
 static void tdectest(char);
 static void tdefutf8(char);
 static void tdeftran(char);
@@ -437,6 +455,10 @@ void selstart(int col, int row, int snap) {
     selclear();
     result = st_selstartupdate(selectionsnapshot(), col, row, snap, IS_SET(MODE_ALTSCREEN));
     selectionapplyresult(result);
+    if (snap != 0) {
+        selnormalize();
+        tsetdirt(sel.nb.y, sel.ne.y);
+    }
 }
 
 void selextend(int col, int row, int type, int done) {
@@ -450,6 +472,9 @@ void selextend(int col, int row, int type, int done) {
     }
     result = st_selextendupdate(selectionsnapshot(), col, row, type, done);
     selectionapplyresult(result);
+    selnormalize();
+    if (sel.snap != 0)
+        tsetdirt(sel.nb.y, sel.ne.y);
 }
 
 void selnormalize(void) {
@@ -1956,7 +1981,8 @@ void tsetmode(int priv, int set, int *args, int narg) {
 
     for (lim = args + narg; args < lim; ++args) {
         plan = st_modeplan(priv, *args, set, IS_SET(MODE_ALTSCREEN), allowaltscreen);
-        platformapplyeffects(&plan.platform, (PlatformContext){.kind = PLATFORM_CONTEXT_MODE, .mode_set = set});
+        platformapplyeffects(&plan.platform,
+                             (PlatformContext){.kind = PLATFORM_CONTEXT_MODE, .payload.mode = {.set = set}});
         termapplystateupdate(plan.term_update);
     }
 }
@@ -2051,10 +2077,11 @@ void strapplyplan(const ZigStrHandlePlan *plan, int narg) {
 
     /* strarg() 将旧版空参数 UB 收敛为带上下文的显式错误。 */
     platform = st_strapplyplan(plan->kind, plan->clipboard_run, plan->arg1_present, plan->payload_arg, plan->color_arg);
-    platformapplyeffects(&platform, (PlatformContext){.kind = PLATFORM_CONTEXT_STR, .str_plan = plan, .str_narg = narg});
+    platformapplyeffects(&platform,
+                         (PlatformContext){.kind = PLATFORM_CONTEXT_STR, .payload.str = {.plan = plan, .narg = narg}});
 }
 
-const char *platformcontextname(int kind) {
+const char *platformcontextname(PlatformContextKind kind) {
     switch (kind) {
     case PLATFORM_CONTEXT_STR:
         return "str";
@@ -2087,7 +2114,7 @@ void platformapplyeffects(const ZigPlatformEffectList *platform, PlatformContext
                 return;
             break;
         default:
-            die("invalid platform context: context=%d kind=%d index=%d count=%d\n", context.kind, effect.kind, i,
+            die("invalid platform context: context=%d kind=%d index=%d count=%d\n", (int)context.kind, effect.kind, i,
                 platform->count);
         }
     }
@@ -2100,44 +2127,44 @@ int platformapplystreffect(PlatformContext *context, ZigPlatformEffect effect, i
     case ST_ZIG_PLATFORM_EFFECT_NONE:
         break;
     case ST_ZIG_PLATFORM_EFFECT_SET_TITLE:
-        xsettitle(strarg(context->str_plan, effect.arg, context->str_narg, "title"));
+        xsettitle(strarg(context->payload.str.plan, effect.arg, context->payload.str.narg, "title"));
         break;
     case ST_ZIG_PLATFORM_EFFECT_SET_ICON_TITLE:
-        xseticontitle(strarg(context->str_plan, effect.arg, context->str_narg, "icon-title"));
+        xseticontitle(strarg(context->payload.str.plan, effect.arg, context->payload.str.narg, "icon-title"));
         break;
     case ST_ZIG_PLATFORM_EFFECT_DECODE_CLIPBOARD:
-        context->str_dec = base64dec(strarg(context->str_plan, effect.arg, context->str_narg, "clipboard"));
-        if (!context->str_dec)
+        context->payload.str.dec = base64dec(strarg(context->payload.str.plan, effect.arg, context->payload.str.narg, "clipboard"));
+        if (!context->payload.str.dec)
             fprintf(stderr, "erresc: invalid base64\n");
         break;
     case ST_ZIG_PLATFORM_EFFECT_SET_SELECTION:
-        if (context->str_dec)
-            xsetsel(context->str_dec);
+        if (context->payload.str.dec)
+            xsetsel(context->payload.str.dec);
         break;
     case ST_ZIG_PLATFORM_EFFECT_COPY_CLIPBOARD:
-        if (context->str_dec)
+        if (context->payload.str.dec)
             xclipcopy();
         break;
     case ST_ZIG_PLATFORM_EFFECT_SET_COLOR:
-        context->str_color_value = strarg(context->str_plan, effect.arg, context->str_narg, "color-value");
-        j = effect.index_arg >= 0 ? atoi(strarg(context->str_plan, effect.index_arg, context->str_narg, "color-index")) : -1;
-        if (xsetcolorname(j, context->str_color_value)) {
-            context->str_color_failed = 1;
+        context->payload.str.color_value = strarg(context->payload.str.plan, effect.arg, context->payload.str.narg, "color-value");
+        j = effect.index_arg >= 0 ? atoi(strarg(context->payload.str.plan, effect.index_arg, context->payload.str.narg, "color-index")) : -1;
+        if (xsetcolorname(j, context->payload.str.color_value)) {
+            context->payload.str.color_failed = 1;
             fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j,
-                    context->str_color_value ? context->str_color_value : "(null)");
+                    context->payload.str.color_value ? context->payload.str.color_value : "(null)");
         }
         break;
     case ST_ZIG_PLATFORM_EFFECT_RESET_COLOR:
-        j = atoi(strarg(context->str_plan, effect.index_arg, context->str_narg, "color-index"));
+        j = atoi(strarg(context->payload.str.plan, effect.index_arg, context->payload.str.narg, "color-index"));
         /* OSC 104 带参数时重置指定颜色槽；NULL 要求 xsetcolorname 恢复默认值。 */
-        if (xsetcolorname(j, context->str_color_value)) {
-            context->str_color_failed = 1;
+        if (xsetcolorname(j, context->payload.str.color_value)) {
+            context->payload.str.color_failed = 1;
             fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j,
-                    context->str_color_value ? context->str_color_value : "(null)");
+                    context->payload.str.color_value ? context->payload.str.color_value : "(null)");
         }
         break;
     case ST_ZIG_PLATFORM_EFFECT_REDRAW:
-        if (!context->str_color_failed)
+        if (!context->payload.str.color_failed)
             redraw();
         break;
     case ST_ZIG_PLATFORM_EFFECT_UNKNOWN_STR:
@@ -2237,7 +2264,7 @@ int platformapplymodeeffect(PlatformContext *context, ZigPlatformEffect effect, 
 int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, int index, int count) {
     const ZigDrawExecPlan *frame;
 
-    frame = context->draw_frame;
+    frame = context->payload.draw.frame;
     switch (effect.kind) {
     case ST_ZIG_PLATFORM_EFFECT_SEARCH_SCAN:
         searchscan();
@@ -2246,8 +2273,7 @@ int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, 
         drawregion(0, effect.arg, term.col, term.row);
         break;
     case ST_ZIG_PLATFORM_EFFECT_DRAW_CURSOR:
-        xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx], term.ocx, term.ocy,
-                    term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
+        xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx]);
         break;
     case ST_ZIG_PLATFORM_EFFECT_FINISH_DRAW:
         term.ocx = frame->new_ocx;
@@ -2256,6 +2282,14 @@ int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, 
         break;
     case ST_ZIG_PLATFORM_EFFECT_IME_SPOT:
         xximspot(term.ocx, term.ocy);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_REGION_CLEAR_DIRTY:
+        term.dirty[effect.arg] = 0;
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_REGION_DRAW_LINE:
+        xdrawline(TLINE(effect.arg), context->payload.draw.x1, effect.arg, context->payload.draw.x2);
+        break;
+    case ST_ZIG_PLATFORM_EFFECT_REGION_ADVANCE:
         break;
     case ST_ZIG_PLATFORM_EFFECT_NONE:
         break;
@@ -2491,17 +2525,17 @@ void applyinputscalarwriteback(const ZigInputScalarStateUpdate *update) {
         term.tabs[update->tab_x] = 1;
 }
 
-void tcontrolcode(uchar ascii) {
-    ZigInputControlPlan plan = st_inputcontrolplan(ascii, term.esc, term.charset, term.c.x);
+void inputapplycontrolplan(const ZigInputControlPlan *plan, uchar ascii) {
+    applyinputscalarwriteback(&plan->state);
 
-    applyinputscalarwriteback(&plan.state);
-
-    switch (plan.action) {
+    switch (plan->action) {
+    case ST_ZIG_CTL_ACTION_NONE:
+        break;
     case ST_ZIG_CTL_ACTION_TAB:
         tputtab(1);
         return;
     case ST_ZIG_CTL_ACTION_BACKSPACE:
-        tmoveto(term.c.x - 1, term.c.y);
+        tbackspace();
         return;
     case ST_ZIG_CTL_ACTION_CARRIAGE_RETURN:
         tmoveto(0, term.c.y);
@@ -2534,9 +2568,34 @@ void tcontrolcode(uchar ascii) {
     case ST_ZIG_CTL_ACTION_START_STR:
         tstrsequence(ascii);
         return;
+    default:
+        die("invalid control action: action=%d rune=%u\n", plan->action, ascii);
     }
+
     /* only CAN, SUB, \a and C1 chars interrupt a sequence */
-    term.esc = plan.finish_esc;
+    term.esc = plan->finish_esc;
+}
+
+void tcontrolcode(uchar ascii) {
+    ZigInputControlPlan plan = st_inputcontrolplan(ascii, term.esc, term.charset, term.c.x);
+
+    inputapplycontrolplan(&plan, ascii);
+}
+
+void tbackspace(void) {
+    ZigTermCursorSnapshot snapshot;
+    ZigBackspacePlan plan;
+    ushort prev_line_last_mode;
+
+    snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
+    prev_line_last_mode = term.c.y > 0 ? TLINE(term.c.y - 1)[term.col - 1].mode : 0;
+    plan = st_backspaceplan(snapshot, prev_line_last_mode);
+
+    term.c.state = plan.state;
+    term.c.x = plan.x;
+    term.c.y = plan.y;
+    if (plan.dirty)
+        tsetdirt(plan.dirty_top, plan.dirty_bot);
 }
 
 /*
@@ -2604,6 +2663,7 @@ void tputc(Rune u) {
     ZigInputStepPlan input_step;
     ZigStrCollectTransaction collect_tx;
     ZigStrCollectExec collect_exec;
+    ZigStrCollectStep collect_step;
     ZigInputEscFlowPlan escflow;
     int control;
     int collect_step_index, esc_action_done, esc_action_index;
@@ -2632,35 +2692,37 @@ void tputc(Rune u) {
     if (input_step.route == ST_ZIG_INPUT_ROUTE_STR) {
         collect_tx = input_step.collect;
         for (collect_step_index = 0; collect_step_index < collect_tx.step_count; collect_step_index++) {
-            switch (collect_tx.steps[collect_step_index]) {
+            collect_step = collect_tx.steps[collect_step_index];
+            switch (collect_step.kind) {
             case ST_ZIG_STR_COLLECT_STEP_APPLY_FIRST:
-                collect_exec = collect_tx.first;
+                collect_exec = collect_step.exec;
+                strescseq.len = collect_exec.new_len;
                 break;
-            case ST_ZIG_STR_COLLECT_STEP_RETRY_AFTER_GROW:
-                collect_exec = st_tcollectstr(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
-                                              (const unsigned char *)c, len, strescseq.siz);
-                if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW)
-                    die("str collect retry still needs growth: len=%zu chunk=%zu size=%zu\n", strescseq.len,
-                        (size_t)len, strescseq.siz);
-                break;
-            default:
-                die("invalid str collect transaction step: step=%d index=%d count=%d\n", collect_tx.steps[collect_step_index],
-                    collect_step_index, collect_tx.step_count);
-            }
-
-            if (collect_exec.kind == ST_ZIG_STR_COLLECT_FINISH) {
-                term.esc = collect_exec.new_esc;
-                goto check_control_code;
-            }
-            if (collect_exec.kind == ST_ZIG_STR_COLLECT_ABORT)
-                return;
-            if (collect_exec.kind == ST_ZIG_STR_COLLECT_GROW) {
+            case ST_ZIG_STR_COLLECT_STEP_GROW_BUFFER:
+                collect_exec = collect_step.exec;
                 strescseq.siz = collect_exec.new_size;
                 strescseq.buf = xrealloc(strescseq.buf, strescseq.siz);
+                break;
+            case ST_ZIG_STR_COLLECT_STEP_RETRY_COLLECT:
+                collect_exec = collect_step.exec;
+                if (collect_exec.kind != ST_ZIG_STR_COLLECT_APPEND)
+                    die("invalid str collect retry payload: kind=%d len=%zu chunk=%zu size=%zu\n", collect_exec.kind,
+                        strescseq.len, (size_t)len, strescseq.siz);
+                memcpy(strescseq.buf + strescseq.len, c, len);
+                strescseq.len = collect_exec.new_len;
+                break;
+            case ST_ZIG_STR_COLLECT_STEP_FINISH:
+                collect_exec = collect_step.exec;
+                term.esc = collect_exec.new_esc;
+                goto check_control_code;
+            case ST_ZIG_STR_COLLECT_STEP_ABORT:
+                return;
+                break;
+            default:
+                die("invalid str collect transaction step: step=%d index=%d count=%d\n", collect_step.kind,
+                    collect_step_index, collect_tx.step_count);
             }
         }
-
-        strescseq.len = collect_exec.new_len;
         return;
     }
 
@@ -2670,46 +2732,8 @@ check_control_code:
      * because they can be embedded inside a control sequence, and
      * they must not cause conflicts with sequences.
      */
-    if (input_step.route == ST_ZIG_INPUT_ROUTE_CONTROL) {
-        applyinputscalarwriteback(&input_step.control.state);
-        switch (input_step.control.action) {
-        case ST_ZIG_CTL_ACTION_TAB:
-            tputtab(1);
-            break;
-        case ST_ZIG_CTL_ACTION_BACKSPACE:
-            tmoveto(term.c.x - 1, term.c.y);
-            break;
-        case ST_ZIG_CTL_ACTION_CARRIAGE_RETURN:
-            tmoveto(0, term.c.y);
-            break;
-        case ST_ZIG_CTL_ACTION_LINEFEED:
-            tnewline(IS_SET(MODE_CRLF));
-            break;
-        case ST_ZIG_CTL_ACTION_BELL:
-            if (term.esc & ESC_STR_END) {
-                strhandle();
-            } else {
-                xbell();
-            }
-            break;
-        case ST_ZIG_CTL_ACTION_ESCAPE:
-            csireset();
-            break;
-        case ST_ZIG_CTL_ACTION_SUBSTITUTE:
-        case ST_ZIG_CTL_ACTION_CANCEL:
-            break;
-        case ST_ZIG_CTL_ACTION_NEXT_LINE:
-            tnewline(1);
-            break;
-        case ST_ZIG_CTL_ACTION_DECID:
-            ttywrite(vtiden, strlen(vtiden), 0);
-            break;
-        case ST_ZIG_CTL_ACTION_START_STR:
-            tstrsequence(u);
-            break;
-        default:
-            die("invalid control action: action=%d rune=%u\n", input_step.control.action, u);
-        }
+    if (control) {
+        inputapplycontrolplan(&input_step.control, (uchar)u);
         /*
          * control codes are not shown ever
          */
@@ -2894,18 +2918,17 @@ void tresize(int col, int row) {
 void resettitle(void) { xsettitle(NULL); }
 
 void drawregion(int x1, int y1, int x2, int y2) {
-    int y = y1;
-    ZigDrawExecPlan region;
+    ZigDrawRegionTransaction tx;
+    PlatformContext context;
+    ZigPlatformEffect step;
+    int step_index;
 
-    for (;;) {
-        region = st_drawregionnext(term.dirty, y, y2);
-        if (!region.region_draw)
-            break;
-        y = region.region_y;
-        if (region.region_clear_dirty)
-            term.dirty[y] = 0;
-        xdrawline(TLINE(y), x1, y, x2);
-        y = region.region_next_y;
+    tx = st_drawregiontransaction(term.dirty, y1, y2);
+    context = (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW, .payload.draw = {.frame = NULL, .x1 = x1, .x2 = x2}};
+    for (step_index = 0; step_index < tx.step_count; step_index++) {
+        step = tx.steps[step_index];
+        if (!platformapplydraweffect(&context, step, step_index, tx.step_count))
+            return;
     }
 }
 
@@ -2921,7 +2944,8 @@ void draw(void) {
 
     term.ocx = frame.ocx;
     term.ocy = frame.ocy;
-    platformapplyeffects(&frame.platform, (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW, .draw_frame = &frame});
+    platformapplyeffects(&frame.platform,
+                         (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW, .payload.draw = {.frame = &frame, .x1 = 0, .x2 = term.col}});
 }
 
 void redraw(void) {

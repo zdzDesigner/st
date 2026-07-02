@@ -1546,16 +1546,9 @@ void xdrawsearchbar(void)
     }
 }
 
-void xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og, Line line, int len)
+void xdrawcursor(int cx, int cy, Glyph g)
 {
     Color drawcol;
-
-    /* remove the old cursor */
-    if (selected(ox, oy) || searchmatch(ox, oy)) og.mode ^= ATTR_REVERSE;
-
-    /* Redraw the line where cursor was previously.
-     * It will restore the ligatures broken by the cursor. */
-    xdrawline(line, 0, oy, len);
 
     if (IS_SET(MODE_HIDE)) return;
 
@@ -1650,6 +1643,9 @@ void xdrawline(Line line, int x1, int y1, int x2)
     int i, x, ox, numspecs;
     Glyph base, new;
     XftGlyphFontSpec *specs = xw.specbuf;
+
+    xclear(borderpx + x1 * win.cw, borderpx + y1 * win.ch,
+           borderpx + x2 * win.cw, borderpx + (y1 + 1) * win.ch);
 
     numspecs = xmakeglyphfontspecs(specs, &line[x1], x2 - x1, x1, y1);
     i = ox = 0;

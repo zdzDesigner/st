@@ -13,24 +13,11 @@ const ZigTermStateUpdate = term_update.ZigTermStateUpdate;
 
 pub const ZigModePlan = extern struct {
     kind: c_int,
-    cursor_before: c_int,
-    clear_before_swap: c_int,
-    swap_screen: c_int,
-    cursor_after: c_int,
-    pointer_motion: c_int,
-    clear_mouse_mode: c_int,
-    mouse_mode: c_int,
-    cursor_state_action: c_int,
-    cursor_state_set: c_int,
     cursor_state_mask: c_int,
     cursor_state_bits: c_int,
     move_origin_home: c_int,
-    term_mode_action: c_int,
-    term_mode_set: c_int,
     mode_mask: c_int,
     mode_bits: c_int,
-    xsetmode_action: c_int,
-    xsetmode_set: c_int,
     platform: ZigPlatformEffectList,
     term_update: ZigTermStateUpdate,
 };
@@ -195,29 +182,15 @@ fn swapScreen(arg: c_int, set: bool, alt: bool) c_int {
 }
 
 fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool, allow_alt: bool) ZigModePlan {
-    const cursor_action = cursorAction(arg, set);
     const term_mode_set = if (arg == 12) !set else set;
     const term_mask = termModeMask(arg);
     var plan = ZigModePlan{
         .kind = kind,
-        .cursor_before = if (arg == 1049) cursor_action else -1,
-        .clear_before_swap = if ((arg == 1049 or arg == 47 or arg == 1047) and alt) 1 else 0,
-        .swap_screen = swapScreen(arg, set, alt),
-        .cursor_after = if (arg == 1049 or arg == 1048) cursor_action else -1,
-        .pointer_motion = pointerMotion(arg, set),
-        .clear_mouse_mode = clearMouseMode(arg),
-        .mouse_mode = mouseMode(arg),
-        .cursor_state_action = cursorStateAction(arg),
-        .cursor_state_set = if (set) 1 else 0,
         .cursor_state_mask = cursorStateMask(arg),
         .cursor_state_bits = if (set) cursorStateMask(arg) else 0,
         .move_origin_home = if (arg == 6) 1 else 0,
-        .term_mode_action = termModeAction(arg),
-        .term_mode_set = if (term_mode_set) 1 else 0,
         .mode_mask = term_mask,
         .mode_bits = if (term_mode_set) term_mask else 0,
-        .xsetmode_action = xsetmodeAction(arg),
-        .xsetmode_set = if (arg == 25) (if (!set) 1 else 0) else (if (set) 1 else 0),
         .platform = emptyPlatformEffects(),
         .term_update = std.mem.zeroes(ZigTermStateUpdate),
     };
@@ -242,16 +215,21 @@ fn addXsetmode(list: *ZigPlatformEffectList, set: bool, mode: c_int) void {
 }
 
 fn fillPlatformEffects(plan: *ZigModePlan, arg: c_int, set: bool, alt: bool, allow_alt: bool) void {
+    const cursor_action = cursorAction(arg, set);
+    const pointer_motion = pointerMotion(arg, set);
+    const mouse_mode = mouseMode(arg);
+    const xsetmode_set = if (arg == 25) !set else set;
+
     switch (plan.kind) {
         mode_private_unknown => addPlatformEffect(&plan.platform, platform_effect_mode_unknown_private, arg, 0),
         mode_regular_unknown => addPlatformEffect(&plan.platform, platform_effect_mode_unknown_regular, arg, 0),
         mode_appcursor => addXsetmode(&plan.platform, set, platform_mode_appcursor),
         mode_reverse => addXsetmode(&plan.platform, set, platform_mode_reverse),
-        mode_cursor_visibility => addXsetmode(&plan.platform, plan.xsetmode_set != 0, platform_mode_hide),
+        mode_cursor_visibility => addXsetmode(&plan.platform, xsetmode_set, platform_mode_hide),
         mode_mouse_x10, mode_mouse_btn, mode_mouse_motion, mode_mouse_many => {
-            if (plan.pointer_motion >= 0) addPlatformEffect(&plan.platform, platform_effect_pointer_motion, plan.pointer_motion, 0);
-            if (plan.clear_mouse_mode != 0) addXsetmode(&plan.platform, false, platform_mode_mouse);
-            switch (plan.mouse_mode) {
+            if (pointer_motion >= 0) addPlatformEffect(&plan.platform, platform_effect_pointer_motion, pointer_motion, 0);
+            if (clearMouseMode(arg) != 0) addXsetmode(&plan.platform, false, platform_mode_mouse);
+            switch (mouse_mode) {
                 mouse_x10 => addXsetmode(&plan.platform, set, platform_mode_mousex10),
                 mouse_button => addXsetmode(&plan.platform, set, platform_mode_mousebtn),
                 mouse_motion => addXsetmode(&plan.platform, set, platform_mode_mousemotion),
@@ -260,23 +238,23 @@ fn fillPlatformEffects(plan: *ZigModePlan, arg: c_int, set: bool, alt: bool, all
             }
         },
         mode_focus => addXsetmode(&plan.platform, set, platform_mode_focus),
-        mode_mouse_sgr => if (plan.mouse_mode == mouse_sgr) addXsetmode(&plan.platform, set, platform_mode_mousesgr),
+        mode_mouse_sgr => if (mouse_mode == mouse_sgr) addXsetmode(&plan.platform, set, platform_mode_mousesgr),
         mode_8bit => addXsetmode(&plan.platform, set, platform_mode_8bit),
         mode_alt1049 => {
             if (!allow_alt) return;
-            if (plan.cursor_before >= 0) addPlatformEffect(&plan.platform, platform_effect_cursor, plan.cursor_before, 0);
-            if (plan.clear_before_swap != 0 and alt) addPlatformEffect(&plan.platform, platform_effect_clear_screen, 0, 0);
-            if (plan.swap_screen != 0) addPlatformEffect(&plan.platform, platform_effect_swap_screen, 0, 0);
-            if (plan.cursor_after >= 0) addPlatformEffect(&plan.platform, platform_effect_cursor, plan.cursor_after, 0);
+            if (cursor_action >= 0) addPlatformEffect(&plan.platform, platform_effect_cursor, cursor_action, 0);
+            if (alt) addPlatformEffect(&plan.platform, platform_effect_clear_screen, 0, 0);
+            if (swapScreen(arg, set, alt) != 0) addPlatformEffect(&plan.platform, platform_effect_swap_screen, 0, 0);
+            if (cursor_action >= 0) addPlatformEffect(&plan.platform, platform_effect_cursor, cursor_action, 0);
         },
         mode_alt47 => {
             if (!allow_alt) return;
-            if (plan.clear_before_swap != 0 and alt) addPlatformEffect(&plan.platform, platform_effect_clear_screen, 0, 0);
-            if (plan.swap_screen != 0) addPlatformEffect(&plan.platform, platform_effect_swap_screen, 0, 0);
+            if (alt) addPlatformEffect(&plan.platform, platform_effect_clear_screen, 0, 0);
+            if (swapScreen(arg, set, alt) != 0) addPlatformEffect(&plan.platform, platform_effect_swap_screen, 0, 0);
         },
-        mode_cursor1048 => if (plan.cursor_after >= 0) addPlatformEffect(&plan.platform, platform_effect_cursor, plan.cursor_after, 0),
+        mode_cursor1048 => if (cursor_action >= 0) addPlatformEffect(&plan.platform, platform_effect_cursor, cursor_action, 0),
         mode_bracketed_paste => addXsetmode(&plan.platform, set, platform_mode_brcktpaste),
-        mode_kbdlock => addXsetmode(&plan.platform, plan.xsetmode_set != 0, platform_mode_kbdlock),
+        mode_kbdlock => addXsetmode(&plan.platform, xsetmode_set, platform_mode_kbdlock),
         mode_origin => if (plan.move_origin_home != 0) addPlatformEffect(&plan.platform, platform_effect_move_origin, 0, 0),
         else => {},
     }
@@ -292,30 +270,8 @@ fn termModeMask(arg: c_int) c_int {
     };
 }
 
-fn cursorStateAction(arg: c_int) c_int {
-    return if (arg == 6) cursor_state_origin else cursor_state_none;
-}
-
 fn cursorStateMask(arg: c_int) c_int {
     return if (arg == 6) cursor_origin_bit else 0;
-}
-
-fn termModeAction(arg: c_int) c_int {
-    return switch (arg) {
-        7 => term_mode_wrap,
-        4 => term_mode_insert,
-        12 => term_mode_echo,
-        20 => term_mode_crlf,
-        else => term_mode_none,
-    };
-}
-
-fn xsetmodeAction(arg: c_int) c_int {
-    return switch (arg) {
-        25 => xsetmode_hide,
-        2 => xsetmode_kbdlock,
-        else => xsetmode_none,
-    };
 }
 
 fn pointerMotion(arg: c_int, set: bool) c_int {
@@ -359,18 +315,24 @@ export fn st_tdeftranplan(ascii: c_char) c_int {
 test "mode domain plans alternate screen set" {
     const plan = modePlan(mode_alt1049, 1049, true, false, true);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_before);
-    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_after);
-    try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
+    try std.testing.expectEqual(@as(c_int, 3), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_cursor), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.platform.effects[0].arg);
+    try std.testing.expectEqual(@as(c_int, platform_effect_swap_screen), plan.platform.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_cursor), plan.platform.effects[2].kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.platform.effects[2].arg);
 }
 
 test "mode domain plans 1049 reset order" {
     const plan = modePlan(mode_alt1049, 1049, false, true, true);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), plan.kind);
-    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_before);
-    try std.testing.expectEqual(@as(c_int, 1), plan.clear_before_swap);
-    try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
-    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_after);
+    try std.testing.expectEqual(@as(c_int, 4), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_cursor), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.platform.effects[0].arg);
+    try std.testing.expectEqual(@as(c_int, platform_effect_clear_screen), plan.platform.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_swap_screen), plan.platform.effects[2].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_cursor), plan.platform.effects[3].kind);
+    try std.testing.expectEqual(@as(c_int, 1), plan.platform.effects[3].arg);
 }
 
 test "mode domain gates alt screen effects when disabled" {
@@ -396,19 +358,17 @@ test "mode domain returns unknown diagnostic effects" {
 test "mode domain keeps 47 separate from cursor" {
     const plan = modePlan(mode_alt47, 47, false, true, true);
     try std.testing.expectEqual(@as(c_int, mode_alt47), plan.kind);
-    try std.testing.expectEqual(@as(c_int, -1), plan.cursor_before);
-    try std.testing.expectEqual(@as(c_int, 1), plan.clear_before_swap);
-    try std.testing.expectEqual(@as(c_int, 1), plan.swap_screen);
-    try std.testing.expectEqual(@as(c_int, -1), plan.cursor_after);
+    try std.testing.expectEqual(@as(c_int, 2), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_clear_screen), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_swap_screen), plan.platform.effects[1].kind);
 }
 
 test "mode domain plans 1048 cursor action" {
     const plan = modePlan(mode_cursor1048, 1048, true, false, true);
     try std.testing.expectEqual(@as(c_int, mode_cursor1048), plan.kind);
-    try std.testing.expectEqual(@as(c_int, -1), plan.cursor_before);
-    try std.testing.expectEqual(@as(c_int, 0), plan.clear_before_swap);
-    try std.testing.expectEqual(@as(c_int, 0), plan.swap_screen);
-    try std.testing.expectEqual(@as(c_int, 0), plan.cursor_after);
+    try std.testing.expectEqual(@as(c_int, 1), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_cursor), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, 0), plan.platform.effects[0].arg);
 }
 
 test "mode helper maps mouse actions" {
@@ -428,21 +388,19 @@ test "mode domain plans mouse actions" {
     const button = modePlan(mode_mouse_btn, 1000, true, false, true);
     const motion = modePlan(mode_mouse_motion, 1002, true, false, true);
     try std.testing.expectEqual(@as(c_int, mode_mouse_x10), x10.kind);
-    try std.testing.expectEqual(@as(c_int, 0), x10.pointer_motion);
-    try std.testing.expectEqual(@as(c_int, 1), x10.clear_mouse_mode);
-    try std.testing.expectEqual(@as(c_int, mouse_x10), x10.mouse_mode);
-    try std.testing.expectEqual(@as(c_int, mouse_button), button.mouse_mode);
-    try std.testing.expectEqual(@as(c_int, mouse_motion), motion.mouse_mode);
+    try std.testing.expectEqual(@as(c_int, 3), x10.platform.count);
+    try std.testing.expectEqual(@as(c_int, 0), x10.platform.effects[0].arg);
+    try std.testing.expectEqual(@as(c_int, platform_mode_mousex10), x10.platform.effects[2].index_arg);
+    try std.testing.expectEqual(@as(c_int, platform_mode_mousebtn), button.platform.effects[2].index_arg);
+    try std.testing.expectEqual(@as(c_int, platform_mode_mousemotion), motion.platform.effects[2].index_arg);
 }
 
 test "mode domain plans mouse many pointer motion" {
     const enabled = modePlan(mode_mouse_many, 1003, true, false, true);
     const disabled = modePlan(mode_mouse_many, 1003, false, false, true);
     try std.testing.expectEqual(@as(c_int, mode_mouse_many), enabled.kind);
-    try std.testing.expectEqual(@as(c_int, 1), enabled.pointer_motion);
-    try std.testing.expectEqual(@as(c_int, 0), disabled.pointer_motion);
-    try std.testing.expectEqual(@as(c_int, 1), enabled.clear_mouse_mode);
-    try std.testing.expectEqual(@as(c_int, mouse_many), enabled.mouse_mode);
+    try std.testing.expectEqual(@as(c_int, 1), enabled.platform.effects[0].arg);
+    try std.testing.expectEqual(@as(c_int, 0), disabled.platform.effects[0].arg);
     try std.testing.expectEqual(@as(c_int, 3), enabled.platform.count);
     try std.testing.expectEqual(@as(c_int, platform_effect_pointer_motion), enabled.platform.effects[0].kind);
     try std.testing.expectEqual(@as(c_int, platform_effect_xsetmode), enabled.platform.effects[1].kind);
@@ -453,33 +411,30 @@ test "mode domain plans mouse many pointer motion" {
 test "mode domain plans mouse sgr" {
     const plan = modePlan(mode_mouse_sgr, 1006, true, false, true);
     try std.testing.expectEqual(@as(c_int, mode_mouse_sgr), plan.kind);
-    try std.testing.expectEqual(@as(c_int, -1), plan.pointer_motion);
-    try std.testing.expectEqual(@as(c_int, 0), plan.clear_mouse_mode);
-    try std.testing.expectEqual(@as(c_int, mouse_sgr), plan.mouse_mode);
+    try std.testing.expectEqual(@as(c_int, 1), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_xsetmode), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_mode_mousesgr), plan.platform.effects[0].index_arg);
 }
 
 test "mode helper maps origin and simple actions" {
-    try std.testing.expectEqual(@as(c_int, cursor_state_origin), cursorStateAction(6));
-    try std.testing.expectEqual(@as(c_int, cursor_state_none), cursorStateAction(7));
     try std.testing.expectEqual(@as(c_int, cursor_origin_bit), cursorStateMask(6));
     try std.testing.expectEqual(@as(c_int, 0), cursorStateMask(7));
-    try std.testing.expectEqual(@as(c_int, term_mode_wrap), termModeAction(7));
-    try std.testing.expectEqual(@as(c_int, term_mode_insert), termModeAction(4));
-    try std.testing.expectEqual(@as(c_int, term_mode_echo), termModeAction(12));
-    try std.testing.expectEqual(@as(c_int, term_mode_crlf), termModeAction(20));
-    try std.testing.expectEqual(@as(c_int, term_mode_none), termModeAction(5));
-    try std.testing.expectEqual(@as(c_int, xsetmode_hide), xsetmodeAction(25));
-    try std.testing.expectEqual(@as(c_int, xsetmode_kbdlock), xsetmodeAction(2));
-    try std.testing.expectEqual(@as(c_int, xsetmode_none), xsetmodeAction(7));
+    try std.testing.expectEqual(@as(c_int, term_mode_wrap_bit), termModeMask(7));
+    try std.testing.expectEqual(@as(c_int, term_mode_insert_bit), termModeMask(4));
+    try std.testing.expectEqual(@as(c_int, term_mode_echo_bit), termModeMask(12));
+    try std.testing.expectEqual(@as(c_int, term_mode_crlf_bit), termModeMask(20));
+    try std.testing.expectEqual(@as(c_int, 0), termModeMask(5));
 }
 
 test "mode domain plans origin action" {
     const plan = modePlan(mode_origin, 6, true, false, true);
-    try std.testing.expectEqual(@as(c_int, cursor_state_origin), plan.cursor_state_action);
-    try std.testing.expectEqual(@as(c_int, 1), plan.cursor_state_set);
     try std.testing.expectEqual(@as(c_int, cursor_origin_bit), plan.cursor_state_mask);
     try std.testing.expectEqual(@as(c_int, cursor_origin_bit), plan.cursor_state_bits);
+    try std.testing.expectEqual(@as(c_int, cursor_origin_bit), plan.term_update.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_origin_bit), plan.term_update.cursor_state_bits);
     try std.testing.expectEqual(@as(c_int, 1), plan.move_origin_home);
+    try std.testing.expectEqual(@as(c_int, 1), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_move_origin), plan.platform.effects[0].kind);
 }
 
 test "mode domain plans visibility and simple bit writes" {
@@ -489,23 +444,18 @@ test "mode domain plans visibility and simple bit writes" {
     const echo = modePlan(mode_echo, 12, true, false, true);
     const crlf = modePlan(mode_crlf, 20, true, false, true);
     const kbdlock = modePlan(mode_kbdlock, 2, true, false, true);
-    try std.testing.expectEqual(@as(c_int, xsetmode_hide), visibility.xsetmode_action);
-    try std.testing.expectEqual(@as(c_int, 0), visibility.xsetmode_set);
-    try std.testing.expectEqual(@as(c_int, term_mode_wrap), wrap.term_mode_action);
-    try std.testing.expectEqual(@as(c_int, 1), wrap.term_mode_set);
+    try std.testing.expectEqual(@as(c_int, platform_effect_xsetmode), visibility.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, 0), visibility.platform.effects[0].arg);
+    try std.testing.expectEqual(@as(c_int, platform_mode_hide), visibility.platform.effects[0].index_arg);
     try std.testing.expectEqual(@as(c_int, term_mode_wrap_bit), wrap.mode_mask);
     try std.testing.expectEqual(@as(c_int, term_mode_wrap_bit), wrap.mode_bits);
-    try std.testing.expectEqual(@as(c_int, term_mode_insert), insert.term_mode_action);
     try std.testing.expectEqual(@as(c_int, term_mode_insert_bit), insert.mode_mask);
     try std.testing.expectEqual(@as(c_int, term_mode_insert_bit), insert.mode_bits);
-    try std.testing.expectEqual(@as(c_int, term_mode_echo), echo.term_mode_action);
-    try std.testing.expectEqual(@as(c_int, 0), echo.term_mode_set);
     try std.testing.expectEqual(@as(c_int, term_mode_echo_bit), echo.mode_mask);
     try std.testing.expectEqual(@as(c_int, 0), echo.mode_bits);
-    try std.testing.expectEqual(@as(c_int, term_mode_crlf), crlf.term_mode_action);
     try std.testing.expectEqual(@as(c_int, term_mode_crlf_bit), crlf.mode_mask);
     try std.testing.expectEqual(@as(c_int, term_mode_crlf_bit), crlf.mode_bits);
-    try std.testing.expectEqual(@as(c_int, xsetmode_kbdlock), kbdlock.xsetmode_action);
+    try std.testing.expectEqual(@as(c_int, platform_mode_kbdlock), kbdlock.platform.effects[0].index_arg);
 }
 
 test "mode adapter smoke plan export" {
@@ -513,8 +463,8 @@ test "mode adapter smoke plan export" {
     const mouse = st_modeplan(1, 1003, 1, 0, 1);
     const origin = st_modeplan(1, 6, 1, 0, 1);
     try std.testing.expectEqual(@as(c_int, mode_alt1049), alt.kind);
-    try std.testing.expectEqual(@as(c_int, mouse_many), mouse.mouse_mode);
-    try std.testing.expectEqual(@as(c_int, cursor_state_origin), origin.cursor_state_action);
+    try std.testing.expectEqual(@as(c_int, platform_mode_mousemany), mouse.platform.effects[2].index_arg);
+    try std.testing.expectEqual(@as(c_int, cursor_origin_bit), origin.term_update.cursor_state_bits);
     try std.testing.expectEqual(@as(c_int, 4), alt.platform.count);
     try std.testing.expectEqual(@as(c_int, platform_effect_cursor), alt.platform.effects[0].kind);
     try std.testing.expectEqual(@as(c_int, platform_effect_clear_screen), alt.platform.effects[1].kind);

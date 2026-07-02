@@ -40,6 +40,9 @@ pub const effect_finish_draw = 19;
 pub const effect_ime_spot = 20;
 pub const effect_mode_unknown_private = 21;
 pub const effect_mode_unknown_regular = 22;
+pub const effect_region_clear_dirty = 23;
+pub const effect_region_draw_line = 24;
+pub const effect_region_advance = 25;
 
 pub const mode_appcursor = 1;
 pub const mode_reverse = 2;
