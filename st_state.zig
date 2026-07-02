@@ -96,7 +96,20 @@ pub const ZigResizeExecPlan = extern struct {
     rows: ZigResizeRowPlan,
     tabs: ZigResizeTabPlan,
     clear: ZigResizeClearPlan,
+    step_count: c_int,
+    steps: [10]c_int,
 };
+
+pub const resize_step_free_slide_rows = 1;
+pub const resize_step_memmove_slide_rows = 2;
+pub const resize_step_free_tail_rows = 3;
+pub const resize_step_realloc_arrays = 4;
+pub const resize_step_fill_history = 5;
+pub const resize_step_realloc_rows = 6;
+pub const resize_step_alloc_rows = 7;
+pub const resize_step_tabs = 8;
+pub const resize_step_update_dimensions = 9;
+pub const resize_step_clear_regions = 10;
 
 pub const state_unknown = 0;
 pub const state_set_scroll = 1;
@@ -217,15 +230,34 @@ const ResizeExec = struct {
 
     fn plan(self: ResizeExec) ZigResizeExecPlan {
         const base = self.request.plan();
-        return .{
+        var result = ZigResizeExecPlan{
             .base = base,
             .hist_fill = (ResizeFill{ .start = base.mincol, .end = base.alloc_col }).plan(),
             .rows = (ResizeRows{ .resize_end = base.resize_rows, .alloc_start = base.new_row_start, .alloc_end = self.request.requested_row }).plan(),
             .tabs = (ResizeTabs{ .tabs = self.tabs, .old_col = base.base_maxcol, .new_col = base.alloc_col, .tabspaces = self.tabspaces }).plan(),
             .clear = (ResizeClear{ .mincol = base.mincol, .col = base.alloc_col, .minrow = base.minrow, .row = self.request.requested_row }).plan(),
+            .step_count = 0,
+            .steps = std.mem.zeroes([10]c_int),
         };
+        addResizeStep(&result, resize_step_free_slide_rows);
+        addResizeStep(&result, resize_step_memmove_slide_rows);
+        addResizeStep(&result, resize_step_free_tail_rows);
+        addResizeStep(&result, resize_step_realloc_arrays);
+        addResizeStep(&result, resize_step_fill_history);
+        addResizeStep(&result, resize_step_realloc_rows);
+        addResizeStep(&result, resize_step_alloc_rows);
+        addResizeStep(&result, resize_step_tabs);
+        addResizeStep(&result, resize_step_update_dimensions);
+        addResizeStep(&result, resize_step_clear_regions);
+        return result;
     }
 };
+
+fn addResizeStep(plan: *ZigResizeExecPlan, step: c_int) void {
+    if (@as(usize, @intCast(plan.step_count)) >= plan.steps.len) return;
+    plan.steps[@intCast(plan.step_count)] = step;
+    plan.step_count += 1;
+}
 
 const ResetRequest = struct {
     default_fg: u32,
@@ -382,6 +414,17 @@ test "tresize exec plan groups dependent ranges" {
     try std.testing.expectEqual(@as(c_int, 20), plan.rows.alloc_start);
     try std.testing.expectEqual(@as(c_int, 20), plan.rows.alloc_end);
     try std.testing.expectEqual(@as(c_int, 1), plan.clear.count);
+    try std.testing.expectEqual(@as(c_int, 10), plan.step_count);
+    try std.testing.expectEqual(@as(c_int, resize_step_free_slide_rows), plan.steps[0]);
+    try std.testing.expectEqual(@as(c_int, resize_step_memmove_slide_rows), plan.steps[1]);
+    try std.testing.expectEqual(@as(c_int, resize_step_free_tail_rows), plan.steps[2]);
+    try std.testing.expectEqual(@as(c_int, resize_step_realloc_arrays), plan.steps[3]);
+    try std.testing.expectEqual(@as(c_int, resize_step_fill_history), plan.steps[4]);
+    try std.testing.expectEqual(@as(c_int, resize_step_realloc_rows), plan.steps[5]);
+    try std.testing.expectEqual(@as(c_int, resize_step_alloc_rows), plan.steps[6]);
+    try std.testing.expectEqual(@as(c_int, resize_step_tabs), plan.steps[7]);
+    try std.testing.expectEqual(@as(c_int, resize_step_update_dimensions), plan.steps[8]);
+    try std.testing.expectEqual(@as(c_int, resize_step_clear_regions), plan.steps[9]);
 }
 
 test "tresize tab plan continues after previous tab" {

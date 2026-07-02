@@ -17,12 +17,26 @@ pub const ZigGlyph = extern struct {
 pub const ZigPutcWriteResult = extern struct {
     advance: c_int,
     next_x: c_int,
+    cursor_state_mask: c_int,
+    cursor_state_bits: c_int,
 };
 
 pub const ZigPutcPreparePlan = extern struct {
     clear_selection: c_int,
     wrapnext: c_int,
     overflow: c_int,
+};
+
+pub const ZigPutcStepPlan = extern struct {
+    clear_selection: c_int,
+    wrapnext_newline: c_int,
+    overflow_newline: c_int,
+    write_glyph: c_int,
+    mark_dirty: c_int,
+    advance: c_int,
+    next_x: c_int,
+    cursor_state_mask: c_int,
+    cursor_state_bits: c_int,
 };
 
 pub const ZigStrCollectExec = extern struct {
@@ -43,6 +57,8 @@ pub const ZigStrResetPlan = extern struct {
 
 pub const ZigInputEscFlowPlan = extern struct {
     kind: c_int,
+    action_count: c_int,
+    actions: [3]c_int,
     handle_csi: c_int,
     csi_write: c_int,
     csi_byte: u8,
@@ -84,6 +100,12 @@ pub const ZigInputEscPlan = extern struct {
     state: ZigInputScalarStateUpdate,
 };
 
+pub const ZigInputRoutingPlan = extern struct {
+    is_str: c_int,
+    is_control: c_int,
+    is_esc: c_int,
+};
+
 pub const ZigEscPlan = control_esc.ZigEscPlan;
 
 const cs_graphic0 = 0;
@@ -115,6 +137,13 @@ const esc_flow_utf8 = 2;
 const esc_flow_altcharset = 3;
 const esc_flow_test = 4;
 const esc_flow_esc = 5;
+const esc_flow_action_write_csi_byte = 1;
+const esc_flow_action_parse_csi = 2;
+const esc_flow_action_handle_csi = 3;
+const esc_flow_action_define_utf8 = 4;
+const esc_flow_action_define_charset = 5;
+const esc_flow_action_dec_test = 6;
+const esc_flow_action_esc_handle = 7;
 const esc_set_csi = control_esc.esc_set_csi;
 const esc_start_str = control_esc.esc_start_str;
 const esc_set_altcharset = control_esc.esc_set_altcharset;
@@ -140,7 +169,7 @@ const GlyphLine = struct {
     col: c_int,
     trantbl: c_int,
 
-    fn setChar(self: GlyphLine, rune: u32, attr: *const ZigGlyph, dirty: *c_int, x: c_int) void {
+    fn setChar(self: GlyphLine, rune: u32, attr: *const ZigGlyph, x: c_int) void {
         const next_rune = self.translateRune(rune);
         const current_mode = self.line[@intCast(x)].mode;
 
@@ -152,7 +181,6 @@ const GlyphLine = struct {
             self.line[@intCast(x - 1)].mode &= ~attr_wide;
         }
 
-        dirty.* = 1;
         self.line[@intCast(x)] = attr.*;
         self.line[@intCast(x)].u = next_rune;
     }
@@ -164,12 +192,12 @@ const GlyphLine = struct {
         self.line[@intCast(x)].u = ' ';
     }
 
-    fn putcWrite(self: GlyphLine, rune: u32, width: c_int, attr: *const ZigGlyph, dirty: *c_int, x: c_int, insert_mode: bool) ZigPutcWriteResult {
+    fn putcWrite(self: GlyphLine, rune: u32, width: c_int, attr: *const ZigGlyph, x: c_int, insert_mode: bool) ZigPutcWriteResult {
         if (insert_mode and x + width < self.col) {
             self.shiftRight(x, width);
         }
 
-        self.setChar(rune, attr, dirty, x);
+        self.setChar(rune, attr, x);
 
         if (width == 2) {
             self.line[@intCast(x)].mode |= attr_wide;
@@ -182,6 +210,8 @@ const GlyphLine = struct {
         return .{
             .advance = if (x + width < self.col) putc_advance_move else putc_advance_wrapnext,
             .next_x = x + width,
+            .cursor_state_mask = if (x + width < self.col) 0 else cursor_wrapnext,
+            .cursor_state_bits = if (x + width < self.col) 0 else cursor_wrapnext,
         };
     }
 
@@ -222,6 +252,30 @@ const PutcPrepare = struct {
             .clear_selection = if (self.selected_current) 1 else 0,
             .wrapnext = if (self.mode_wrap and (self.cursor_state & cursor_wrapnext) != 0) 1 else 0,
             .overflow = if (self.x + self.width > self.col) 1 else 0,
+        };
+    }
+};
+
+const PutcStep = struct {
+    selected_current: bool,
+    mode_wrap: bool,
+    cursor_state: c_int,
+    x: c_int,
+    width: c_int,
+    col: c_int,
+
+    fn plan(self: PutcStep) ZigPutcStepPlan {
+        const prepare = (PutcPrepare{ .selected_current = self.selected_current, .mode_wrap = self.mode_wrap, .cursor_state = self.cursor_state, .x = self.x, .width = self.width, .col = self.col }).plan();
+        return .{
+            .clear_selection = prepare.clear_selection,
+            .wrapnext_newline = prepare.wrapnext,
+            .overflow_newline = prepare.overflow,
+            .write_glyph = 1,
+            .mark_dirty = 1,
+            .advance = if (self.x + self.width < self.col) putc_advance_move else putc_advance_wrapnext,
+            .next_x = self.x + self.width,
+            .cursor_state_mask = if (self.x + self.width < self.col) 0 else cursor_wrapnext,
+            .cursor_state_bits = if (self.x + self.width < self.col) 0 else cursor_wrapnext,
         };
     }
 };
@@ -305,34 +359,65 @@ const EscFlow = struct {
         if ((self.esc & esc_csi) != 0) {
             const new_len = self.csi_len + 1;
             const handle_csi: c_int = if ((0x40 <= self.rune and self.rune <= 0x7E) or self.csi_len >= self.csi_cap - 1) 1 else 0;
-            return .{ .kind = esc_flow_csi, .handle_csi = handle_csi, .csi_write = 1, .csi_byte = @truncate(self.rune), .new_csi_len = new_len, .finish_esc = 0 };
+            var plan = escFlow(esc_flow_csi, 1, @truncate(self.rune), new_len, 0);
+            plan.handle_csi = handle_csi;
+            addEscFlowAction(&plan, esc_flow_action_write_csi_byte);
+            if (handle_csi != 0) {
+                addEscFlowAction(&plan, esc_flow_action_parse_csi);
+                addEscFlowAction(&plan, esc_flow_action_handle_csi);
+            }
+            return plan;
         }
-        if ((self.esc & esc_utf8) != 0) return emptyEscFlow(esc_flow_utf8, self.csi_len);
-        if ((self.esc & esc_altcharset) != 0) return emptyEscFlow(esc_flow_altcharset, self.csi_len);
-        if ((self.esc & esc_test) != 0) return emptyEscFlow(esc_flow_test, self.csi_len);
-        if ((self.esc & esc_start) != 0) return emptyEscFlow(esc_flow_esc, self.csi_len);
+        if ((self.esc & esc_utf8) != 0) return escFlowWithAction(esc_flow_utf8, self.csi_len, esc_flow_action_define_utf8);
+        if ((self.esc & esc_altcharset) != 0) return escFlowWithAction(esc_flow_altcharset, self.csi_len, esc_flow_action_define_charset);
+        if ((self.esc & esc_test) != 0) return escFlowWithAction(esc_flow_test, self.csi_len, esc_flow_action_dec_test);
+        if ((self.esc & esc_start) != 0) return escFlowWithAction(esc_flow_esc, self.csi_len, esc_flow_action_esc_handle);
         return emptyEscFlow(esc_flow_none, self.csi_len);
     }
 };
 
 fn emptyEscFlow(kind: c_int, csi_len: usize) ZigInputEscFlowPlan {
-    return .{ .kind = kind, .handle_csi = 0, .csi_write = 0, .csi_byte = 0, .new_csi_len = csi_len, .finish_esc = 0 };
+    return escFlow(kind, 0, 0, csi_len, 0);
 }
 
-export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int) void {
-    (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).setChar(rune, attr, dirty, x);
+fn escFlow(kind: c_int, csi_write: c_int, csi_byte: u8, csi_len: usize, finish_esc: c_int) ZigInputEscFlowPlan {
+    return .{ .kind = kind, .action_count = 0, .actions = .{ 0, 0, 0 }, .handle_csi = 0, .csi_write = csi_write, .csi_byte = csi_byte, .new_csi_len = csi_len, .finish_esc = finish_esc };
+}
+
+fn escFlowWithAction(kind: c_int, csi_len: usize, action: c_int) ZigInputEscFlowPlan {
+    var plan = escFlow(kind, 0, 0, csi_len, 0);
+    addEscFlowAction(&plan, action);
+    return plan;
+}
+
+fn addEscFlowAction(plan: *ZigInputEscFlowPlan, action: c_int) void {
+    if (@as(usize, @intCast(plan.action_count)) >= plan.actions.len) return;
+    plan.actions[@intCast(plan.action_count)] = action;
+    plan.action_count += 1;
+}
+
+export fn st_tsetchar(rune: u32, attr: *const ZigGlyph, line: [*]ZigGlyph, x: c_int, col: c_int, trantbl: c_int) void {
+    (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).setChar(rune, attr, x);
 }
 
 export fn st_tclearglyph(line: [*]ZigGlyph, x: c_int, attr: *const ZigGlyph) void {
     (GlyphLine{ .line = line, .col = x + 1, .trantbl = 0 }).clearGlyph(x, attr);
 }
 
-export fn st_tputcwrite(rune: u32, width: c_int, attr: *const ZigGlyph, line: [*]ZigGlyph, dirty: *c_int, x: c_int, col: c_int, trantbl: c_int, insert_mode: c_int) ZigPutcWriteResult {
-    return (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).putcWrite(rune, width, attr, dirty, x, insert_mode != 0);
+export fn st_tputcwrite(rune: u32, width: c_int, attr: *const ZigGlyph, line: [*]ZigGlyph, x: c_int, col: c_int, trantbl: c_int, insert_mode: c_int) ZigPutcWriteResult {
+    return (GlyphLine{ .line = line, .col = col, .trantbl = trantbl }).putcWrite(rune, width, attr, x, insert_mode != 0);
 }
 
-export fn st_tputcprepare(selected_current: c_int, mode_wrap: c_int, cursor_state: c_int, x: c_int, width: c_int, col: c_int) ZigPutcPreparePlan {
-    return (PutcPrepare{ .selected_current = selected_current != 0, .mode_wrap = mode_wrap != 0, .cursor_state = cursor_state, .x = x, .width = width, .col = col }).plan();
+export fn st_tputcstepplan(selected_current: c_int, mode_wrap: c_int, cursor_state: c_int, x: c_int, width: c_int, col: c_int) ZigPutcStepPlan {
+    return (PutcStep{ .selected_current = selected_current != 0, .mode_wrap = mode_wrap != 0, .cursor_state = cursor_state, .x = x, .width = width, .col = col }).plan();
+}
+
+export fn st_inputroutingplan(esc: c_int, control: c_int) ZigInputRoutingPlan {
+    return .{
+        .is_str = if ((esc & esc_str) != 0) 1 else 0,
+        .is_control = if (control != 0) 1 else 0,
+        .is_esc = if ((esc & esc_start) != 0) 1 else 0,
+    };
 }
 
 export fn st_tcollectstr(rune: u32, esc: c_int, buf: [*]u8, len: usize, chunk: [*]const u8, chunk_len: usize, size: usize) ZigStrCollectExec {
@@ -439,11 +524,9 @@ test "tsetchar writes translated graphic rune" {
         .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 7, .fg = 1, .bg = 2 };
-    var dirty: c_int = 0;
 
-    st_tsetchar('q', &attr, &line, &dirty, 0, 2, cs_graphic0);
+    st_tsetchar('q', &attr, &line, 0, 2, cs_graphic0);
 
-    try std.testing.expectEqual(@as(c_int, 1), dirty);
     try std.testing.expectEqual(@as(u32, 0x2500), line[0].u);
     try std.testing.expectEqual(@as(c_ushort, 7), line[0].mode);
     try std.testing.expectEqual(@as(u32, 1), line[0].fg);
@@ -457,9 +540,8 @@ test "tsetchar clears right dummy when replacing wide cell" {
         .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 1, .fg = 3, .bg = 4 };
-    var dirty: c_int = 0;
 
-    st_tsetchar('A', &attr, &line, &dirty, 0, 3, 1);
+    st_tsetchar('A', &attr, &line, 0, 3, 1);
 
     try std.testing.expectEqual(@as(u32, ' '), line[1].u);
     try std.testing.expectEqual(@as(c_ushort, 0), line[1].mode);
@@ -473,9 +555,8 @@ test "tsetchar clears left wide when replacing dummy cell" {
         .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 2, .fg = 5, .bg = 6 };
-    var dirty: c_int = 0;
 
-    st_tsetchar('B', &attr, &line, &dirty, 1, 3, 1);
+    st_tsetchar('B', &attr, &line, 1, 3, 1);
 
     try std.testing.expectEqual(@as(u32, ' '), line[0].u);
     try std.testing.expectEqual(@as(c_ushort, 0), line[0].mode);
@@ -491,15 +572,16 @@ test "tputcwrite shifts line in insert mode" {
         .{ .u = '丁', .mode = 4, .fg = 4, .bg = 4 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 7, .fg = 9, .bg = 8 };
-    var dirty: c_int = 0;
 
-    const result = st_tputcwrite('A', 1, &attr, &line, &dirty, 1, 4, 1, 1);
+    const result = st_tputcwrite('A', 1, &attr, &line, 1, 4, 1, 1);
 
     try std.testing.expectEqual(@as(u32, 'A'), line[1].u);
     try std.testing.expectEqual(@as(u32, '乙'), line[2].u);
     try std.testing.expectEqual(@as(u32, '丙'), line[3].u);
     try std.testing.expectEqual(@as(c_int, putc_advance_move), result.advance);
     try std.testing.expectEqual(@as(c_int, 2), result.next_x);
+    try std.testing.expectEqual(@as(c_int, 0), result.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, 0), result.cursor_state_bits);
 }
 
 test "tputcwrite marks wide and dummy" {
@@ -509,9 +591,8 @@ test "tputcwrite marks wide and dummy" {
         .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 5, .fg = 7, .bg = 6 };
-    var dirty: c_int = 0;
 
-    const result = st_tputcwrite('中', 2, &attr, &line, &dirty, 0, 3, 1, 0);
+    const result = st_tputcwrite('中', 2, &attr, &line, 0, 3, 1, 0);
 
     try std.testing.expectEqual(@as(c_ushort, 5 | attr_wide), line[0].mode);
     try std.testing.expectEqual(@as(u32, 0), line[1].u);
@@ -526,12 +607,13 @@ test "tputcwrite wraps at right edge" {
         .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 1, .fg = 1, .bg = 1 };
-    var dirty: c_int = 0;
 
-    const result = st_tputcwrite('A', 1, &attr, &line, &dirty, 1, 2, 1, 0);
+    const result = st_tputcwrite('A', 1, &attr, &line, 1, 2, 1, 0);
 
     try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), result.advance);
     try std.testing.expectEqual(@as(c_int, 2), result.next_x);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), result.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), result.cursor_state_bits);
 }
 
 test "tputcwrite wide rune at edge does not write dummy past column" {
@@ -540,9 +622,8 @@ test "tputcwrite wide rune at edge does not write dummy past column" {
         .{ .u = 0, .mode = 0, .fg = 0, .bg = 0 },
     };
     const attr = ZigGlyph{ .u = 0, .mode = 3, .fg = 1, .bg = 2 };
-    var dirty: c_int = 0;
 
-    const result = st_tputcwrite('界', 2, &attr, &line, &dirty, 1, 2, 1, 0);
+    const result = st_tputcwrite('界', 2, &attr, &line, 1, 2, 1, 0);
 
     try std.testing.expectEqual(@as(c_ushort, 3 | attr_wide), line[1].mode);
     try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), result.advance);
@@ -550,17 +631,47 @@ test "tputcwrite wide rune at edge does not write dummy past column" {
 }
 
 test "tputcprepare combines current flags" {
-    const plan = st_tputcprepare(1, 1, cursor_wrapnext, 9, 2, 10);
+    const plan = (PutcPrepare{ .selected_current = true, .mode_wrap = true, .cursor_state = cursor_wrapnext, .x = 9, .width = 2, .col = 10 }).plan();
     try std.testing.expectEqual(@as(c_int, 1), plan.clear_selection);
     try std.testing.expectEqual(@as(c_int, 1), plan.wrapnext);
     try std.testing.expectEqual(@as(c_int, 1), plan.overflow);
 }
 
+test "tputcstep combines prepare write and advance" {
+    const plan = st_tputcstepplan(1, 1, cursor_wrapnext, 9, 1, 10);
+
+    try std.testing.expectEqual(@as(c_int, 1), plan.clear_selection);
+    try std.testing.expectEqual(@as(c_int, 1), plan.wrapnext_newline);
+    try std.testing.expectEqual(@as(c_int, 0), plan.overflow_newline);
+    try std.testing.expectEqual(@as(c_int, 1), plan.write_glyph);
+    try std.testing.expectEqual(@as(c_int, 1), plan.mark_dirty);
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), plan.advance);
+    try std.testing.expectEqual(@as(c_int, 10), plan.next_x);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), plan.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), plan.cursor_state_bits);
+}
+
 test "tputcprepare skips flags when conditions fail" {
-    const plan = st_tputcprepare(0, 0, 0, 3, 1, 10);
+    const plan = (PutcPrepare{ .selected_current = false, .mode_wrap = false, .cursor_state = 0, .x = 3, .width = 1, .col = 10 }).plan();
     try std.testing.expectEqual(@as(c_int, 0), plan.clear_selection);
     try std.testing.expectEqual(@as(c_int, 0), plan.wrapnext);
     try std.testing.expectEqual(@as(c_int, 0), plan.overflow);
+}
+
+test "input routing prioritizes string state" {
+    const route = st_inputroutingplan(esc_start | esc_str, 1);
+
+    try std.testing.expectEqual(@as(c_int, 1), route.is_str);
+    try std.testing.expectEqual(@as(c_int, 1), route.is_control);
+    try std.testing.expectEqual(@as(c_int, 1), route.is_esc);
+}
+
+test "input routing identifies graphic input" {
+    const route = st_inputroutingplan(0, 0);
+
+    try std.testing.expectEqual(@as(c_int, 0), route.is_str);
+    try std.testing.expectEqual(@as(c_int, 0), route.is_control);
+    try std.testing.expectEqual(@as(c_int, 0), route.is_esc);
 }
 
 test "tcollectstr appends chunk bytes" {
@@ -687,6 +798,10 @@ test "tescflow appends csi byte and finishes on final byte" {
     try std.testing.expectEqual(@as(c_int, esc_flow_csi), exec.kind);
     try std.testing.expectEqual(@as(c_int, 1), exec.handle_csi);
     try std.testing.expectEqual(@as(c_int, 1), exec.csi_write);
+    try std.testing.expectEqual(@as(c_int, 3), exec.action_count);
+    try std.testing.expectEqual(@as(c_int, esc_flow_action_write_csi_byte), exec.actions[0]);
+    try std.testing.expectEqual(@as(c_int, esc_flow_action_parse_csi), exec.actions[1]);
+    try std.testing.expectEqual(@as(c_int, esc_flow_action_handle_csi), exec.actions[2]);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
     try std.testing.expectEqual(@as(u8, 'm'), exec.csi_byte);
     try std.testing.expectEqual(@as(c_int, 0), exec.finish_esc);
@@ -698,6 +813,8 @@ test "tescflow keeps collecting non final csi byte" {
     try std.testing.expectEqual(@as(c_int, esc_flow_csi), exec.kind);
     try std.testing.expectEqual(@as(c_int, 0), exec.handle_csi);
     try std.testing.expectEqual(@as(c_int, 1), exec.csi_write);
+    try std.testing.expectEqual(@as(c_int, 1), exec.action_count);
+    try std.testing.expectEqual(@as(c_int, esc_flow_action_write_csi_byte), exec.actions[0]);
     try std.testing.expectEqual(@as(usize, 1), exec.new_csi_len);
     try std.testing.expectEqual(@as(u8, '3'), exec.csi_byte);
     try std.testing.expectEqual(@as(c_int, 0), exec.finish_esc);
@@ -707,6 +824,8 @@ test "tescflow routes utf8 state" {
     const exec = st_inputescflowplan(esc_start | esc_utf8, 'G', 0, 2);
 
     try std.testing.expectEqual(@as(c_int, esc_flow_utf8), exec.kind);
+    try std.testing.expectEqual(@as(c_int, 1), exec.action_count);
+    try std.testing.expectEqual(@as(c_int, esc_flow_action_define_utf8), exec.actions[0]);
     try std.testing.expectEqual(@as(usize, 0), exec.new_csi_len);
     try std.testing.expectEqual(@as(c_int, 0), exec.finish_esc);
 }

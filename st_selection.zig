@@ -741,6 +741,29 @@ export fn st_selclearplan(ob_x: c_int) c_int {
     return zigSelclearplan(ob_x);
 }
 
+pub fn zigSelclearupdate(snapshot: ZigSelectionSnapshot) ZigSelectionStateResult {
+    var selection = zigSelectionSnapshot(snapshot);
+    selection.mode = .idle;
+    selection.ob.x = -1;
+    return zigSelectionStateResult(.{
+        .update = .{
+            .mode = selection.mode,
+            .selection_type = selection.selection_type,
+            .alt = selection.alt,
+            .snap = selection.snap,
+            .ob = selection.ob,
+            .oe = selection.oe,
+            .nb = selection.nb,
+            .ne = selection.ne,
+        },
+        .effect = .{ .dirty = true, .top = snapshot.nb_y, .bot = snapshot.ne_y, .clear = false },
+    });
+}
+
+export fn st_selclearupdate(snapshot: ZigSelectionSnapshot) ZigSelectionStateResult {
+    return zigSelclearupdate(snapshot);
+}
+
 pub fn zigSelstartupdate(snapshot: ZigSelectionSnapshot, col: c_int, row: c_int, snap: c_int, alt_screen: c_int) ZigSelectionStateResult {
     return zigSelectionStateResult(SelectionModel.init(zigSelectionSnapshot(snapshot)).start(.{ .x = col, .y = row }, snap, alt_screen != 0));
 }
@@ -786,6 +809,23 @@ export fn st_selsnaplinex(direction: c_int, col: c_int) c_int {
 
 export fn st_selsnaplinestep(y: c_int, direction: c_int, row: c_int, wrapped: c_int) ZigSelSnapLineStep {
     return zigSelsnaplinestep(y, direction, row, wrapped);
+}
+
+export fn st_selsnapboundsupdate(snapshot: ZigSelectionSnapshot, nb_x: c_int, nb_y: c_int, ne_x: c_int, ne_y: c_int) ZigSelectionStateUpdate {
+    return .{
+        .mode = snapshot.mode,
+        .selection_type = snapshot.selection_type,
+        .alt = snapshot.alt,
+        .snap = snapshot.snap,
+        .ob_x = snapshot.ob_x,
+        .ob_y = snapshot.ob_y,
+        .oe_x = snapshot.oe_x,
+        .oe_y = snapshot.oe_y,
+        .nb_x = nb_x,
+        .nb_y = nb_y,
+        .ne_x = ne_x,
+        .ne_y = ne_y,
+    };
 }
 
 export fn st_selsnapworditerrequest(x: c_int, y: c_int, direction: c_int, col: c_int, row: c_int, prevdelim: c_int, prevrune: u32) ZigSelSnapWordIterRequest {
@@ -963,6 +1003,12 @@ test "selection state adapter exports smoke tests" {
 test "selection clear and line snap adapter exports" {
     try std.testing.expectEqual(@as(c_int, 0), st_selclearplan(-1));
     try std.testing.expectEqual(@as(c_int, 1), st_selclearplan(0));
+    const clear = st_selclearupdate(testSelectionSnapshot(.regular, .ready, false, 0, .{ .x = 2, .y = 3 }, .{ .x = 5, .y = 6 }));
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(SelectionMode.idle)), clear.update.mode);
+    try std.testing.expectEqual(@as(c_int, -1), clear.update.ob_x);
+    try std.testing.expectEqual(@as(c_int, 1), clear.effect.dirty);
+    try std.testing.expectEqual(@as(c_int, 3), clear.effect.top);
+    try std.testing.expectEqual(@as(c_int, 6), clear.effect.bot);
     try std.testing.expectEqual(@as(c_int, 0), st_selsnaplinex(-1, 10));
     try std.testing.expectEqual(@as(c_int, 9), st_selsnaplinex(1, 10));
     try std.testing.expectEqual(@as(c_int, @intFromEnum(SnapLineAction.move)), st_selsnaplinestep(3, -1, 5, 1).action);

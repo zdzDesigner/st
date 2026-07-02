@@ -17,6 +17,8 @@ pub const ZigModePlan = extern struct {
     mouse_mode: c_int,
     cursor_state_action: c_int,
     cursor_state_set: c_int,
+    cursor_state_mask: c_int,
+    cursor_state_bits: c_int,
     move_origin_home: c_int,
     term_mode_action: c_int,
     term_mode_set: c_int,
@@ -70,6 +72,7 @@ const term_mode_wrap_bit = 1 << 0;
 const term_mode_insert_bit = 1 << 1;
 const term_mode_crlf_bit = 1 << 3;
 const term_mode_echo_bit = 1 << 4;
+const cursor_origin_bit = 1 << 1;
 
 pub const xsetmode_none = 0;
 pub const xsetmode_hide = 1;
@@ -178,6 +181,8 @@ fn modePlan(kind: c_int, arg: c_int, set: bool, alt: bool) ZigModePlan {
         .mouse_mode = mouseMode(arg),
         .cursor_state_action = cursorStateAction(arg),
         .cursor_state_set = if (set) 1 else 0,
+        .cursor_state_mask = cursorStateMask(arg),
+        .cursor_state_bits = if (set) cursorStateMask(arg) else 0,
         .move_origin_home = if (arg == 6) 1 else 0,
         .term_mode_action = termModeAction(arg),
         .term_mode_set = if (term_mode_set) 1 else 0,
@@ -200,6 +205,10 @@ fn termModeMask(arg: c_int) c_int {
 
 fn cursorStateAction(arg: c_int) c_int {
     return if (arg == 6) cursor_state_origin else cursor_state_none;
+}
+
+fn cursorStateMask(arg: c_int) c_int {
+    return if (arg == 6) cursor_origin_bit else 0;
 }
 
 fn termModeAction(arg: c_int) c_int {
@@ -338,6 +347,8 @@ test "mode domain plans mouse sgr" {
 test "mode helper maps origin and simple actions" {
     try std.testing.expectEqual(@as(c_int, cursor_state_origin), cursorStateAction(6));
     try std.testing.expectEqual(@as(c_int, cursor_state_none), cursorStateAction(7));
+    try std.testing.expectEqual(@as(c_int, cursor_origin_bit), cursorStateMask(6));
+    try std.testing.expectEqual(@as(c_int, 0), cursorStateMask(7));
     try std.testing.expectEqual(@as(c_int, term_mode_wrap), termModeAction(7));
     try std.testing.expectEqual(@as(c_int, term_mode_insert), termModeAction(4));
     try std.testing.expectEqual(@as(c_int, term_mode_echo), termModeAction(12));
@@ -352,6 +363,8 @@ test "mode domain plans origin action" {
     const plan = modePlan(mode_origin, 6, true, false);
     try std.testing.expectEqual(@as(c_int, cursor_state_origin), plan.cursor_state_action);
     try std.testing.expectEqual(@as(c_int, 1), plan.cursor_state_set);
+    try std.testing.expectEqual(@as(c_int, cursor_origin_bit), plan.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_origin_bit), plan.cursor_state_bits);
     try std.testing.expectEqual(@as(c_int, 1), plan.move_origin_home);
 }
 

@@ -38,6 +38,22 @@ pub const ZigScrollPlan = extern struct {
     line_step: c_int,
     line_offset: c_int,
     selscroll_delta: c_int,
+    clear_x1: c_int,
+    clear_y1: c_int,
+    clear_x2: c_int,
+    clear_y2: c_int,
+    dirty_top: c_int,
+    dirty_bot: c_int,
+    step_count: c_int,
+    steps: [6]ZigScrollStep,
+};
+
+pub const ZigScrollStep = extern struct {
+    kind: c_int,
+    a: c_int,
+    b: c_int,
+    c: c_int,
+    d: c_int,
 };
 
 pub const ZigKScrollPlan = extern struct {
@@ -56,6 +72,12 @@ pub const edit_delete_line = 4;
 pub const edit_clear_region = 5;
 pub const edit_delete_char = 6;
 pub const edit_unknown = 7;
+pub const scroll_step_hist_swap = 1;
+pub const scroll_step_scr_update = 2;
+pub const scroll_step_clear_rect = 3;
+pub const scroll_step_dirty_range = 4;
+pub const scroll_step_line_swap_loop = 5;
+pub const scroll_step_selection_scroll = 6;
 
 const TextSpan = struct {
     x: c_int,
@@ -100,7 +122,7 @@ const LineRegion = struct {
             scr;
         const delta: c_int = if (scroll_up) 1 else -1;
         const new_histi = if (copyhist and histsize > 0) @mod(histi + delta, histsize) else histi;
-        return .{
+        var plan = ZigScrollPlan{
             .count = count,
             .new_scr = new_scr,
             .new_histi = new_histi,
@@ -111,9 +133,35 @@ const LineRegion = struct {
             .line_step = if (scroll_up) 1 else -1,
             .line_offset = if (scroll_up) count else -count,
             .selscroll_delta = if (scr == 0) (if (scroll_up) -count else count) else 0,
+            .clear_x1 = 0,
+            .clear_y1 = if (scroll_up) self.top else self.bot - count + 1,
+            .clear_x2 = -1,
+            .clear_y2 = if (scroll_up) self.top + count - 1 else self.bot,
+            .dirty_top = if (scroll_up) self.top + count else self.top,
+            .dirty_bot = if (scroll_up) self.bot else self.bot - count,
+            .step_count = 0,
+            .steps = std.mem.zeroes([6]ZigScrollStep),
         };
+        if (plan.hist_swap != 0) addScrollStep(&plan, scroll_step_hist_swap, plan.new_histi, plan.hist_line, 0, 0);
+        if (scroll_up) addScrollStep(&plan, scroll_step_scr_update, plan.new_scr, 0, 0, 0);
+        if (scroll_up) {
+            addScrollStep(&plan, scroll_step_clear_rect, plan.clear_x1, plan.clear_y1, plan.clear_x2, plan.clear_y2);
+            addScrollStep(&plan, scroll_step_dirty_range, plan.dirty_top, plan.dirty_bot, 0, 0);
+        } else {
+            addScrollStep(&plan, scroll_step_dirty_range, plan.dirty_top, plan.dirty_bot, 0, 0);
+            addScrollStep(&plan, scroll_step_clear_rect, plan.clear_x1, plan.clear_y1, plan.clear_x2, plan.clear_y2);
+        }
+        addScrollStep(&plan, scroll_step_line_swap_loop, plan.line_start, plan.line_end, plan.line_step, plan.line_offset);
+        if (plan.selscroll_delta != 0) addScrollStep(&plan, scroll_step_selection_scroll, plan.selscroll_delta, 0, 0, 0);
+        return plan;
     }
 };
+
+fn addScrollStep(plan: *ZigScrollPlan, kind: c_int, a: c_int, b: c_int, c: c_int, d: c_int) void {
+    if (@as(usize, @intCast(plan.step_count)) >= plan.steps.len) return;
+    plan.steps[@intCast(plan.step_count)] = .{ .kind = kind, .a = a, .b = b, .c = c, .d = d };
+    plan.step_count += 1;
+}
 
 const KeyboardScroll = struct {
     n: c_int,
@@ -201,6 +249,16 @@ test "scroll up plan advances scrollback view" {
     try std.testing.expectEqual(@as(c_int, 1), plan.line_step);
     try std.testing.expectEqual(@as(c_int, 5), plan.line_offset);
     try std.testing.expectEqual(@as(c_int, 0), plan.selscroll_delta);
+    try std.testing.expectEqual(@as(c_int, 0), plan.clear_y1);
+    try std.testing.expectEqual(@as(c_int, 4), plan.clear_y2);
+    try std.testing.expectEqual(@as(c_int, 5), plan.dirty_top);
+    try std.testing.expectEqual(@as(c_int, 9), plan.dirty_bot);
+    try std.testing.expectEqual(@as(c_int, 5), plan.step_count);
+    try std.testing.expectEqual(@as(c_int, scroll_step_hist_swap), plan.steps[0].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_scr_update), plan.steps[1].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_clear_rect), plan.steps[2].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_dirty_range), plan.steps[3].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_line_swap_loop), plan.steps[4].kind);
 }
 
 test "scroll plan with zero count keeps no-op line loop" {
@@ -225,6 +283,16 @@ test "scroll down plan wraps history head backward" {
     try std.testing.expectEqual(@as(c_int, -1), plan.line_step);
     try std.testing.expectEqual(@as(c_int, -1), plan.line_offset);
     try std.testing.expectEqual(@as(c_int, 1), plan.selscroll_delta);
+    try std.testing.expectEqual(@as(c_int, 9), plan.clear_y1);
+    try std.testing.expectEqual(@as(c_int, 9), plan.clear_y2);
+    try std.testing.expectEqual(@as(c_int, 0), plan.dirty_top);
+    try std.testing.expectEqual(@as(c_int, 8), plan.dirty_bot);
+    try std.testing.expectEqual(@as(c_int, 5), plan.step_count);
+    try std.testing.expectEqual(@as(c_int, scroll_step_hist_swap), plan.steps[0].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_dirty_range), plan.steps[1].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_clear_rect), plan.steps[2].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_line_swap_loop), plan.steps[3].kind);
+    try std.testing.expectEqual(@as(c_int, scroll_step_selection_scroll), plan.steps[4].kind);
 }
 
 test "scroll plan skips history swap when history is unavailable" {

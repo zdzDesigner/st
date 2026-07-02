@@ -1441,10 +1441,6 @@ pub fn zigSearchInputState(update: ZigSearchStateUpdate) ZigSearchInputState {
     };
 }
 
-export fn st_searchinputstate(update: ZigSearchStateUpdate) ZigSearchInputState {
-    return zigSearchInputState(update);
-}
-
 pub fn zigEffectPlan(effect: SearchEffectPlan) ZigSearchEffectPlan {
     return .{
         .alloc_input = boolInt(effect.alloc_input),
@@ -1528,7 +1524,7 @@ export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLin
 pub fn zigSearchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).cursor(input[0..snapshot.inputlen], @enumFromInt(action));
     const update = zigStateUpdate(result.update);
-    return .{ .update = update, .effect = zigEffectPlan(result.effect), .input = st_searchinputstate(update), .delete_start = result.delete_start, .delete_end = result.delete_end };
+    return .{ .update = update, .effect = zigEffectPlan(result.effect), .input = zigSearchInputState(update), .delete_start = result.delete_start, .delete_end = result.delete_end };
 }
 
 export fn st_searchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
@@ -1565,10 +1561,6 @@ pub fn zigSearchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchD
             .cap = inputlen + 1,
         },
     };
-}
-
-export fn st_searchdeleteplan(start: usize, end: usize, inputlen: usize) ZigSearchDeletePlan {
-    return zigSearchdeleteplan(start, end, inputlen);
 }
 
 pub fn zigSearchpromptupdate(snapshot: ZigSearchSnapshot) ZigSearchPromptResult {
@@ -1913,7 +1905,7 @@ test "search adapter exports smoke state transitions" {
     try std.testing.expectEqual(@as(c_int, 1), set.effect.alloc_query);
     try std.testing.expectEqual(@as(c_int, 1), st_searchstep(1, 3, 2, 1).run);
     try std.testing.expectEqual(@as(c_int, 3), st_searchjumpplan(1, 0, 1, 0, 3).new_scr);
-    const delete = st_searchdeleteplan(2, 5, 9);
+    const delete = zigSearchdeleteplan(2, 5, 9);
     try std.testing.expectEqual(@as(c_int, 1), delete.run);
     try std.testing.expectEqual(@as(usize, 6), delete.input.len);
     try std.testing.expectEqual(@as(usize, 2), delete.input.cursor);
@@ -1950,7 +1942,7 @@ test "search snapshot and state update adapter round-trip" {
 }
 
 test "search input state adapter extracts input authority fields" {
-    const input = st_searchinputstate(.{
+    const input = zigSearchInputState(.{
         .query_len = 7,
         .active = 1,
         .current = 3,

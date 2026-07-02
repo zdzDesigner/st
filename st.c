@@ -124,6 +124,30 @@ typedef struct {
     Rune lastc; /* last printed char outside of sequence, 0 if control */
 } Term;
 
+typedef struct {
+    int set_cursor;
+    TCursor cursor;
+    int mode_mask;
+    int mode_bits;
+    int cursor_state_mask;
+    int cursor_state_bits;
+    int set_charset;
+    int charset;
+    int set_trantbl;
+    int trantbl_slot;
+    int trantbl_charset;
+    int set_all_trantbl;
+    int all_trantbl_charset;
+    int set_scroll_region;
+    int top;
+    int bot;
+    int set_dimensions;
+    int col;
+    int maxcol;
+    int row;
+    int clamp_cursor;
+} TermStateUpdate;
+
 /* CSI Escape sequence structs */
 /* ESC '[' [[ [<priv>] <arg> [;]] <mode> [<mode>]] */
 typedef struct {
@@ -186,7 +210,8 @@ typedef struct {
 } SearchMatchesState;
 
 typedef struct {
-    ZigSearchInputState input;
+    size_t input_cap;
+    size_t input_len;
     int realloc_input;
     int clear;
     size_t insert_at;
@@ -195,7 +220,23 @@ typedef struct {
     size_t move_len;
     const char *insert_text;
     size_t insert_len;
-} SearchInputMutation;
+} SearchInputTransaction;
+
+typedef struct {
+    int x;
+    int y;
+} SelectionSnapPoint;
+
+typedef struct {
+    int kind;
+    int arg;
+    int index_arg;
+} PlatformEffect;
+
+typedef struct {
+    int count;
+    PlatformEffect effects[8];
+} PlatformEffectList;
 
 static void execsh(char *, char **);
 static void stty(char **);
@@ -206,17 +247,13 @@ static void searchwritescalarstate(SearchScalarState);
 static ZigSearchSnapshot zigsearchsnapshot(SearchScalarState);
 static SearchScalarState searchscalarfromupdate(ZigSearchStateUpdate);
 static ZigSearchInputState searchinputstate(void);
-static void searchwriteinputstate(ZigSearchInputState);
+static void searchapplyquerytransaction(const char *);
 static void searchapplyqueryreplace(Rune *, ZigSearchSetResult);
 static SearchMatchesState searchmatchesstate(void);
 static void searchwritematchesstate(SearchMatchesState);
 static void searchapplyinputinsert(ZigSearchInputResult, const char *, size_t);
-static void searchapplyinputdelete(size_t, size_t);
-static void searchapplycursordelete(ZigSearchCursorResult);
 static void searchapplyinputclear(ZigSearchStateResult);
-static void searchapplyinputmutation(SearchInputMutation);
-static Rune *searchallocquerybuffer(size_t);
-static void searchapplydecodedquery(size_t, int, Rune *);
+static void searchapplyinputtransaction(SearchInputTransaction);
 
 static void csidump(void);
 static void csihandle(void);
@@ -226,6 +263,7 @@ static int eschandle(uchar);
 static void strdump(void);
 static void strhandle(void);
 static void strapplyplan(const ZigStrHandlePlan *, int);
+static void platformapplyeffects(const PlatformEffectList *, const ZigStrHandlePlan *, int);
 static char *strarg(const ZigStrHandlePlan *, int, int, const char *);
 static char *strargpar(int, int);
 static void strparse(void);
@@ -252,12 +290,14 @@ static void tputc(Rune);
 static void treset(void);
 static void tscrollup(int, int, int);
 static void tscrolldown(int, int, int);
+static void tapplyscrollplan(const ZigScrollPlan *, int);
 static void tsetattr(int *, int);
 static void tsetchar(Rune, Glyph *, int, int);
 static void tsetdirt(int, int);
 static void termapplydirtyrange(ZigLineRange);
+static void termapplycursorplan(const ZigTermCursorPlan *);
+static void termapplystateupdate(TermStateUpdate);
 static void termapplyresetstate(const ZigResetPlan *);
-static void termapplyscrollregion(ZigScrollRegion);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetmode(int, int, int *, int);
@@ -286,7 +326,6 @@ static void searchapplystate(int);
 static void searchjump(void);
 static size_t searchprevchar(size_t);
 static size_t searchnextchar(size_t);
-static void searchdelete(size_t, size_t);
 
 static ZigSelectionSnapshot selectionsnapshot(void);
 static void selectionapplystate(ZigSelectionStateUpdate);
@@ -296,7 +335,7 @@ static void selectionapplyscrollresult(ZigSelectionStateResult);
 
 static void selnormalize(void);
 static void selscroll(int, int);
-static void selsnap(int *, int *, int);
+static SelectionSnapPoint selsnappoint(int, int, int);
 
 static size_t utf8decode(const char *, Rune *, size_t);
 
@@ -409,8 +448,11 @@ void selnormalize(void) {
     result = st_selnormalizeupdate(selectionsnapshot(), term.col, start_len, end_len);
     selectionapplybounds(result.update);
 
-    selsnap(&sel.nb.x, &sel.nb.y, -1);
-    selsnap(&sel.ne.x, &sel.ne.y, +1);
+    {
+        SelectionSnapPoint nb = selsnappoint(sel.nb.x, sel.nb.y, -1);
+        SelectionSnapPoint ne = selsnappoint(sel.ne.x, sel.ne.y, +1);
+        selectionapplybounds(st_selsnapboundsupdate(selectionsnapshot(), nb.x, nb.y, ne.x, ne.y));
+    }
 }
 
 static ZigSelectionSnapshot selectionsnapshot(void) {
@@ -550,6 +592,9 @@ void searchprompt(const Arg *arg) {
     if (result.effect.alloc_input) {
         search.input = xmalloc(input.cap);
     }
+    if (!search.input)
+        die("searchprompt: input buffer is NULL after alloc check inputcap=%zu alloc_input=%d\n", input.cap,
+            result.effect.alloc_input);
     search.input[0] = '\0';
     searchapplyvieweffect(result.effect);
 }
@@ -642,13 +687,6 @@ static ZigSearchInputState searchinputstate(void) {
     };
 }
 
-static void searchwriteinputstate(ZigSearchInputState state) {
-    search.inputmode = state.active;
-    search.inputlen = state.len;
-    search.inputcursor = state.cursor;
-    search.inputcap = state.cap;
-}
-
 static SearchMatchesState searchmatchesstate(void) {
     return (SearchMatchesState){
         .count = search.nmatches,
@@ -714,26 +752,35 @@ static void searchapplyqueryreplace(Rune *runes, ZigSearchSetResult result) {
     searchapplyvieweffect(result.effect);
 }
 
-static Rune *searchallocquerybuffer(size_t query_len) {
+static void searchapplyquerytransaction(const char *query) {
+    Rune rune;
+    size_t off, query_len, step;
+    int qlen;
+    Rune *runes;
     ZigSearchSetResult result;
 
+    query_len = strlen(query);
     result = st_searchsetupdate(searchsnapshot(), query_len, 0);
-    return xmalloc(result.alloc_len * sizeof(Rune));
-}
+    runes = xmalloc(result.alloc_len * sizeof(Rune));
 
-static void searchapplydecodedquery(size_t query_len, int qlen, Rune *runes) {
-    ZigSearchSetResult result;
-
+    qlen = 0;
+    for (off = 0; off < query_len; off += step) {
+        step = utf8decode(query + off, &rune, query_len - off);
+        if (step == 0)
+            break;
+        runes[qlen++] = rune;
+    }
     result = st_searchsetupdate(searchsnapshot(), query_len, qlen);
     searchapplyqueryreplace(runes, result);
 }
 
 static void searchapplyinputinsert(ZigSearchInputResult result, const char *text, size_t len) {
-    SearchInputMutation mutation;
+    SearchInputTransaction transaction;
 
     searchapplyupdate(result.update);
-    mutation = (SearchInputMutation){
-        .input = st_searchinputstate(result.update),
+    transaction = (SearchInputTransaction){
+        .input_cap = result.update.inputcap,
+        .input_len = result.update.inputlen,
         .realloc_input = result.effect.realloc_input,
         .move_dst = result.move_dst,
         .move_src = result.move_src,
@@ -742,54 +789,21 @@ static void searchapplyinputinsert(ZigSearchInputResult result, const char *text
         .insert_text = text,
         .insert_len = len,
     };
-    searchapplyinputmutation(mutation);
+    searchapplyinputtransaction(transaction);
     searchset(search.input);
 }
 
-static void searchapplyinputdelete(size_t start, size_t end) {
-    ZigSearchInputState input;
-    ZigSearchDeletePlan plan;
-    SearchInputMutation mutation;
-
-    input = searchinputstate();
-    plan = st_searchdeleteplan(start, end, input.len);
-    if (!plan.run)
-        return;
-    mutation = (SearchInputMutation){
-        .input = plan.input,
-        .move_dst = start,
-        .move_src = end,
-        .move_len = input.len - end + 1,
-    };
-    searchapplyinputmutation(mutation);
-}
-
-static void searchapplycursordelete(ZigSearchCursorResult result) {
-    ZigSearchInputState input;
-    SearchInputMutation mutation;
-
-    if (result.delete_start == result.delete_end)
-        return;
-    input = searchinputstate();
-    mutation = (SearchInputMutation){
-        .input = result.input,
-        .move_dst = result.delete_start,
-        .move_src = result.delete_end,
-        .move_len = input.len - result.delete_end + 1,
-    };
-    searchapplyinputmutation(mutation);
-}
-
 static void searchapplyinputclear(ZigSearchStateResult result) {
-    SearchInputMutation mutation;
+    SearchInputTransaction transaction;
 
     searchapplyupdate(result.update);
     searchapplyresourceeffect(result.effect);
-    mutation = (SearchInputMutation){
-        .input = result.input,
+    transaction = (SearchInputTransaction){
+        .input_cap = result.input.cap,
+        .input_len = result.input.len,
         .clear = 1,
     };
-    searchapplyinputmutation(mutation);
+    searchapplyinputtransaction(transaction);
     if (result.effect.clear_query && result.input.cap == 0) {
         free(search.input);
         search.input = NULL;
@@ -797,18 +811,17 @@ static void searchapplyinputclear(ZigSearchStateResult result) {
     searchapplyfloweffect(result.effect);
 }
 
-static void searchapplyinputmutation(SearchInputMutation mutation) {
-    if (mutation.realloc_input)
-        search.input = xrealloc(search.input, mutation.input.cap);
-    if (mutation.move_len > 0)
-        memmove(search.input + mutation.move_dst, search.input + mutation.move_src, mutation.move_len);
-    if (mutation.insert_len > 0)
-        memcpy(search.input + mutation.insert_at, mutation.insert_text, mutation.insert_len);
-    if (mutation.clear && search.input && mutation.input.len == 0)
+static void searchapplyinputtransaction(SearchInputTransaction transaction) {
+    if (transaction.realloc_input)
+        search.input = xrealloc(search.input, transaction.input_cap);
+    if (transaction.move_len > 0)
+        memmove(search.input + transaction.move_dst, search.input + transaction.move_src, transaction.move_len);
+    if (transaction.insert_len > 0)
+        memcpy(search.input + transaction.insert_at, transaction.insert_text, transaction.insert_len);
+    if (transaction.clear && search.input && transaction.input_len == 0)
         search.input[0] = '\0';
-    if (mutation.insert_len > 0)
-        search.input[mutation.input.len] = '\0';
-    searchwriteinputstate(mutation.input);
+    if (transaction.insert_len > 0)
+        search.input[transaction.input_len] = '\0';
 }
 
 static void searchresetstate(void) {
@@ -821,9 +834,21 @@ static void searchresetstate(void) {
 
 static void searchapplycursor(int action) {
     ZigSearchCursorResult result;
+    ZigSearchInputState input;
+    SearchInputTransaction transaction;
 
     result = st_searchcursorupdate(searchsnapshot(), (const unsigned char *)searchinputtext(), action);
-    searchapplycursordelete(result);
+    if (result.delete_start != result.delete_end) {
+        input = searchinputstate();
+        transaction = (SearchInputTransaction){
+            .input_cap = result.input.cap,
+            .input_len = result.input.len,
+            .move_dst = result.delete_start,
+            .move_src = result.delete_end,
+            .move_len = input.len - result.delete_end + 1,
+        };
+        searchapplyinputtransaction(transaction);
+    }
     searchapplyupdate(result.update);
     searchapplyfloweffect(result.effect);
 }
@@ -856,8 +881,6 @@ size_t searchnextchar(size_t cursor) {
     return next;
 }
 
-void searchdelete(size_t start, size_t end) { searchapplyinputdelete(start, end); }
-
 void searchcommit(void) { searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_COMMIT); }
 
 void searchcancel(void) { searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_CANCEL); }
@@ -870,20 +893,7 @@ static void searchapplystate(int action) {
 }
 
 void searchset(const char *query) {
-    Rune rune;
-    size_t len, off, step;
-    int qlen = 0;
-    Rune *runes;
-
-    len = strlen(query);
-    runes = searchallocquerybuffer(len);
-    for (off = 0; off < len; off += step) {
-        step = utf8decode(query + off, &rune, len - off);
-        if (step == 0)
-            break;
-        runes[qlen++] = rune;
-    }
-    searchapplydecodedquery(len, qlen, runes);
+    searchapplyquerytransaction(query);
 }
 
 void searchscan(void) {
@@ -978,7 +988,7 @@ void searchjump(void) {
     }
 }
 
-void selsnap(int *x, int *y, int direction) {
+SelectionSnapPoint selsnappoint(int x, int y, int direction) {
     int delim, prevdelim, linelen, wrap_allowed;
     Rune rune, prevrune;
     Glyph *gp;
@@ -993,10 +1003,10 @@ void selsnap(int *x, int *y, int direction) {
          * Snap around if the word wraps around at the end or
          * beginning of a line.
          */
-        prevrune = TLINE(*y)[*x].u;
+        prevrune = TLINE(y)[x].u;
         prevdelim = ISDELIM(prevrune);
         for (;;) {
-            word_request = st_selsnapworditerrequest(*x, *y, direction, term.col, term.row, prevdelim, prevrune);
+            word_request = st_selsnapworditerrequest(x, y, direction, term.col, term.row, prevdelim, prevrune);
             if (word_request.action == ST_ZIG_SEL_SNAP_WORD_ITER_STOP)
                 break;
 
@@ -1016,8 +1026,8 @@ void selsnap(int *x, int *y, int direction) {
             if (word_step.action == ST_ZIG_SEL_SNAP_WORD_BREAK)
                 break;
 
-            *x = word_step.x;
-            *y = word_step.y;
+            x = word_step.x;
+            y = word_step.y;
             prevdelim = word_step.prevdelim;
             prevrune = word_step.prevrune;
         }
@@ -1028,26 +1038,27 @@ void selsnap(int *x, int *y, int direction) {
          * has set ATTR_WRAP at its end. Then the whole next or
          * previous line will be selected.
          */
-        *x = st_selsnaplinex(direction, term.col);
+        x = st_selsnaplinex(direction, term.col);
         if (direction < 0) {
             for (;;) {
-                line_step = st_selsnaplinestep(*y, direction, term.row,
-                                               *y > 0 && (TLINE(*y - 1)[term.col - 1].mode & ATTR_WRAP));
+                line_step = st_selsnaplinestep(y, direction, term.row,
+                                               y > 0 && (TLINE(y - 1)[term.col - 1].mode & ATTR_WRAP));
                 if (line_step.action == ST_ZIG_SEL_SNAP_LINE_STOP)
                     break;
-                *y = line_step.y;
+                y = line_step.y;
             }
         } else if (direction > 0) {
             for (;;) {
-                line_step = st_selsnaplinestep(*y, direction, term.row,
-                                               *y < term.row - 1 && (TLINE(*y)[term.col - 1].mode & ATTR_WRAP));
+                line_step = st_selsnaplinestep(y, direction, term.row,
+                                               y < term.row - 1 && (TLINE(y)[term.col - 1].mode & ATTR_WRAP));
                 if (line_step.action == ST_ZIG_SEL_SNAP_LINE_STOP)
                     break;
-                *y = line_step.y;
+                y = line_step.y;
             }
         }
         break;
     }
+    return (SelectionSnapPoint){.x = x, .y = y};
 }
 
 char *getsel(void) {
@@ -1097,11 +1108,12 @@ char *getsel(void) {
 }
 
 void selclear(void) {
+    ZigSelectionStateResult result;
+
     if (!st_selclearplan(sel.ob.x))
         return;
-    sel.mode = SEL_IDLE;
-    sel.ob.x = -1;
-    tsetdirt(sel.nb.y, sel.ne.y);
+    result = st_selclearupdate(selectionsnapshot());
+    selectionapplyresult(result);
 }
 
 void die(const char *errstr, ...) {
@@ -1452,15 +1464,22 @@ void treset(void) {
 }
 
 void termapplyresetstate(const ZigResetPlan *state) {
-    term.c = (TCursor){{.mode = state->cursor_attr_mode, .fg = state->cursor_fg, .bg = state->cursor_bg},
-                       .x = state->cursor_x,
-                       .y = state->cursor_y,
-                       .state = state->cursor_state};
-    term.top = state->top;
-    term.bot = state->bot;
-    term.mode = state->mode;
-    memset(term.trantbl, state->trantbl, sizeof(term.trantbl));
-    term.charset = state->charset;
+    termapplystateupdate((TermStateUpdate){
+        .set_cursor = 1,
+        .cursor = (TCursor){{.mode = state->cursor_attr_mode, .fg = state->cursor_fg, .bg = state->cursor_bg},
+                            .x = state->cursor_x,
+                            .y = state->cursor_y,
+                            .state = state->cursor_state},
+        .mode_mask = ~0,
+        .mode_bits = state->mode,
+        .set_charset = 1,
+        .charset = state->charset,
+        .set_all_trantbl = 1,
+        .all_trantbl_charset = state->trantbl,
+        .set_scroll_region = 1,
+        .top = state->top,
+        .bot = state->bot,
+    });
 }
 
 void tnew(int col, int row) {
@@ -1505,61 +1524,64 @@ void kscrollup(const Arg *a) {
 }
 
 void tscrolldown(int orig, int n, int copyhist) {
-    int i;
-    Line temp;
     ZigScrollPlan plan;
 
     plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 0, copyhist, term.histi);
-    n = plan.count;
-
-    if (plan.hist_swap) {
-        term.histi = plan.new_histi;
-        temp = term.hist[term.histi];
-        term.hist[term.histi] = term.line[plan.hist_line];
-        term.line[plan.hist_line] = temp;
-    }
-
-    tsetdirt(orig, term.bot - n);
-    tclearregion(0, term.bot - n + 1, term.col - 1, term.bot);
-
-    for (i = plan.line_start; i >= plan.line_end; i += plan.line_step) {
-        temp = term.line[i];
-        term.line[i] = term.line[i + plan.line_offset];
-        term.line[i + plan.line_offset] = temp;
-    }
-
-    if (plan.selscroll_delta)
-        selscroll(orig, plan.selscroll_delta);
+    tapplyscrollplan(&plan, orig);
 }
 
 void tscrollup(int orig, int n, int copyhist) {
-    int i;
-    Line temp;
     ZigScrollPlan plan;
 
     plan = st_tscrollplan(n, orig, term.bot, term.scr, HISTSIZE, 1, copyhist, term.histi);
-    n = plan.count;
+    tapplyscrollplan(&plan, orig);
+}
 
-    if (plan.hist_swap) {
-        term.histi = plan.new_histi;
-        temp = term.hist[term.histi];
-        term.hist[term.histi] = term.line[plan.hist_line];
-        term.line[plan.hist_line] = temp;
+void tapplyscrollplan(const ZigScrollPlan *plan, int orig) {
+    int i, step_index;
+    Line temp;
+    ZigScrollStep step;
+
+    for (step_index = 0; step_index < plan->step_count; step_index++) {
+        step = plan->steps[step_index];
+        switch (step.kind) {
+        case ST_ZIG_SCROLL_STEP_HIST_SWAP:
+            term.histi = step.a;
+            temp = term.hist[term.histi];
+            term.hist[term.histi] = term.line[step.b];
+            term.line[step.b] = temp;
+            break;
+        case ST_ZIG_SCROLL_STEP_SCR_UPDATE:
+            term.scr = step.a;
+            break;
+        case ST_ZIG_SCROLL_STEP_CLEAR_RECT:
+            tclearregion(step.a, step.b, term.col + step.c, step.d);
+            break;
+        case ST_ZIG_SCROLL_STEP_DIRTY_RANGE:
+            tsetdirt(step.a, step.b);
+            break;
+        case ST_ZIG_SCROLL_STEP_LINE_SWAP_LOOP:
+            if (step.c > 0) {
+                for (i = step.a; i <= step.b; i += step.c) {
+                    temp = term.line[i];
+                    term.line[i] = term.line[i + step.d];
+                    term.line[i + step.d] = temp;
+                }
+            } else {
+                for (i = step.a; i >= step.b; i += step.c) {
+                    temp = term.line[i];
+                    term.line[i] = term.line[i + step.d];
+                    term.line[i + step.d] = temp;
+                }
+            }
+            break;
+        case ST_ZIG_SCROLL_STEP_SELECTION_SCROLL:
+            selscroll(orig, step.a);
+            break;
+        default:
+            die("invalid scroll step: kind=%d index=%d count=%d\n", step.kind, step_index, plan->step_count);
+        }
     }
-
-    term.scr = plan.new_scr;
-
-    tclearregion(0, orig, term.col - 1, orig + n - 1);
-    tsetdirt(orig + n, term.bot);
-
-    for (i = plan.line_start; i <= plan.line_end; i += plan.line_step) {
-        temp = term.line[i];
-        term.line[i] = term.line[i + plan.line_offset];
-        term.line[i + plan.line_offset] = temp;
-    }
-
-    if (plan.selscroll_delta)
-        selscroll(orig, plan.selscroll_delta);
 }
 
 void selscroll(int orig, int n) {
@@ -1575,11 +1597,45 @@ void tnewline(int first_col) {
 
     snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
     plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_NEWLINE, snapshot, first_col, 0);
-    if (plan.scroll)
-        tscrollup(plan.scroll_top, 1, 1);
-    term.c.state = plan.state;
-    term.c.x = plan.x;
-    term.c.y = plan.y;
+    termapplycursorplan(&plan);
+}
+
+void termapplycursorplan(const ZigTermCursorPlan *plan) {
+    if (plan->scroll) {
+        if (plan->scroll_down)
+            tscrolldown(plan->scroll_top, 1, 1);
+        else
+            tscrollup(plan->scroll_top, 1, 1);
+    }
+    term.c.state = plan->state;
+    term.c.x = plan->x;
+    term.c.y = plan->y;
+}
+
+void termapplystateupdate(TermStateUpdate update) {
+    if (update.set_cursor)
+        term.c = update.cursor;
+    if (update.mode_mask)
+        term.mode = (term.mode & ~update.mode_mask) | update.mode_bits;
+    if (update.cursor_state_mask)
+        term.c.state = (term.c.state & ~update.cursor_state_mask) | update.cursor_state_bits;
+    if (update.set_charset)
+        term.charset = update.charset;
+    if (update.set_trantbl)
+        term.trantbl[update.trantbl_slot] = update.trantbl_charset;
+    if (update.set_all_trantbl)
+        memset(term.trantbl, update.all_trantbl_charset, sizeof(term.trantbl));
+    if (update.set_scroll_region) {
+        term.top = update.top;
+        term.bot = update.bot;
+    }
+    if (update.set_dimensions) {
+        term.col = update.col;
+        term.maxcol = update.maxcol;
+        term.row = update.row;
+    }
+    if (update.clamp_cursor)
+        tmoveto(term.c.x, term.c.y);
 }
 
 void csiparse(void) {
@@ -1600,9 +1656,7 @@ void tmoveato(int x, int y) {
 
     snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
     plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_MOVE_TO_ABS, snapshot, x, y);
-    term.c.state = plan.state;
-    term.c.x = plan.x;
-    term.c.y = plan.y;
+    termapplycursorplan(&plan);
 }
 
 void tmoveto(int x, int y) {
@@ -1611,14 +1665,12 @@ void tmoveto(int x, int y) {
 
     snapshot = (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
     plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_MOVE_TO, snapshot, x, y);
-    term.c.state = plan.state;
-    term.c.x = plan.x;
-    term.c.y = plan.y;
+    termapplycursorplan(&plan);
 }
 
 void tsetchar(Rune u, Glyph *attr, int x, int y) {
-    st_tsetchar(u, (const ZigGlyph *)attr, (ZigGlyph *)term.line[y], &term.dirty[y], x, term.col,
-                term.trantbl[term.charset]);
+    st_tsetchar(u, (const ZigGlyph *)attr, (ZigGlyph *)term.line[y], x, term.col, term.trantbl[term.charset]);
+    tsetdirt(y, y);
     if (isboxdraw(term.line[y][x].u))
         term.line[y][x].mode |= ATTR_BOXDRAW;
 }
@@ -1634,8 +1686,8 @@ void tclearregion(int x1, int y1, int x2, int y2) {
     x2 = rect.x2;
     y2 = rect.y2;
 
+    tsetdirt(y1, y2);
     for (y = y1; y <= y2; y++) {
-        term.dirty[y] = 1;
         for (x = x1; x <= x2; x++) {
             if (selected(x, y))
                 selclear();
@@ -1714,16 +1766,11 @@ void tsetattr(int *attr, int l) {
     }
 }
 
-void termapplyscrollregion(ZigScrollRegion region) {
-    term.top = region.top;
-    term.bot = region.bottom;
-}
-
 void tsetscroll(int t, int b) {
     ZigScrollRegion region;
 
     region = st_tsetscroll(t, b, term.row);
-    termapplyscrollregion(region);
+    termapplystateupdate((TermStateUpdate){.set_scroll_region = 1, .top = region.top, .bot = region.bottom});
 }
 
 void tapplyerase(const ZigErasePlan *plan) {
@@ -1833,8 +1880,7 @@ void tapplymisc(const ZigMiscPlan *plan) {
             tputc(term.lastc);
         break;
     }
-    if (plan->mode_mask)
-        term.mode = (term.mode & ~plan->mode_mask) | plan->mode_bits;
+    termapplystateupdate((TermStateUpdate){.mode_mask = plan->mode_mask, .mode_bits = plan->mode_bits});
 }
 
 void tsetmode(int priv, int set, int *args, int narg) {
@@ -1854,8 +1900,8 @@ void tsetmode(int priv, int set, int *args, int narg) {
             xsetmode(set, MODE_REVERSE);
             break;
         case ST_ZIG_MODE_ORIGIN:
-            if (plan.cursor_state_action == ST_ZIG_CURSOR_STATE_ORIGIN)
-                MODBIT(term.c.state, plan.cursor_state_set, CURSOR_ORIGIN);
+            termapplystateupdate((TermStateUpdate){.cursor_state_mask = plan.cursor_state_mask,
+                                                   .cursor_state_bits = plan.cursor_state_bits});
             if (plan.move_origin_home)
                 tmoveato(0, 0);
             break;
@@ -1940,8 +1986,7 @@ void tsetmode(int priv, int set, int *args, int narg) {
             fprintf(stderr, "erresc: unknown set/reset mode %d\n", *args);
             break;
         }
-        if (plan.mode_mask)
-            term.mode = (term.mode & ~plan.mode_mask) | plan.mode_bits;
+        termapplystateupdate((TermStateUpdate){.mode_mask = plan.mode_mask, .mode_bits = plan.mode_bits});
     }
 }
 
@@ -2031,68 +2076,84 @@ char *strargpar(int index, int narg) {
 }
 
 void strapplyplan(const ZigStrHandlePlan *plan, int narg) {
-    char *p = NULL, *dec;
-    int j;
+    ZigStrApplyEffectList exec;
+    ZigStrApplyEffect effect;
+    PlatformEffectList platform;
+    int i;
 
     /* strarg() 将旧版空参数 UB 收敛为带上下文的显式错误。 */
+    exec = st_strapplyplan(plan->kind, plan->clipboard_run, plan->arg1_present, plan->payload_arg, plan->color_arg);
+    platform.count = exec.count;
+    for (i = 0; i < exec.count; i++) {
+        effect = exec.effects[i];
+        platform.effects[i] = (PlatformEffect){.kind = effect.kind, .arg = effect.arg, .index_arg = effect.index_arg};
+    }
+    platformapplyeffects(&platform, plan, narg);
+}
 
-    switch (plan->kind) {
-    case 1:
-        xsettitle(strarg(plan, plan->payload_arg, narg, "title"));
-        xseticontitle(strarg(plan, plan->payload_arg, narg, "icon-title"));
-        return;
-    case 2:
-        xseticontitle(strarg(plan, plan->payload_arg, narg, "icon-title"));
-        return;
-    case 3:
-        xsettitle(strarg(plan, plan->payload_arg, narg, "title"));
-        return;
-    case 4:
-        xsettitle(strarg(plan, plan->payload_arg, narg, "old-title"));
-        return;
-    case 5:
-        return;
-    case 0:
-        if (plan->clipboard_run) {
-            dec = base64dec(strarg(plan, plan->color_arg, narg, "clipboard"));
-            if (dec) {
-                xsetsel(dec);
-                xclipcopy();
-            } else {
+void platformapplyeffects(const PlatformEffectList *platform, const ZigStrHandlePlan *plan, int narg) {
+    PlatformEffect effect;
+    char *p = NULL, *dec;
+    int color_failed, i, j;
+
+    dec = NULL;
+    color_failed = 0;
+    for (i = 0; i < platform->count; i++) {
+        effect = platform->effects[i];
+        switch (effect.kind) {
+        case 0:
+            break;
+        case 1:
+            xsettitle(strarg(plan, effect.arg, narg, "title"));
+            break;
+        case 2:
+            xseticontitle(strarg(plan, effect.arg, narg, "icon-title"));
+            break;
+        case 3:
+            dec = base64dec(strarg(plan, effect.arg, narg, "clipboard"));
+            if (!dec)
                 fprintf(stderr, "erresc: invalid base64\n");
+            break;
+        case 4:
+            if (dec)
+                xsetsel(dec);
+            break;
+        case 5:
+            if (dec)
+                xclipcopy();
+            break;
+        case 6:
+            p = strarg(plan, effect.arg, narg, "color-value");
+            j = effect.index_arg >= 0 ? atoi(strarg(plan, effect.index_arg, narg, "color-index")) : -1;
+            if (xsetcolorname(j, p)) {
+                color_failed = 1;
+                fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
             }
-        }
-        return;
-    case 7:
-        p = strarg(plan, plan->color_arg, narg, "color-value");
-        j = plan->arg1_present ? atoi(strarg(plan, plan->payload_arg, narg, "color-index")) : -1;
-        if (xsetcolorname(j, p)) {
-            fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
-        } else {
-            redraw();
-        }
-        return;
-    case 8:
-        if (!plan->arg1_present)
+            break;
+        case 7:
+            j = atoi(strarg(plan, effect.index_arg, narg, "color-index"));
+            /* OSC 104 带参数时重置指定颜色槽；NULL 要求 xsetcolorname 恢复默认值。 */
+            if (xsetcolorname(j, p)) {
+                color_failed = 1;
+                fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
+            }
+            break;
+        case 8:
+            if (!color_failed)
+                redraw();
+            break;
+        case 9:
+            fprintf(stderr, "erresc: unknown str ");
+            strdump();
             return;
-        j = atoi(strarg(plan, plan->payload_arg, narg, "color-index"));
-        /* OSC 104 带参数时重置指定颜色槽；NULL 要求 xsetcolorname 恢复默认值。 */
-        if (xsetcolorname(j, p)) {
-            fprintf(stderr, "erresc: invalid color j=%d, p=%s\n", j, p ? p : "(null)");
-        } else {
-            redraw();
+        default:
+            fprintf(stderr, "erresc: invalid str effect kind=%d\n", effect.kind);
+            strdump();
+            return;
         }
-        return;
-    case 6:
-        fprintf(stderr, "erresc: unknown str ");
-        strdump();
-        return;
     }
 
-    switch (strescseq.type) {}
-
-    fprintf(stderr, "erresc: unknown str ");
-    strdump();
+    return;
 }
 
 void strhandle(void) {
@@ -2234,7 +2295,7 @@ void toggleprinter(const Arg *arg) {
     ZigMiscPlan plan;
 
     plan = st_toggleprinterplan(term.mode);
-    term.mode = (term.mode & ~plan.mode_mask) | plan.mode_bits;
+    termapplystateupdate((TermStateUpdate){.mode_mask = plan.mode_mask, .mode_bits = plan.mode_bits});
 }
 
 void printscreen(const Arg *arg) { tdump(); }
@@ -2274,7 +2335,9 @@ void tdump(void) {
 
 void tputtab(int n) { term.c.x = st_tputtab(term.c.x, term.col, n, term.tabs); }
 
-void tdefutf8(char ascii) { term.mode = st_tdefutf8plan(ascii, term.mode); }
+void tdefutf8(char ascii) {
+    termapplystateupdate((TermStateUpdate){.mode_mask = ~0, .mode_bits = st_tdefutf8plan(ascii, term.mode)});
+}
 
 void tdeftran(char ascii) {
     int charset = st_tdeftranplan(ascii);
@@ -2282,7 +2345,8 @@ void tdeftran(char ascii) {
     if (charset < 0) {
         fprintf(stderr, "esc unhandled charset: ESC ( %c\n", ascii);
     } else {
-        term.trantbl[term.icharset] = charset;
+        termapplystateupdate(
+            (TermStateUpdate){.set_trantbl = 1, .trantbl_slot = term.icharset, .trantbl_charset = charset});
     }
 }
 
@@ -2309,7 +2373,7 @@ void tstrsequence(uchar c) {
 void applyinputscalarwriteback(const ZigInputScalarStateUpdate *update) {
     term.esc = update->esc;
     if (update->charset_set)
-        term.charset = update->charset;
+        termapplystateupdate((TermStateUpdate){.set_charset = 1, .charset = update->charset});
     if (update->icharset_set)
         term.icharset = update->icharset;
     if (update->tab_set)
@@ -2389,11 +2453,7 @@ int eschandle(uchar ascii) {
         cursor_snapshot =
             (ZigTermCursorSnapshot){term.c.state, term.c.x, term.c.y, term.col, term.row, term.top, term.bot};
         cursor_plan = st_termcursorplan(ST_ZIG_TERM_CURSOR_REVERSE_INDEX, cursor_snapshot, 0, 0);
-        if (cursor_plan.scroll)
-            tscrolldown(cursor_plan.scroll_top, 1, 1);
-        term.c.state = cursor_plan.state;
-        term.c.x = cursor_plan.x;
-        term.c.y = cursor_plan.y;
+        termapplycursorplan(&cursor_plan);
         break;
     case ST_ZIG_ESC_ACTION_DECID:
         ttywrite(vtiden, strlen(vtiden), 0);
@@ -2429,13 +2489,13 @@ int eschandle(uchar ascii) {
 void tputc(Rune u) {
     char c[UTF_SIZ];
     ZigPutcDecode decoded;
-    ZigPutcWriteResult write;
-    ZigPutcPreparePlan prepare;
+    ZigPutcStepPlan putc_step;
+    ZigInputRoutingPlan route;
     ZigStrCollectApplyPlan collect_plan;
     ZigStrCollectExec collect_exec;
     ZigInputEscFlowPlan escflow;
     int control;
-    int esc_action_done;
+    int esc_action_done, esc_action_index;
     int width, len;
     Glyph *gp;
 
@@ -2444,6 +2504,7 @@ void tputc(Rune u) {
     width = decoded.width;
     len = decoded.len;
     memcpy(c, decoded.bytes, sizeof(decoded.bytes));
+    route = st_inputroutingplan(term.esc, control);
 
     if (IS_SET(MODE_PRINT))
         tprinter(c, len);
@@ -2454,7 +2515,7 @@ void tputc(Rune u) {
      * receives a ESC, a SUB, a ST or any other C1 control
      * character.
      */
-    if (term.esc & ESC_STR) {
+    if (route.is_str) {
         collect_plan = st_tcollectstrapply(u, term.esc, (unsigned char *)strescseq.buf, strescseq.len,
                                            (const unsigned char *)c, len, strescseq.siz);
         collect_exec = collect_plan.first;
@@ -2501,7 +2562,7 @@ check_control_code:
      * because they can be embedded inside a control sequence, and
      * they must not cause conflicts with sequences.
      */
-    if (control) {
+    if (route.is_control) {
         tcontrolcode(u);
         /*
          * control codes are not shown ever
@@ -2509,33 +2570,38 @@ check_control_code:
         if (term.esc == 0)
             term.lastc = 0;
         return;
-    } else if (term.esc & ESC_START) {
+    } else if (route.is_esc) {
         escflow = st_inputescflowplan(term.esc, u, csiescseq.len, sizeof(csiescseq.buf));
-        esc_action_done = 1;
-        switch (escflow.kind) {
-        case ST_ZIG_ESC_FLOW_CSI:
-            if (escflow.csi_write)
-                csiescseq.buf[csiescseq.len] = escflow.csi_byte;
-            csiescseq.len = escflow.new_csi_len;
-            esc_action_done = escflow.handle_csi;
-            if (escflow.handle_csi) {
+        esc_action_done = escflow.kind == ST_ZIG_ESC_FLOW_CSI ? escflow.handle_csi : 1;
+        for (esc_action_index = 0; esc_action_index < escflow.action_count; esc_action_index++) {
+            switch (escflow.actions[esc_action_index]) {
+            case ST_ZIG_ESC_FLOW_ACTION_WRITE_CSI_BYTE:
+                if (escflow.csi_write)
+                    csiescseq.buf[csiescseq.len] = escflow.csi_byte;
+                csiescseq.len = escflow.new_csi_len;
+                break;
+            case ST_ZIG_ESC_FLOW_ACTION_PARSE_CSI:
                 csiparse();
+                break;
+            case ST_ZIG_ESC_FLOW_ACTION_HANDLE_CSI:
                 csihandle();
+                esc_action_done = 1;
+                break;
+            case ST_ZIG_ESC_FLOW_ACTION_DEFINE_UTF8:
+                tdefutf8(u);
+                break;
+            case ST_ZIG_ESC_FLOW_ACTION_DEFINE_CHARSET:
+                tdeftran(u);
+                break;
+            case ST_ZIG_ESC_FLOW_ACTION_DEC_TEST:
+                tdectest(u);
+                break;
+            case ST_ZIG_ESC_FLOW_ACTION_ESC_HANDLE:
+                esc_action_done = eschandle(u);
+                break;
+            default:
+                die("invalid esc flow action: action=%d kind=%d rune=%u\n", escflow.actions[esc_action_index], escflow.kind, u);
             }
-            break;
-        case ST_ZIG_ESC_FLOW_UTF8:
-            tdefutf8(u);
-            break;
-        case ST_ZIG_ESC_FLOW_ALTCHARSET:
-            tdeftran(u);
-            break;
-        case ST_ZIG_ESC_FLOW_TEST:
-            tdectest(u);
-            break;
-        default:
-            esc_action_done = eschandle(u);
-            /* sequence already finished */
-            break;
         }
         if ((escflow.kind == ST_ZIG_ESC_FLOW_CSI || escflow.kind == ST_ZIG_ESC_FLOW_ESC) && !esc_action_done)
             return;
@@ -2546,29 +2612,33 @@ check_control_code:
          */
         return;
     }
-    prepare = st_tputcprepare(selected(term.c.x, term.c.y), IS_SET(MODE_WRAP), term.c.state, term.c.x, width, term.col);
-    if (prepare.clear_selection)
+    putc_step = st_tputcstepplan(selected(term.c.x, term.c.y), IS_SET(MODE_WRAP), term.c.state, term.c.x, width, term.col);
+    if (putc_step.clear_selection)
         selclear();
 
     gp = &term.line[term.c.y][term.c.x];
-    if (prepare.wrapnext) {
+    if (putc_step.wrapnext_newline) {
         gp->mode |= ATTR_WRAP;
         tnewline(1);
         gp = &term.line[term.c.y][term.c.x];
     }
 
-    if (prepare.overflow) {
+    if (putc_step.overflow_newline) {
         tnewline(1);
         gp = &term.line[term.c.y][term.c.x];
     }
 
-    write = st_tputcwrite(u, width, (const ZigGlyph *)&term.c.attr, (ZigGlyph *)term.line[term.c.y],
-                          &term.dirty[term.c.y], term.c.x, term.col, term.trantbl[term.charset], IS_SET(MODE_INSERT));
+    if (putc_step.write_glyph)
+        st_tputcwrite(u, width, (const ZigGlyph *)&term.c.attr, (ZigGlyph *)term.line[term.c.y], term.c.x, term.col,
+                      term.trantbl[term.charset], IS_SET(MODE_INSERT));
+    if (putc_step.mark_dirty)
+        tsetdirt(term.c.y, term.c.y);
     term.lastc = u;
-    if (write.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
-        tmoveto(write.next_x, term.c.y);
+    if (putc_step.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
+        tmoveto(putc_step.next_x, term.c.y);
     } else {
-        term.c.state |= CURSOR_WRAPNEXT;
+        termapplystateupdate((TermStateUpdate){.cursor_state_mask = putc_step.cursor_state_mask,
+                                               .cursor_state_bits = putc_step.cursor_state_bits});
     }
 }
 
@@ -2600,7 +2670,7 @@ int twrite(const char *buf, int buflen, int show_ctrl) {
 }
 
 void tresize(int col, int row) {
-    int i, j;
+    int i, j, step_index;
     TCursor cursor;
     ZigResizeExecPlan exec_plan;
     ZigResizePlan base;
@@ -2615,62 +2685,87 @@ void tresize(int col, int row) {
         return;
     }
 
-    for (i = 0; i < base.slide_count; i++) {
-        free(term.line[i]);
-        free(term.alt[i]);
-    }
-    if (i > 0) {
-        memmove(term.line, term.line + i, row * sizeof(Line));
-        memmove(term.alt, term.alt + i, row * sizeof(Line));
-    }
-    for (i = base.tail_start; i < term.row; i++) {
-        free(term.line[i]);
-        free(term.alt[i]);
-    }
-
-    term.line = xrealloc(term.line, row * sizeof(Line));
-    term.alt = xrealloc(term.alt, row * sizeof(Line));
-    term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
-    term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
-
-    for (i = 0; i < HISTSIZE; i++) {
-        term.hist[i] = xrealloc(term.hist[i], col * sizeof(Glyph));
-        for (j = exec_plan.hist_fill.start; exec_plan.hist_fill.run && j < exec_plan.hist_fill.end; j++) {
-            term.hist[i][j] = term.c.attr;
-            term.hist[i][j].u = ' ';
+    for (step_index = 0; step_index < exec_plan.step_count; step_index++) {
+        switch (exec_plan.steps[step_index]) {
+        case ST_ZIG_RESIZE_STEP_FREE_SLIDE_ROWS:
+            for (i = 0; i < base.slide_count; i++) {
+                free(term.line[i]);
+                free(term.alt[i]);
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_MEMMOVE_SLIDE_ROWS:
+            if (base.slide_count > 0) {
+                memmove(term.line, term.line + base.slide_count, row * sizeof(Line));
+                memmove(term.alt, term.alt + base.slide_count, row * sizeof(Line));
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_FREE_TAIL_ROWS:
+            for (i = base.tail_start; i < term.row; i++) {
+                free(term.line[i]);
+                free(term.alt[i]);
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_REALLOC_ARRAYS:
+            term.line = xrealloc(term.line, row * sizeof(Line));
+            term.alt = xrealloc(term.alt, row * sizeof(Line));
+            term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
+            term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
+            break;
+        case ST_ZIG_RESIZE_STEP_FILL_HISTORY:
+            for (i = 0; i < HISTSIZE; i++) {
+                term.hist[i] = xrealloc(term.hist[i], col * sizeof(Glyph));
+                for (j = exec_plan.hist_fill.start; exec_plan.hist_fill.run && j < exec_plan.hist_fill.end; j++) {
+                    term.hist[i][j] = term.c.attr;
+                    term.hist[i][j].u = ' ';
+                }
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_REALLOC_ROWS:
+            for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++) {
+                term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
+                term.alt[i] = xrealloc(term.alt[i], col * sizeof(Glyph));
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_ALLOC_ROWS:
+            for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++) {
+                term.line[i] = xmalloc(col * sizeof(Glyph));
+                term.alt[i] = xmalloc(col * sizeof(Glyph));
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_TABS:
+            if (exec_plan.tabs.grow) {
+                memset(term.tabs + exec_plan.tabs.clear_start, 0, sizeof(*term.tabs) * exec_plan.tabs.clear_count);
+                for (i = exec_plan.tabs.tab_start; i < col; i += tabspaces)
+                    term.tabs[i] = 1;
+            }
+            break;
+        case ST_ZIG_RESIZE_STEP_UPDATE_DIMENSIONS:
+            termapplystateupdate((TermStateUpdate){
+                .set_dimensions = 1,
+                .col = base.requested_col,
+                .maxcol = base.alloc_col,
+                .row = row,
+                .set_scroll_region = 1,
+                .top = 0,
+                .bot = row - 1,
+                .clamp_cursor = 1,
+            });
+            break;
+        case ST_ZIG_RESIZE_STEP_CLEAR_REGIONS:
+            cursor = term.c;
+            for (i = 0; i < 2; i++) {
+                for (j = 0; j < exec_plan.clear.count; j++)
+                    tclearregion(exec_plan.clear.rects[j].x1, exec_plan.clear.rects[j].y1, exec_plan.clear.rects[j].x2,
+                                 exec_plan.clear.rects[j].y2);
+                tswapscreen();
+                tcursor(CURSOR_LOAD);
+            }
+            term.c = cursor;
+            break;
+        default:
+            die("invalid resize step: step=%d index=%d count=%d\n", exec_plan.steps[step_index], step_index, exec_plan.step_count);
         }
     }
-
-    for (i = exec_plan.rows.resize_start; i < exec_plan.rows.resize_end; i++) {
-        term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
-        term.alt[i] = xrealloc(term.alt[i], col * sizeof(Glyph));
-    }
-
-    for (i = exec_plan.rows.alloc_start; i < exec_plan.rows.alloc_end; i++) {
-        term.line[i] = xmalloc(col * sizeof(Glyph));
-        term.alt[i] = xmalloc(col * sizeof(Glyph));
-    }
-
-    if (exec_plan.tabs.grow) {
-        memset(term.tabs + exec_plan.tabs.clear_start, 0, sizeof(*term.tabs) * exec_plan.tabs.clear_count);
-        for (i = exec_plan.tabs.tab_start; i < col; i += tabspaces)
-            term.tabs[i] = 1;
-    }
-
-    term.col = base.requested_col;
-    term.maxcol = col;
-    term.row = row;
-    tsetscroll(0, row - 1);
-    tmoveto(term.c.x, term.c.y);
-    cursor = term.c;
-    for (i = 0; i < 2; i++) {
-        for (j = 0; j < exec_plan.clear.count; j++)
-            tclearregion(exec_plan.clear.rects[j].x1, exec_plan.clear.rects[j].y1, exec_plan.clear.rects[j].x2,
-                         exec_plan.clear.rects[j].y2);
-        tswapscreen();
-        tcursor(CURSOR_LOAD);
-    }
-    term.c = cursor;
 }
 
 void resettitle(void) { xsettitle(NULL); }
