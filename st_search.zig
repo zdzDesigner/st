@@ -2151,6 +2151,29 @@ test "term line read plan handles hist mode" {
     try std.testing.expectEqual(@as(i32, 0), y6.index);
 }
 
+test "term line read plan keeps external pipe flattened row order" {
+    // HIST 语义服务 externalpipe：y 先直接索引 term.hist[]，再切到 term.line[]。
+    const snap = TermLineReadSnap{
+        .kind = .hist,
+        .scr = 4,
+        .histi = 7,
+        .histsize = 10,
+        .rows = 5,
+    };
+
+    const first = termLineReadPlan(snap, 0);
+    try std.testing.expect(first.hist);
+    try std.testing.expectEqual(@as(i32, 0), first.index);
+
+    const last_hist = termLineReadPlan(snap, 7);
+    try std.testing.expect(last_hist.hist);
+    try std.testing.expectEqual(@as(i32, 7), last_hist.index);
+
+    const first_live = termLineReadPlan(snap, 8);
+    try std.testing.expect(!first_live.hist);
+    try std.testing.expectEqual(@as(i32, 0), first_live.index);
+}
+
 test "term line read plan handles history ring offset mode" {
     const snap = TermLineReadSnap{
         .kind = .hist_ring,

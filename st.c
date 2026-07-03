@@ -445,7 +445,7 @@ Line tlinehist(int y) {
     ZigTermLineReadPlan plan;
 
     snap = (ZigTermLineReadSnap){
-        .kind = ST_ZIG_TERM_LINE_READ_HIST_RING,
+        .kind = ST_ZIG_TERM_LINE_READ_HIST,
         .scr = term.scr,
         .histi = term.histi,
         .histsize = HISTSIZE,

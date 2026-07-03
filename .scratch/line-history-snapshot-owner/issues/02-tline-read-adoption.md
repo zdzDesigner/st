@@ -42,3 +42,4 @@ Progress: completed
 - 2026-07-03 Draft/Review round 2: 新增 `ST_ZIG_TERM_LINE_READ_HIST_RING` / `.hist_ring`，用 `historyIndex(histi, scr, histsize)` 表达 ring offset 语义；`searchhistline()` 改用 `HIST_RING`。补充 Zig 单测覆盖 `hist_ring` 与 export round-trip。
 - 2026-07-03 Review result: `code-reviewer` 复审确认新实现与旧 `term.hist[historyIndex(term.histi, scr, HISTSIZE)]` 完全等价，无 critical/high/medium。
 - 2026-07-03 Validation: `zig build abi-check`、`zig build test`、`zig build`、`timeout 5 ./zig-out/bin/st` 全部通过。实现完成。
+- 2026-07-03 Regression fix: `tlinehist()` 不能采用 `HIST_RING`，因为 `externalpipe()` 传入的是平铺历史/屏幕行号，首行必须映射到 `historyLine()` 的 hist index 0；`HIST_RING` 只适用于 `searchhistline(scr)` 的 ring offset 坐标。修复为 `ST_ZIG_TERM_LINE_READ_HIST`，并新增 external pipe row order 回归测试。
