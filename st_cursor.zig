@@ -276,7 +276,8 @@ const DrawRegion = struct {
 };
 
 fn addDrawRegionStep(tx: *ZigDrawRegionTransaction, kind: c_int, y: c_int, next_y: c_int) void {
-    if (@as(usize, @intCast(tx.step_count)) >= tx.steps.len) return;
+    if (@as(usize, @intCast(tx.step_count)) >= tx.steps.len)
+        std.debug.panic("draw region transaction overflow: step_count={} exceeded capacity={}", .{ tx.step_count, tx.steps.len });
     tx.steps[@intCast(tx.step_count)] = .{ .kind = kind, .arg = y, .index_arg = next_y };
     tx.step_count += 1;
 }
@@ -355,12 +356,12 @@ fn st_drawregionnext(dirty: [*]const c_int, y1: c_int, y2: c_int) DrawRegionPlan
     return (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y1, .end_y = y2 }).plan();
 }
 
-export fn st_drawregionplan(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionPlan {
+fn st_drawregionplan(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionPlan {
     const plan = st_drawregionnext(dirty, y1, y2);
     return .{ .draw = plan.draw, .y = plan.y, .next_y = plan.next_y };
 }
 
-fn st_drawregiontransaction(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionTransaction {
+export fn st_drawregiontransaction(dirty: [*]const c_int, y1: c_int, y2: c_int) ZigDrawRegionTransaction {
     return (DrawRegion{ .dirty = dirty[0..@intCast(y2)], .start_y = y1, .end_y = y2 }).transaction();
 }
 
@@ -524,6 +525,32 @@ test "draw region transaction consumes all dirty rows" {
     try std.testing.expectEqual(@as(c_int, 3), tx.steps[6].arg);
 }
 
+test "draw region transaction empty dirty produces zero steps" {
+    const dirty = [_]c_int{ 0, 0, 0, 0 };
+    const tx = st_drawregiontransaction(&dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 0), tx.step_count);
+}
+
+test "draw region transaction non-contiguous dirty preserves row order" {
+    const dirty = [_]c_int{ 0, 1, 0, 0, 1, 0, 1 };
+    const tx = st_drawregiontransaction(&dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 9), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, 1), tx.steps[0].arg);
+    try std.testing.expectEqual(@as(c_int, 4), tx.steps[3].arg);
+    try std.testing.expectEqual(@as(c_int, 6), tx.steps[6].arg);
+}
+
+test "draw region transaction y1 greater than zero skips leading rows" {
+    const dirty = [_]c_int{ 1, 1, 0, 1, 1 };
+    const tx = st_drawregiontransaction(&dirty, 2, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 6), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, 3), tx.steps[0].arg);
+    try std.testing.expectEqual(@as(c_int, 4), tx.steps[3].arg);
+}
+
 test "draw exec plan combines frame and first dirty region" {
     var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
     var row1 = [_]ZigGlyph{.{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 }};
@@ -564,6 +591,109 @@ test "draw plans gate search scan and cursor" {
     try std.testing.expectEqual(@as(c_int, 0), inactive.search_scan);
     try std.testing.expectEqual(@as(c_int, 0), inactive.cursor_active);
     try std.testing.expectEqual(@as(c_int, 0), inactive.imspot_active);
+}
+
+test "frame no dirty with search and cursor active skips draw_region" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const dirty = [_]c_int{0};
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 1, .scr = 0, .cx = 0, .current_y = 0, .ocx = 0, .ocy = 0, .col = 1, .row = 1 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 3), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_search_scan), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_draw_cursor), plan.platform.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[2].kind);
+}
+
+test "frame only imspot_active keeps finish_draw before ime_spot" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const dirty = [_]c_int{0};
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 1, .cx = 0, .current_y = 1, .ocx = 0, .ocy = 0, .col = 1, .row = 2 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 2), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_ime_spot), plan.platform.effects[1].kind);
+}
+
+test "frame dirty with scr nonzero closes cursor gate" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const dirty = [_]c_int{1};
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 1, .scr = 3, .cx = 0, .current_y = 0, .ocx = 0, .ocy = 0, .col = 1, .row = 1 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 3), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_search_scan), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_draw_region), plan.platform.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[2].kind);
+}
+
+test "frame all gates active produces stable five effect order" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const dirty = [_]c_int{1};
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 1, .scr = 0, .cx = 0, .current_y = 1, .ocx = 0, .ocy = 0, .col = 1, .row = 2 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 5), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_search_scan), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_draw_region), plan.platform.effects[1].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_draw_cursor), plan.platform.effects[2].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[3].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_ime_spot), plan.platform.effects[4].kind);
+}
+
+test "imspot_active triggers on ocx change only" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const dirty = [_]c_int{0};
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 1, .cx = 5, .current_y = 0, .ocx = 0, .ocy = 0, .col = 10, .row = 1 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 2), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_ime_spot), plan.platform.effects[1].kind);
+}
+
+test "imspot_active triggers on ocy change only" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    var row1 = [_]ZigGlyph{.{ .u = '乙', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{ &row0, &row1 };
+    const dirty = [_]c_int{ 0, 0 };
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 1, .cx = 0, .current_y = 1, .ocx = 0, .ocy = 0, .col = 1, .row = 2 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 2), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_ime_spot), plan.platform.effects[1].kind);
+}
+
+test "draw region transaction single dirty row emits full 3-step order" {
+    const dirty = [_]c_int{ 0, 1, 0 };
+    const tx = st_drawregiontransaction(&dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 3), tx.step_count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_region_draw_line), tx.steps[0].kind);
+    try std.testing.expectEqual(@as(c_int, 1), tx.steps[0].arg);
+    try std.testing.expectEqual(@as(c_int, platform_effect_region_clear_dirty), tx.steps[1].kind);
+    try std.testing.expectEqual(@as(c_int, 1), tx.steps[1].arg);
+    try std.testing.expectEqual(@as(c_int, platform_effect_region_advance), tx.steps[2].kind);
+    try std.testing.expectEqual(@as(c_int, 1), tx.steps[2].arg);
+}
+
+test "frame no search with dirty starts with draw_region" {
+    var row0 = [_]ZigGlyph{.{ .u = '甲', .mode = 0, .fg = 0, .bg = 0 }};
+    const lines = [_][*]const ZigGlyph{&row0};
+    const dirty = [_]c_int{1};
+    const snapshot = ZigTermFrameSnapshot{ .search_active = 0, .scr = 1, .cx = 0, .current_y = 0, .ocx = 0, .ocy = 0, .col = 1, .row = 1 };
+    const plan = st_drawexecplan(snapshot, &lines, &dirty, 0, dirty.len);
+
+    try std.testing.expectEqual(@as(c_int, 2), plan.platform.count);
+    try std.testing.expectEqual(@as(c_int, platform_effect_draw_region), plan.platform.effects[0].kind);
+    try std.testing.expectEqual(@as(c_int, platform_effect_finish_draw), plan.platform.effects[1].kind);
 }
 
 test "tcursor plan maps mode and alt slot" {

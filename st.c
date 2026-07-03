@@ -2259,7 +2259,7 @@ int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, 
         searchscan();
         break;
     case ST_ZIG_PLATFORM_EFFECT_DRAW_REGION:
-        drawregion(0, effect.arg, term.col, term.row);
+        drawregion(context->payload.draw.x1, effect.arg, context->payload.draw.x2, term.row);
         break;
     case ST_ZIG_PLATFORM_EFFECT_DRAW_CURSOR:
         xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx], term.ocx, term.ocy,
@@ -2889,17 +2889,36 @@ void tresize(int col, int row) {
 void resettitle(void) { xsettitle(NULL); }
 
 void drawregion(int x1, int y1, int x2, int y2) {
-    int y = y1;
-    ZigDrawRegionPlan region;
+    ZigDrawRegionTransaction tx;
+    int next_y;
+    int i;
+    int y;
 
-    for (;;) {
-        region = st_drawregionplan(term.dirty, y, y2);
-        if (!region.draw)
+    tx = st_drawregiontransaction(term.dirty, y1, y2);
+    y = y1;
+    for (i = 0; i < tx.step_count; i++) {
+        switch (tx.steps[i].kind) {
+        case ST_ZIG_PLATFORM_EFFECT_REGION_DRAW_LINE:
+            y = tx.steps[i].arg;
+            if (y < y1 || y >= y2)
+                die("drawregion: DRAW_LINE row %d out of bounds [%d,%d)\n", y, y1, y2);
+            xdrawline(TLINE(y), x1, y, x2);
             break;
-        y = region.y;
-        term.dirty[y] = 0;
-        xdrawline(TLINE(y), x1, y, x2);
-        y = region.next_y;
+        case ST_ZIG_PLATFORM_EFFECT_REGION_CLEAR_DIRTY:
+            y = tx.steps[i].arg;
+            if (y < y1 || y >= y2)
+                die("drawregion: CLEAR_DIRTY row %d out of bounds [%d,%d)\n", y, y1, y2);
+            term.dirty[y] = 0;
+            break;
+        case ST_ZIG_PLATFORM_EFFECT_REGION_ADVANCE:
+            next_y = tx.steps[i].index_arg;
+            if (next_y < y1 || next_y > y2)
+                die("drawregion: ADVANCE y %d out of bounds [%d,%d]\n", next_y, y1, y2);
+            break;
+        default:
+            die("drawregion: unknown step kind=%d arg=%d index_arg=%d y2=%d\n",
+                tx.steps[i].kind, tx.steps[i].arg, tx.steps[i].index_arg, y2);
+        }
     }
 }
 
@@ -2913,22 +2932,9 @@ void draw(void) {
         (ZigTermFrameSnapshot){search.active, term.scr, term.c.x, term.c.y, term.ocx, term.ocy, term.col, term.row};
     frame = st_drawexecplan(snapshot, (const ZigGlyph *const *)term.line, term.dirty, 0, term.row);
 
-    if (search.active)
-        searchscan();
-
-    term.ocx = frame.ocx;
-    term.ocy = frame.ocy;
-
-    drawregion(0, 0, term.col, term.row);
-    if (term.scr == 0)
-        xdrawcursor(frame.cx, term.c.y, term.line[term.c.y][frame.cx], term.ocx, term.ocy,
-                    term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
-
-    term.ocx = frame.new_ocx;
-    term.ocy = frame.new_ocy;
-    xfinishdraw();
-    if (term.ocx != frame.ocx || term.ocy != frame.ocy)
-        xximspot(term.ocx, term.ocy);
+    platformapplyeffects(&frame.platform,
+                         (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW,
+                                           .payload.draw = {.frame = &frame, .x1 = 0, .x2 = term.col}});
 }
 
 void redraw(void) {

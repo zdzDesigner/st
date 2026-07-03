@@ -1177,7 +1177,7 @@ ZigClearRect st_tclearregionrect(int, int, int, int, int, int);
 ZigTermCursorPlan st_termcursorplan(int, ZigTermCursorSnapshot, int, int);
 ZigBackspacePlan st_backspaceplan(ZigTermCursorSnapshot);
 ZigDrawExecPlan st_drawexecplan(ZigTermFrameSnapshot, const ZigGlyph * const *, const int *, int, int);
-ZigDrawRegionPlan st_drawregionplan(const int *, int, int);
+ZigDrawRegionTransaction st_drawregiontransaction(const int *, int, int);
 ZigEditMove st_tdeletechar(int, int, int);
 ZigEditMove st_tinsertblank(int, int, int);
 ZigScrollPlan st_tscrollplan(int, int, int, int, int, int, int, int);
