@@ -445,7 +445,7 @@ Line tlinehist(int y) {
     ZigTermLineReadPlan plan;
 
     snap = (ZigTermLineReadSnap){
-        .kind = ST_ZIG_TERM_LINE_READ_HIST,
+        .kind = ST_ZIG_TERM_LINE_READ_FLAT_HISTORY_Y,
         .scr = term.scr,
         .histi = term.histi,
         .histsize = HISTSIZE,
@@ -460,7 +460,7 @@ Line tlineviewport(int y) {
     ZigTermLineReadPlan plan;
 
     snap = (ZigTermLineReadSnap){
-        .kind = ST_ZIG_TERM_LINE_READ_VIEWPORT,
+        .kind = ST_ZIG_TERM_LINE_READ_VIEWPORT_Y,
         .scr = term.scr,
         .histi = term.histi,
         .histsize = HISTSIZE,
@@ -1041,7 +1041,7 @@ Line searchhistline(int scr) {
     ZigTermLineReadPlan plan;
 
     snap = (ZigTermLineReadSnap){
-        .kind = ST_ZIG_TERM_LINE_READ_HIST_RING,
+        .kind = ST_ZIG_TERM_LINE_READ_RING_OFFSET,
         .scr = term.scr,
         .histi = term.histi,
         .histsize = HISTSIZE,

@@ -642,9 +642,9 @@ pub const HistoryView = struct {
 };
 
 pub const TermLineReadKind = enum(i32) {
-    viewport = 0,
-    hist = 1,
-    hist_ring = 2,
+    viewport_y = 0,
+    flat_history_y = 1,
+    ring_offset = 2,
 };
 
 pub const Input = struct {
@@ -1539,7 +1539,7 @@ fn tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
 
 pub const TermLineReadSnap = struct {
     kind: TermLineReadKind,
-    // viewport reads scr/histi/histsize; hist reads histsize/rows; hist_ring reads histi/histsize.
+    // viewport_y reads scr/histi/histsize; flat_history_y reads histsize/rows; ring_offset reads histi/histsize.
     scr: i32,
     histi: i32,
     histsize: i32,
@@ -1553,14 +1553,14 @@ pub const TermLineReadPlan = struct {
 
 pub fn termLineReadPlan(snap: TermLineReadSnap, y: i32) TermLineReadPlan {
     switch (snap.kind) {
-        .hist => {
+        .flat_history_y => {
             const plan = historyLine(y, snap.histsize, snap.rows);
             return .{ .hist = plan.hist, .index = plan.index };
         },
-        .hist_ring => {
+        .ring_offset => {
             return .{ .hist = true, .index = historyIndex(snap.histi, y, snap.histsize) };
         },
-        .viewport => {
+        .viewport_y => {
             // y is a viewport-visual row: rows above term.scr come from the history
             // ring, rows at/after term.scr come from the live screen buffer.
             if (y < snap.scr) {
@@ -1574,7 +1574,7 @@ pub fn termLineReadPlan(snap: TermLineReadSnap, y: i32) TermLineReadPlan {
 
 pub const ZigTermLineReadSnap = extern struct {
     kind: c_int,
-    // viewport reads scr/histi/histsize; hist reads histsize/rows; hist_ring reads histi/histsize.
+    // viewport_y reads scr/histi/histsize; flat_history_y reads histsize/rows; ring_offset reads histi/histsize.
     scr: c_int,
     histi: c_int,
     histsize: c_int,
@@ -2104,9 +2104,9 @@ test "search history line adapter smoke test" {
     try std.testing.expectEqual(@as(c_int, 0), live_line.index);
 }
 
-test "term line read plan handles viewport mode" {
+test "term line read plan handles viewport-y mode" {
     const snap = TermLineReadSnap{
-        .kind = .viewport,
+        .kind = .viewport_y,
         .scr = 3,
         .histi = 7,
         .histsize = 10,
@@ -2132,16 +2132,16 @@ test "term line read plan handles viewport mode" {
     try std.testing.expectEqual(@as(i32, 1), row4.index);
 }
 
-test "term line read plan handles hist mode" {
+test "term line read plan handles flat-history-y mode" {
     const snap = TermLineReadSnap{
-        .kind = .hist,
+        .kind = .flat_history_y,
         .scr = 0,
         .histi = 7,
         .histsize = 10,
         .rows = 7,
     };
 
-    // Uses historyLine logic: first few rows come from hist, later from line
+    // flat_history_y uses historyLine logic: first rows come from hist, later from line.
     const y2 = termLineReadPlan(snap, 2);
     try std.testing.expect(y2.hist);
     try std.testing.expectEqual(@as(i32, 2), y2.index);
@@ -2152,9 +2152,9 @@ test "term line read plan handles hist mode" {
 }
 
 test "term line read plan keeps external pipe flattened row order" {
-    // HIST 语义服务 externalpipe：y 先直接索引 term.hist[]，再切到 term.line[]。
+    // flat_history_y 服务 externalpipe：y 先直接索引 term.hist[]，再切到 term.line[]。
     const snap = TermLineReadSnap{
-        .kind = .hist,
+        .kind = .flat_history_y,
         .scr = 4,
         .histi = 7,
         .histsize = 10,
@@ -2176,7 +2176,7 @@ test "term line read plan keeps external pipe flattened row order" {
 
 test "term line read plan handles history ring offset mode" {
     const snap = TermLineReadSnap{
-        .kind = .hist_ring,
+        .kind = .ring_offset,
         .scr = 0,
         .histi = 7,
         .histsize = 10,
