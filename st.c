@@ -304,6 +304,7 @@ static void tmoveato(int, int);
 static void tnewline(int);
 static void tputtab(int);
 static void tputc(Rune);
+static void tcommitputcwrite(ZigPutcWriteResult, int, Rune);
 static void treset(void);
 static void tscrollup(int, int, int);
 static void tscrolldown(int, int, int);
@@ -2661,6 +2662,24 @@ int eschandle(uchar ascii) {
     return exec.ret;
 }
 
+/*
+ * Commit protocol for graphic character write:
+ * 1) mark current row dirty (st_tputcwrite return => row is dirty immediately)
+ * 2) record lastc for follow-up processing
+ * 3) advance cursor or set WRAPNEXT based on write.advance
+ * Must stay atomic; do NOT split back into planner fields.
+ * [同步]: docs/reports/20260702-copy-delete-root-cause.md
+ */
+static void tcommitputcwrite(ZigPutcWriteResult write, int y, Rune u) {
+    tsetdirt(y, y);
+    term.lastc = u;
+    if (write.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
+        tmoveto(write.next_x, y);
+    } else {
+        term.c.state |= CURSOR_WRAPNEXT;
+    }
+}
+
 void tputc(Rune u) {
     char c[UTF_SIZ];
     ZigPutcDecode decoded;
@@ -2806,13 +2825,7 @@ check_control_code:
 
     write = st_tputcwrite(u, width, (const ZigGlyph *)&term.c.attr, (ZigGlyph *)term.line[term.c.y], term.c.x,
                           term.col, term.trantbl[term.charset], IS_SET(MODE_INSERT));
-    tsetdirt(term.c.y, term.c.y);
-    term.lastc = u;
-    if (write.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
-        tmoveto(write.next_x, term.c.y);
-    } else {
-        term.c.state |= CURSOR_WRAPNEXT;
-    }
+    tcommitputcwrite(write, term.c.y, u);
 }
 
 int twrite(const char *buf, int buflen, int show_ctrl) {

@@ -1043,3 +1043,185 @@ test "controlexec sets tab stop and clears string" {
     try std.testing.expectEqual(@as(c_int, 1), exec.state.tab_x);
     try std.testing.expectEqual(@as(c_int, esc_start), exec.finish_esc);
 }
+
+// -- Invariant tests for tputc atomic commit semantics (issue 02) --
+//
+// Root cause (20260702): dirty 标记与 CURSOR_WRAPNEXT 的提交时序必须原子落地。
+// 下列测试锁定 `st_tputcwrite` 返回三元组 (advance, cursor_state_mask, cursor_state_bits)
+// 与 `ZigPutcStepPlan` 派生字段之间的一致性不变量。
+
+test "putcwrite advance/cursor_state 原子一致：mid line narrow" {
+    var line = [_]ZigGlyph{.{ .u = 0, .mode = 0, .fg = 0, .bg = 0 }} ** 3;
+    const attr = ZigGlyph{ .u = 0, .mode = 0, .fg = 0, .bg = 0 };
+
+    const r = st_tputcwrite('A', 1, &attr, &line, 0, 3, 0, 0);
+
+    // 能前进：advance=MOVE，mask/bits 必须同时为 0
+    try std.testing.expectEqual(@as(c_int, putc_advance_move), r.advance);
+    try std.testing.expectEqual(@as(c_int, 0), r.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, 0), r.cursor_state_bits);
+}
+
+test "putcwrite advance/cursor_state 原子一致：last column narrow" {
+    var line = [_]ZigGlyph{.{ .u = 0, .mode = 0, .fg = 0, .bg = 0 }} ** 2;
+    const attr = ZigGlyph{ .u = 0, .mode = 0, .fg = 0, .bg = 0 };
+
+    const r = st_tputcwrite('A', 1, &attr, &line, 1, 2, 0, 0);
+
+    // 不能前进：advance=WRAPNEXT，mask/bits 同时为 wrapnext
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), r.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_bits);
+}
+
+test "putcwrite advance/cursor_state 原子一致：wide fills exactly to col" {
+    var line = [_]ZigGlyph{.{ .u = 0, .mode = 0, .fg = 0, .bg = 0 }} ** 2;
+    const attr = ZigGlyph{ .u = 0, .mode = 0, .fg = 0, .bg = 0 };
+
+    const r = st_tputcwrite('宽', 2, &attr, &line, 0, 2, 0, 0);
+
+    // x+width == col (0+2==2): 不满足 x+width<col，走 WRAPNEXT
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), r.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_bits);
+}
+
+test "putcwrite advance/cursor_state 原子一致：wide overflows col" {
+    var line = [_]ZigGlyph{.{ .u = 0, .mode = 0, .fg = 0, .bg = 0 }} ** 2;
+    const attr = ZigGlyph{ .u = 0, .mode = 0, .fg = 0, .bg = 0 };
+
+    const r = st_tputcwrite('界', 2, &attr, &line, 1, 2, 0, 0);
+
+    // x+width > col：WRAPNEXT
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), r.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_bits);
+}
+
+test "putcwrite advance/cursor_state 原子一致：wide at col-1 with room for dummy" {
+    var line = [_]ZigGlyph{.{ .u = 0, .mode = 0, .fg = 0, .bg = 0 }} ** 3;
+    const attr = ZigGlyph{ .u = 0, .mode = 0, .fg = 0, .bg = 0 };
+
+    const r = st_tputcwrite('大', 2, &attr, &line, 1, 3, 0, 0);
+
+    // x=1, width=2, col=3: x+width=3==col, 不满足 <col → WRAPNEXT
+    // dummy cell 无法写入（x+1=3>=col），advance 判定与 state 一致
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), r.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), r.cursor_state_bits);
+}
+
+test "stepplan advance/cursor_state 与 putcwrite 语义一致" {
+    // 中位宽字符：advance=MOVE，stepplan 的 advance/mask/bits 必须全 0
+    const mid = st_tputcstepplan(0, 0, 0, 0, 2, 4);
+    try std.testing.expectEqual(@as(c_int, putc_advance_move), mid.advance);
+    try std.testing.expectEqual(@as(c_int, 0), mid.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, 0), mid.cursor_state_bits);
+
+    // 末位窄字符：advance=WRAPNEXT，stepplan 的三者必须全是 wrapnext
+    const edge = st_tputcstepplan(0, 0, 0, 1, 1, 2);
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), edge.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), edge.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), edge.cursor_state_bits);
+
+    // 超宽溢出：same as edge
+    const overflow = st_tputcstepplan(0, 0, 0, 2, 2, 3);
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), overflow.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), overflow.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), overflow.cursor_state_bits);
+}
+
+test "putcwrite 与 stepplan 三元组直接一致" {
+    const cases = [_]struct {
+        x: c_int,
+        width: c_int,
+        col: c_int,
+    }{
+        .{ .x = 0, .width = 1, .col = 10 },
+        .{ .x = 9, .width = 1, .col = 10 },
+        .{ .x = 0, .width = 2, .col = 2 },
+        .{ .x = 1, .width = 2, .col = 2 },
+        .{ .x = 1, .width = 2, .col = 3 },
+        .{ .x = 8, .width = 2, .col = 10 },
+    };
+    var line = [_]ZigGlyph{.{ .u = 0, .mode = 0, .fg = 0, .bg = 0 }} ** 10;
+    const attr = ZigGlyph{ .u = 0, .mode = 0, .fg = 0, .bg = 0 };
+
+    for (cases) |c| {
+        const write = st_tputcwrite('A', c.width, &attr, &line, c.x, c.col, 0, 0);
+        const step = st_tputcstepplan(0, 0, 0, c.x, c.width, c.col);
+
+        try std.testing.expectEqual(write.advance, step.advance);
+        try std.testing.expectEqual(write.cursor_state_mask, step.cursor_state_mask);
+        try std.testing.expectEqual(write.cursor_state_bits, step.cursor_state_bits);
+    }
+}
+
+test "stepplan mark_dirty 永为 1（不可拆分边界）" {
+    const cases = [_]struct {
+        selected: c_int,
+        mode_wrap: c_int,
+        state: c_int,
+        x: c_int,
+        w: c_int,
+        col: c_int,
+    }{
+        .{ .selected = 0, .mode_wrap = 0, .state = 0, .x = 0, .w = 1, .col = 10 },
+        .{ .selected = 1, .mode_wrap = 1, .state = cursor_wrapnext, .x = 9, .w = 1, .col = 10 },
+        .{ .selected = 0, .mode_wrap = 0, .state = 0, .x = 9, .w = 2, .col = 10 },
+        .{ .selected = 1, .mode_wrap = 1, .state = 0, .x = 0, .w = 2, .col = 3 },
+    };
+
+    for (cases) |c| {
+        const plan = st_tputcstepplan(c.selected, c.mode_wrap, c.state, c.x, c.w, c.col);
+        try std.testing.expectEqual(@as(c_int, 1), plan.mark_dirty);
+    }
+}
+
+test "stepplan wrapnext_newline 与 overflow_newline 互斥" {
+    // wrap=true, cursor 有 wrapnext, 未到溢出 → 仅 wrapnext_newline
+    const wn = st_tputcstepplan(0, 1, cursor_wrapnext, 8, 1, 10);
+    try std.testing.expectEqual(@as(c_int, 1), wn.wrapnext_newline);
+    try std.testing.expectEqual(@as(c_int, 0), wn.overflow_newline);
+
+    // x+width > col → 仅 overflow_newline
+    const ov = st_tputcstepplan(0, 0, 0, 9, 2, 10);
+    try std.testing.expectEqual(@as(c_int, 0), ov.wrapnext_newline);
+    try std.testing.expectEqual(@as(c_int, 1), ov.overflow_newline);
+
+    // x+width == col → 不触发 overflow，也不触发 wrapnext_newline（无 wrapnext 光标状态）
+    const exact = st_tputcstepplan(0, 1, 0, 8, 2, 10);
+    try std.testing.expectEqual(@as(c_int, 0), exact.wrapnext_newline);
+    try std.testing.expectEqual(@as(c_int, 0), exact.overflow_newline);
+}
+
+test "inputstep putc subplan 与独立 stepplan 一致" {
+    var buf = [_]u8{0} ** 8;
+    const chunk = [_]u8{};
+
+    // 宽字符写入：cursor_x=0, width=2, col=4
+    // sig: esc,control,print,rune,buf,str_len,chunk,chunk_len,str_size, csi_len,csi_cap,charset,cursor_x,icharset,selected,wrap,state,width,col
+    const step = st_inputstepplan(0, 0, 0, '中', &buf, 0, &chunk, 0, buf.len, 0, 8, 0, 0, 0, 0, 0, 0, 2, 4);
+
+    try std.testing.expectEqual(@as(c_int, 1), step.putc.mark_dirty);
+    try std.testing.expectEqual(@as(c_int, putc_advance_move), step.putc.advance);
+    try std.testing.expectEqual(@as(c_int, 0), step.putc.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, 0), step.putc.cursor_state_bits);
+    try std.testing.expectEqual(@as(c_int, 2), step.putc.next_x);
+    try std.testing.expectEqual(@as(c_int, 1), step.putc.write_glyph);
+}
+
+test "inputstep putc wrapnext 路由契约" {
+    var buf = [_]u8{0} ** 8;
+    const chunk = [_]u8{};
+
+    // 末尾写入 + wrap + wrapnext 光标 → wrapnext_newline
+    // sig: esc,control,print,rune,buf,str_len,chunk,chunk_len,str_size, csi_len,csi_cap,charset,cursor_x,icharset,selected,wrap,state,width,col
+    const step = st_inputstepplan(0, 0, 0, 'A', &buf, 0, &chunk, 0, buf.len, 0, 8, 0, 9, 0, 0, 1, cursor_wrapnext, 1, 10);
+
+    try std.testing.expectEqual(@as(c_int, 1), step.putc.wrapnext_newline);
+    try std.testing.expectEqual(@as(c_int, 0), step.putc.overflow_newline);
+    try std.testing.expectEqual(@as(c_int, putc_advance_wrapnext), step.putc.advance);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), step.putc.cursor_state_mask);
+    try std.testing.expectEqual(@as(c_int, cursor_wrapnext), step.putc.cursor_state_bits);
+}
