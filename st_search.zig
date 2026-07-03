@@ -641,6 +641,12 @@ pub const HistoryView = struct {
     }
 };
 
+pub const TermLineReadKind = enum(i32) {
+    viewport = 0,
+    hist = 1,
+    hist_ring = 2,
+};
+
 pub const Input = struct {
     // search 输入是否可编辑。
     active: bool,
@@ -1526,14 +1532,75 @@ export fn st_searchjumpplan(active: c_int, current: c_int, nmatches: c_int, term
     return zigSearchjumpplan(active, current, nmatches, term_scr, match_scr);
 }
 
-export fn st_tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
+fn tlinehistplan(y: c_int, histsize: c_int, rows: c_int) ZigHistoryLinePlan {
     const plan = historyLine(y, histsize, rows);
     return .{ .hist = boolInt(plan.hist), .index = plan.index };
 }
 
-export fn st_historyringindex(head: c_int, scroll: c_int, size: c_int) c_int {
-    return historyIndex(head, scroll, size);
+pub const TermLineReadSnap = struct {
+    kind: TermLineReadKind,
+    // viewport reads scr/histi/histsize; hist reads histsize/rows; hist_ring reads histi/histsize.
+    scr: i32,
+    histi: i32,
+    histsize: i32,
+    rows: i32,
+};
+
+pub const TermLineReadPlan = struct {
+    hist: bool,
+    index: i32,
+};
+
+pub fn termLineReadPlan(snap: TermLineReadSnap, y: i32) TermLineReadPlan {
+    switch (snap.kind) {
+        .hist => {
+            const plan = historyLine(y, snap.histsize, snap.rows);
+            return .{ .hist = plan.hist, .index = plan.index };
+        },
+        .hist_ring => {
+            return .{ .hist = true, .index = historyIndex(snap.histi, y, snap.histsize) };
+        },
+        .viewport => {
+            // y is a viewport-visual row: rows above term.scr come from the history
+            // ring, rows at/after term.scr come from the live screen buffer.
+            if (y < snap.scr) {
+                const offset = snap.scr - y;
+                return .{ .hist = true, .index = historyIndex(snap.histi, offset, snap.histsize) };
+            }
+            return .{ .hist = false, .index = y - snap.scr };
+        },
+    }
 }
+
+pub const ZigTermLineReadSnap = extern struct {
+    kind: c_int,
+    // viewport reads scr/histi/histsize; hist reads histsize/rows; hist_ring reads histi/histsize.
+    scr: c_int,
+    histi: c_int,
+    histsize: c_int,
+    rows: c_int,
+};
+
+pub fn zigTermLineReadPlan(snap: ZigTermLineReadSnap, y: c_int) TermLineReadPlan {
+    return termLineReadPlan(.{
+        .kind = @enumFromInt(snap.kind),
+        .scr = snap.scr,
+        .histi = snap.histi,
+        .histsize = snap.histsize,
+        .rows = snap.rows,
+    }, y);
+}
+
+const ZigTermLineReadPlan = extern struct {
+    hist: c_int,
+    index: c_int,
+};
+
+export fn st_termlinereadplan(snap: ZigTermLineReadSnap, y: c_int) ZigTermLineReadPlan {
+    const plan = zigTermLineReadPlan(snap, y);
+    return .{ .hist = boolInt(plan.hist), .index = plan.index };
+}
+
 
 pub fn zigSearchcursorupdate(snapshot: ZigSearchSnapshot, input: [*]const u8, action: c_int) ZigSearchCursorResult {
     const result = SearchModel.init(zigSnapshot(snapshot)).cursor(input[0..snapshot.inputlen], @enumFromInt(action));
@@ -1684,7 +1751,7 @@ test "search scan line and append decisions use typed actions" {
 test "search history index wraps ring buffer" {
     try std.testing.expectEqual(@as(i32, 6), historyIndex(7, 2, 10));
     try std.testing.expectEqual(@as(i32, 9), historyIndex(0, 2, 10));
-    try std.testing.expectEqual(@as(c_int, 9), st_historyringindex(0, 2, 10));
+    try std.testing.expectEqual(@as(i32, 9), historyIndex(0, 2, 10));
     try std.testing.expectEqual(@as(i32, 4), visibleHistoryIndex(3, 7, 7, 10));
     try std.testing.expectEqual(@as(i32, 9), visibleHistoryIndex(0, 0, 2, 10));
 }
@@ -2028,13 +2095,99 @@ test "search matches transaction orders full scan" {
 }
 
 test "search history line adapter smoke test" {
-    const hist_line = st_tlinehistplan(5, 10, 7);
-    const live_line = st_tlinehistplan(6, 10, 7);
+    const hist_line = tlinehistplan(5, 10, 7);
+    const live_line = tlinehistplan(6, 10, 7);
 
     try std.testing.expectEqual(@as(c_int, 1), hist_line.hist);
     try std.testing.expectEqual(@as(c_int, 5), hist_line.index);
     try std.testing.expectEqual(@as(c_int, 0), live_line.hist);
     try std.testing.expectEqual(@as(c_int, 0), live_line.index);
+}
+
+test "term line read plan handles viewport mode" {
+    const snap = TermLineReadSnap{
+        .kind = .viewport,
+        .scr = 3,
+        .histi = 7,
+        .histsize = 10,
+        .rows = 5,
+    };
+
+    // y < scr: from history ring
+    const row0 = termLineReadPlan(snap, 0);
+    try std.testing.expect(row0.hist);
+    try std.testing.expectEqual(@as(i32, 5), row0.index); // historyIndex(7, 3, 10) = 5
+
+    const row2 = termLineReadPlan(snap, 2);
+    try std.testing.expect(row2.hist);
+    try std.testing.expectEqual(@as(i32, 7), row2.index); // historyIndex(7, 1, 10) = 7
+
+    // y >= scr: from line buffer
+    const row3 = termLineReadPlan(snap, 3);
+    try std.testing.expect(!row3.hist);
+    try std.testing.expectEqual(@as(i32, 0), row3.index);
+
+    const row4 = termLineReadPlan(snap, 4);
+    try std.testing.expect(!row4.hist);
+    try std.testing.expectEqual(@as(i32, 1), row4.index);
+}
+
+test "term line read plan handles hist mode" {
+    const snap = TermLineReadSnap{
+        .kind = .hist,
+        .scr = 0,
+        .histi = 7,
+        .histsize = 10,
+        .rows = 7,
+    };
+
+    // Uses historyLine logic: first few rows come from hist, later from line
+    const y2 = termLineReadPlan(snap, 2);
+    try std.testing.expect(y2.hist);
+    try std.testing.expectEqual(@as(i32, 2), y2.index);
+
+    const y6 = termLineReadPlan(snap, 6);
+    try std.testing.expect(!y6.hist);
+    try std.testing.expectEqual(@as(i32, 0), y6.index);
+}
+
+test "term line read plan handles history ring offset mode" {
+    const snap = TermLineReadSnap{
+        .kind = .hist_ring,
+        .scr = 0,
+        .histi = 7,
+        .histsize = 10,
+        .rows = 5,
+    };
+
+    const prev = termLineReadPlan(snap, 1);
+    try std.testing.expect(prev.hist);
+    try std.testing.expectEqual(@as(i32, 7), prev.index);
+
+    const wrapped = termLineReadPlan(snap, 9);
+    try std.testing.expect(wrapped.hist);
+    try std.testing.expectEqual(@as(i32, 9), wrapped.index);
+}
+
+test "term line read plan export round-trip" {
+    const snap = ZigTermLineReadSnap{
+        .kind = 0,
+        .scr = 3,
+        .histi = 7,
+        .histsize = 10,
+        .rows = 5,
+    };
+    const plan_y0 = st_termlinereadplan(snap, 0);
+    try std.testing.expectEqual(@as(c_int, 1), plan_y0.hist);
+    try std.testing.expectEqual(@as(c_int, 5), plan_y0.index);
+
+    const plan_y3 = st_termlinereadplan(snap, 3);
+    try std.testing.expectEqual(@as(c_int, 0), plan_y3.hist);
+    try std.testing.expectEqual(@as(c_int, 0), plan_y3.index);
+
+    const ring = st_termlinereadplan(.{ .kind = 2, .scr = 0, .histi = 7, .histsize = 10, .rows = 5 }, 1);
+    try std.testing.expectEqual(@as(c_int, 1), ring.hist);
+    try std.testing.expectEqual(@as(c_int, 7), ring.index);
 }
 
 test "search set keeps alloc and apply phases distinct" {

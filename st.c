@@ -441,16 +441,33 @@ void selinit(void) {
 int tlinelen(int y) { return st_tlinelen((const ZigGlyph *)TLINE(y), term.col); }
 
 Line tlinehist(int y) {
-    ZigHistoryLinePlan plan;
+    ZigTermLineReadSnap snap;
+    ZigTermLineReadPlan plan;
 
-    plan = st_tlinehistplan(y, HISTSIZE, term.row);
+    snap = (ZigTermLineReadSnap){
+        .kind = ST_ZIG_TERM_LINE_READ_HIST_RING,
+        .scr = term.scr,
+        .histi = term.histi,
+        .histsize = HISTSIZE,
+        .rows = term.row,
+    };
+    plan = st_termlinereadplan(snap, y);
     return plan.hist ? term.hist[plan.index] : term.line[plan.index];
 }
 
 Line tlineviewport(int y) {
-    if (y < term.scr)
-        return term.hist[st_historyringindex(term.histi, term.scr - y, HISTSIZE)];
-    return term.line[y - term.scr];
+    ZigTermLineReadSnap snap;
+    ZigTermLineReadPlan plan;
+
+    snap = (ZigTermLineReadSnap){
+        .kind = ST_ZIG_TERM_LINE_READ_VIEWPORT,
+        .scr = term.scr,
+        .histi = term.histi,
+        .histsize = HISTSIZE,
+        .rows = term.row,
+    };
+    plan = st_termlinereadplan(snap, y);
+    return plan.hist ? term.hist[plan.index] : term.line[plan.index];
 }
 
 void selstart(int col, int row, int snap) {
@@ -1019,7 +1036,20 @@ void searchscanline(Line line, int scr, int y) {
     }
 }
 
-Line searchhistline(int scr) { return term.hist[st_historyringindex(term.histi, scr, HISTSIZE)]; }
+Line searchhistline(int scr) {
+    ZigTermLineReadSnap snap;
+    ZigTermLineReadPlan plan;
+
+    snap = (ZigTermLineReadSnap){
+        .kind = ST_ZIG_TERM_LINE_READ_HIST_RING,
+        .scr = term.scr,
+        .histi = term.histi,
+        .histsize = HISTSIZE,
+        .rows = term.row,
+    };
+    plan = st_termlinereadplan(snap, scr);
+    return plan.hist ? term.hist[plan.index] : term.line[plan.index];
+}
 
 void searchjump(void) {
     SearchMatch *match;

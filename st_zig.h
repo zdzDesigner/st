@@ -955,9 +955,23 @@ typedef struct {
 } ZigExternalPipePlan;
 
 typedef struct {
+	int kind;
+	int scr;
+	int histi;
+	int histsize;
+	int rows;
+} ZigTermLineReadSnap;
+
+typedef struct {
 	int hist;
 	int index;
-} ZigHistoryLinePlan;
+} ZigTermLineReadPlan;
+
+enum {
+	ST_ZIG_TERM_LINE_READ_VIEWPORT = 0,
+	ST_ZIG_TERM_LINE_READ_HIST = 1,
+	ST_ZIG_TERM_LINE_READ_HIST_RING = 2,
+};
 
 enum {
 	ST_ZIG_EXTERNALPIPE_BREAK = 0,
@@ -1226,8 +1240,7 @@ int st_searchmatchlist(const ZigSearchMatch *, int, int, int, int, int, int);
 int st_searchcurrentmatch(const ZigSearchMatch *, int, int, int, int, int, int);
 ZigSearchScanLineStep st_searchscanlineiter(const ZigGlyph *, int, const uint32_t *, int, ZigSearchScanLineState);
 ZigSearchMatchesTransaction st_searchmatchestransaction(int, int);
-ZigHistoryLinePlan st_tlinehistplan(int, int, int);
-int st_historyringindex(int, int, int);
+ZigTermLineReadPlan st_termlinereadplan(ZigTermLineReadSnap, int);
 ZigSearchStepPlan st_searchstep(int, int, int, int);
 ZigSearchJumpPlan st_searchjumpplan(int, int, int, int, int);
 ZigSearchCursorResult st_searchcursorupdate(ZigSearchSnapshot, const unsigned char *, int);
