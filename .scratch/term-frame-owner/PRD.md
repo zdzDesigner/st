@@ -31,6 +31,10 @@
 - `02-frame-executor-coarse-plan`: completed
 - `03-frame-regression-coverage`: completed
 
+## Next Queue
+
+4. `04-draw-region-effect-reuse`
+
 ## Final Validation
 
 - `zig build abi-check`

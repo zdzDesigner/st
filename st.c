@@ -101,6 +101,8 @@ typedef struct {
     const ZigDrawExecPlan *frame;
     int x1;
     int x2;
+    int y1;
+    int y2;
 } PlatformDrawContext;
 
 typedef struct {
@@ -2262,10 +2264,16 @@ int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, 
         drawregion(context->payload.draw.x1, effect.arg, context->payload.draw.x2, term.row);
         break;
     case ST_ZIG_PLATFORM_EFFECT_DRAW_CURSOR:
+        if (!frame)
+            die("draw_cursor requires frame: context=%s index=%d count=%d\n",
+                platformcontextname(context->kind), index, count);
         xdrawcursor(frame->cx, term.c.y, term.line[term.c.y][frame->cx], term.ocx, term.ocy,
                     term.line[term.ocy][term.ocx], term.line[term.ocy], term.col);
         break;
     case ST_ZIG_PLATFORM_EFFECT_FINISH_DRAW:
+        if (!frame)
+            die("finish_draw requires frame: context=%s index=%d count=%d\n",
+                platformcontextname(context->kind), index, count);
         term.ocx = frame->new_ocx;
         term.ocy = frame->new_ocy;
         xfinishdraw();
@@ -2274,12 +2282,21 @@ int platformapplydraweffect(PlatformContext *context, ZigPlatformEffect effect, 
         xximspot(term.ocx, term.ocy);
         break;
     case ST_ZIG_PLATFORM_EFFECT_REGION_CLEAR_DIRTY:
+        if (effect.arg < context->payload.draw.y1 || effect.arg >= context->payload.draw.y2)
+            die("region_clear_dirty y out of bounds: y=%d y1=%d y2=%d index=%d count=%d\n",
+                effect.arg, context->payload.draw.y1, context->payload.draw.y2, index, count);
         term.dirty[effect.arg] = 0;
         break;
     case ST_ZIG_PLATFORM_EFFECT_REGION_DRAW_LINE:
+        if (effect.arg < context->payload.draw.y1 || effect.arg >= context->payload.draw.y2)
+            die("region_draw_line y out of bounds: y=%d y1=%d y2=%d index=%d count=%d\n",
+                effect.arg, context->payload.draw.y1, context->payload.draw.y2, index, count);
         xdrawline(TLINE(effect.arg), context->payload.draw.x1, effect.arg, context->payload.draw.x2);
         break;
     case ST_ZIG_PLATFORM_EFFECT_REGION_ADVANCE:
+        if (effect.arg < context->payload.draw.y1 || effect.arg > context->payload.draw.y2)
+            die("region_advance y out of bounds: y=%d y1=%d y2=%d index=%d count=%d\n",
+                effect.arg, context->payload.draw.y1, context->payload.draw.y2, index, count);
         break;
     case ST_ZIG_PLATFORM_EFFECT_NONE:
         break;
@@ -2890,36 +2907,16 @@ void resettitle(void) { xsettitle(NULL); }
 
 void drawregion(int x1, int y1, int x2, int y2) {
     ZigDrawRegionTransaction tx;
-    int next_y;
+    PlatformContext ctx;
     int i;
-    int y;
 
     tx = st_drawregiontransaction(term.dirty, y1, y2);
-    y = y1;
-    for (i = 0; i < tx.step_count; i++) {
-        switch (tx.steps[i].kind) {
-        case ST_ZIG_PLATFORM_EFFECT_REGION_DRAW_LINE:
-            y = tx.steps[i].arg;
-            if (y < y1 || y >= y2)
-                die("drawregion: DRAW_LINE row %d out of bounds [%d,%d)\n", y, y1, y2);
-            xdrawline(TLINE(y), x1, y, x2);
-            break;
-        case ST_ZIG_PLATFORM_EFFECT_REGION_CLEAR_DIRTY:
-            y = tx.steps[i].arg;
-            if (y < y1 || y >= y2)
-                die("drawregion: CLEAR_DIRTY row %d out of bounds [%d,%d)\n", y, y1, y2);
-            term.dirty[y] = 0;
-            break;
-        case ST_ZIG_PLATFORM_EFFECT_REGION_ADVANCE:
-            next_y = tx.steps[i].index_arg;
-            if (next_y < y1 || next_y > y2)
-                die("drawregion: ADVANCE y %d out of bounds [%d,%d]\n", next_y, y1, y2);
-            break;
-        default:
-            die("drawregion: unknown step kind=%d arg=%d index_arg=%d y2=%d\n",
-                tx.steps[i].kind, tx.steps[i].arg, tx.steps[i].index_arg, y2);
-        }
-    }
+    ctx = (PlatformContext){
+        .kind = PLATFORM_CONTEXT_DRAW,
+        .payload.draw = {.frame = NULL, .x1 = x1, .x2 = x2, .y1 = y1, .y2 = y2},
+    };
+    for (i = 0; i < tx.step_count; i++)
+        platformapplydraweffect(&ctx, tx.steps[i], i, tx.step_count);
 }
 
 void draw(void) {
@@ -2934,7 +2931,7 @@ void draw(void) {
 
     platformapplyeffects(&frame.platform,
                          (PlatformContext){.kind = PLATFORM_CONTEXT_DRAW,
-                                           .payload.draw = {.frame = &frame, .x1 = 0, .x2 = term.col}});
+                                           .payload.draw = {.frame = &frame, .x1 = 0, .x2 = term.col, .y1 = 0, .y2 = term.row}});
 }
 
 void redraw(void) {
