@@ -1,6 +1,6 @@
 Title: c commit harness
 Status: ready-for-agent
-Progress: in-progress
+Progress: completed
 
 ## Goal
 
@@ -42,3 +42,7 @@ Progress: in-progress
 ## Comments
 
 - 2026-07-03 Observe: `putc-atomic-commit-owner` 的前两步已完成，但当前自动化证据仍缺 C-side `term` 全局提交时序验证。下一轮专门解决这一缺口。
+- 2026-07-03 Draft/Review round 1: 初版 harness 增加了 `st_c_harness.c` / `st_c_harness_test.zig` / `build.zig` 测试接线，但最初只是复制 `tcommitputcwrite` 语义。`code-reviewer` 指出这不能构成真实回归保护。
+- 2026-07-03 Draft/Review round 2: 新建共享头 `st_commit_putc.h`，把 commit 协议收口成单一 `commit_putc(...)` 实现；`st.c` 的真实 `tcommitputcwrite(...)` wrapper 与 harness 都调用同一份共享协议。最终复审通过。
+- 2026-07-03 Final-Verify round 1: `zig build abi-check` 失败，原因是共享 helper 初始命名为 `st_commit_putc`，误命中 repo 的 ABI 守卫；已重命名为 `commit_putc` 后恢复通过。
+- 2026-07-03 Validation: `zig build abi-check`、`zig build test`、`zig build`、`timeout 5 ./zig-out/bin/st` 全部通过。实现完成。

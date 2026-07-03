@@ -19,6 +19,7 @@
 
 #include "st.h"
 #include "st_zig.h"
+#include "st_commit_putc.h" /* 共享 commit 协议，与 harness 同源 */
 #include "win.h"
 
 #if defined(__linux)
@@ -2669,15 +2670,17 @@ int eschandle(uchar ascii) {
  * 3) advance cursor or set WRAPNEXT based on write.advance
  * Must stay atomic; do NOT split back into planner fields.
  * [同步]: docs/reports/20260702-copy-delete-root-cause.md
+ * [共享]: 委托 commit_putc() 协议，harness 调用同一实现。
  */
+
+/* commit_putc() 的回调：映射到 st.c 真实函数 */
+static void commit_setdirty(int top, int bot, void *ctx) { (void)ctx; tsetdirt(top, bot); }
+static void commit_moveto(int x, int y, void *ctx) { (void)ctx; tmoveto(x, y); }
+
 static void tcommitputcwrite(ZigPutcWriteResult write, int y, Rune u) {
-    tsetdirt(y, y);
-    term.lastc = u;
-    if (write.advance == ST_ZIG_PUTC_ADVANCE_MOVE) {
-        tmoveto(write.next_x, y);
-    } else {
-        term.c.state |= CURSOR_WRAPNEXT;
-    }
+    commit_putc(
+        &write, y, (uint32_t)u, &term.lastc, &term.c.state,
+        NULL, commit_setdirty, commit_moveto);
 }
 
 void tputc(Rune u) {

@@ -22,11 +22,13 @@
 
 1. `01-extract-putc-commit-helper`
 2. `02-putc-commit-regression-coverage`
+3. `03-c-commit-harness`
 
 ## Status
 
 - `01-extract-putc-commit-helper`: completed
 - `02-putc-commit-regression-coverage`: completed
+- `03-c-commit-harness`: completed
 
 ## Final Validation
 

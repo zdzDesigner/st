@@ -340,7 +340,7 @@ pub fn build(b: *std.Build) void {
     abi_check_step.dependOn(&abi_check.step);
     abi_check_step.dependOn(&abi_guard.step);
 
-    addZigTests(b, &.{
+    const test_step = addZigTests(b, &.{
         .{ .name = "st_base64_test", .module = base64_module },
         .{ .name = "st_utf8_test", .module = utf8_module },
         .{ .name = "st_csi_test", .module = csi_module },
@@ -361,6 +361,9 @@ pub fn build(b: *std.Build) void {
         .{ .name = "st_search_test", .module = search_module },
         .{ .name = "st_selection_test", .module = selection_module },
     });
+
+    // C-side harness test for tcommitputcwrite
+    addCHarnessTest(b, target, optimize, test_step);
 }
 
 const ZigTestModule = struct {
@@ -368,7 +371,7 @@ const ZigTestModule = struct {
     module: *std.Build.Module,
 };
 
-fn addZigTests(b: *std.Build, modules: []const ZigTestModule) void {
+fn addZigTests(b: *std.Build, modules: []const ZigTestModule) *std.Build.Step {
     const test_step = b.step("test", "Run Zig unit tests");
     for (modules) |module| {
         const test_artifact = b.addTest(.{
@@ -378,6 +381,28 @@ fn addZigTests(b: *std.Build, modules: []const ZigTestModule) void {
         const run_test = b.addRunArtifact(test_artifact);
         test_step.dependOn(&run_test.step);
     }
+    return test_step;
+}
+
+fn addCHarnessTest(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, test_step: *std.Build.Step) void {
+    const harness_module = b.createModule(.{
+        .root_source_file = b.path("st_c_harness_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    harness_module.addCSourceFiles(.{
+        .files = &.{"st_c_harness.c"},
+        .flags = &.{},
+    });
+    harness_module.addIncludePath(b.path("."));
+
+    const test_artifact = b.addTest(.{
+        .name = "st_c_harness_test",
+        .root_module = harness_module,
+    });
+    const run_test = b.addRunArtifact(test_artifact);
+    test_step.dependOn(&run_test.step);
 }
 
 fn requireProgram(b: *std.Build, name: []const u8, reason: []const u8) []const u8 {
