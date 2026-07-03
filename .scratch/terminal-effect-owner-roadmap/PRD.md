@@ -27,7 +27,7 @@
 2. `02-escape-machine-boundary-review`: completed
 3. `03-line-history-transaction-boundary-review`: completed
 4. `04-selection-ownership-reopen-check`: completed
-5. `05-search-buffer-ownership-reopen-check`: todo
+5. `05-search-buffer-ownership-reopen-check`: completed
 6. `06-platform-effect-ordering-plan`: todo
 
 ## Validation
