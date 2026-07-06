@@ -24,6 +24,7 @@ flowchart LR
 ```
 
 - 当前 C 侧仍持有全局状态和实际副作用，包括 `term`、`sel`、`search`、X11、PTY、clipboard、IO、内存所有权和 `TLINE(...)` 数组访问。
+- clipboard paste 仍由 `x.c` 直接接收 X selection 并写入 PTY。`CLIPBOARD` paste 先请求 `TARGETS`：文本优先走 `UTF8_STRING` / `XA_STRING` 且 `format == 8` 的文本 payload；没有文本但有 `image/png` 时保存为 `/tmp/st-clipboard-image-*.png`，再向 PTY 粘贴 `@路径` 供 opencode 文件 mention/附件路径消费；其他非文本 selection 在 C 边界丢弃。
 - 目标形态是：Zig 逐步持有状态与主线决策，C 收缩成只执行平台桥接和副作用的极薄 shim。
 - `st_zig.h` 目前仍是唯一公开 ABI，`zig build abi-check` 校验 Zig `export fn st_*` 与头文件声明一致；后续它应逐步退化为过渡兼容层。
 

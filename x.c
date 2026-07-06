@@ -7,11 +7,15 @@
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <limits.h>
 #include <locale.h>
 #include <math.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
@@ -66,6 +70,13 @@ typedef struct {
 /* function definitions used in config.h */
 static void clipcopy(const Arg *);
 static void clippaste(const Arg *);
+static void cleanupclipboardimage(void);
+static void pasteimagepath(const char *);
+static int selectionhasimage(const Atom *, ulong);
+static int selectionhastext(const Atom *, ulong);
+static void requestclipboardtarget(Atom);
+static void startclipboardimage(void);
+static int writeall(int, const uchar *, size_t);
 static void numlock(const Arg *);
 static void selpaste(const Arg *);
 static void changealpha(const Arg *);
@@ -125,8 +136,10 @@ typedef struct {
 } XWindow;
 
 typedef struct {
-    Atom xtarget;
+    Atom xtarget, targetstarget, imagetarget, pastetarget;
     char *primary, *clipboard;
+    char imagefile[PATH_MAX];
+    int imagefd;
     struct timespec tclick1;
     struct timespec tclick2;
 } XSelection;
@@ -289,15 +302,113 @@ void clipcopy(const Arg *dummy)
     }
 }
 
-void clippaste(const Arg *dummy)
+static int selectionhastext(const Atom *targets, ulong nitems)
 {
-    Atom clipboard;
+    for (ulong i = 0; i < nitems; i++) {
+        if (targets[i] == xsel.xtarget || targets[i] == XA_STRING) return 1;
+    }
 
-    clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
-    XConvertSelection(xw.dpy, clipboard, xsel.xtarget, clipboard, xw.win, CurrentTime);
+    return 0;
 }
 
-void selpaste(const Arg *dummy) { XConvertSelection(xw.dpy, XA_PRIMARY, xsel.xtarget, XA_PRIMARY, xw.win, CurrentTime); }
+static int selectionhasimage(const Atom *targets, ulong nitems)
+{
+    for (ulong i = 0; i < nitems; i++) {
+        if (targets[i] == xsel.imagetarget) return 1;
+    }
+
+    return 0;
+}
+
+static void cleanupclipboardimage(void)
+{
+    if (xsel.imagefd >= 0) {
+        close(xsel.imagefd);
+        xsel.imagefd = -1;
+    }
+    if (xsel.imagefile[0] != '\0') {
+        unlink(xsel.imagefile);
+        xsel.imagefile[0] = '\0';
+    }
+}
+
+static void requestclipboardtarget(Atom target)
+{
+    Atom clipboard = XInternAtom(xw.dpy, "CLIPBOARD", 0);
+
+    if (xsel.imagefd >= 0 && xsel.pastetarget == xsel.imagetarget) cleanupclipboardimage();
+
+    xsel.pastetarget = target;
+    XConvertSelection(xw.dpy, clipboard, target, clipboard, xw.win, CurrentTime);
+}
+
+static int writeall(int fd, const uchar *data, size_t len)
+{
+    while (len > 0) {
+        ssize_t written = write(fd, data, len);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            return 0;
+        }
+        if (written == 0) return 0;
+        data += written;
+        len -= written;
+    }
+
+    return 1;
+}
+
+static void pasteimagepath(const char *path)
+{
+    char input[PATH_MAX + 2];
+    int len = snprintf(input, sizeof(input), "@%s", path);
+
+    if (len < 0 || (size_t)len >= sizeof(input)) {
+        fprintf(stderr, "Clipboard image path too long: %s\n", path);
+        return;
+    }
+
+    if (IS_SET(MODE_BRCKTPASTE)) ttywrite("\033[200~", 6, 0);
+    ttywrite(input, len, 1);
+    if (IS_SET(MODE_BRCKTPASTE)) ttywrite("\033[201~", 6, 0);
+}
+
+static void startclipboardimage(void)
+{
+    if (xsel.imagefd >= 0 || xsel.imagefile[0] != '\0') cleanupclipboardimage();
+
+    for (int i = 0; i < 100; i++) {
+        int len = snprintf(xsel.imagefile, sizeof(xsel.imagefile), "/tmp/st-clipboard-image-%ld-%ld-%d.png", (long)getpid(), (long)time(NULL), i);
+        if (len < 0 || (size_t)len >= sizeof(xsel.imagefile)) {
+            fprintf(stderr, "Clipboard image temp path too long\n");
+            xsel.imagefile[0] = '\0';
+            return;
+        }
+
+        xsel.imagefd = open(xsel.imagefile, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (xsel.imagefd >= 0) {
+            if (fcntl(xsel.imagefd, F_SETFD, FD_CLOEXEC) < 0) fprintf(stderr, "Could not set close-on-exec for %s: %s\n", xsel.imagefile, strerror(errno));
+            return;
+        }
+        if (errno != EEXIST) break;
+    }
+
+    fprintf(stderr, "Could not create clipboard image file %s: %s\n", xsel.imagefile, strerror(errno));
+    unlink(xsel.imagefile);
+    xsel.imagefile[0] = '\0';
+}
+
+void clippaste(const Arg *dummy)
+{
+    requestclipboardtarget(xsel.targetstarget);
+}
+
+void selpaste(const Arg *dummy)
+{
+    if (xsel.imagefd >= 0) cleanupclipboardimage();
+    xsel.pastetarget = xsel.xtarget;
+    XConvertSelection(xw.dpy, XA_PRIMARY, xsel.xtarget, XA_PRIMARY, xw.win, CurrentTime);
+}
 
 void numlock(const Arg *dummy) { win.mode ^= MODE_NUMLOCK; }
 
@@ -514,11 +625,15 @@ void selnotify(XEvent *e)
     else if (e->type == PropertyNotify)
         property = e->xproperty.atom;
 
-    if (property == None) return;
+    if (property == None) {
+        if (xsel.imagefd >= 0) cleanupclipboardimage();
+        return;
+    }
 
     do {
         if (XGetWindowProperty(xw.dpy, xw.win, property, ofs, BUFSIZ / 4, False, AnyPropertyType, &type, &format, &nitems, &rem, &data)) {
             fprintf(stderr, "Clipboard allocation failed\n");
+            if (xsel.imagefd >= 0) cleanupclipboardimage();
             return;
         }
 
@@ -547,6 +662,54 @@ void selnotify(XEvent *e)
              */
             XDeleteProperty(xw.dpy, xw.win, (int)property);
             continue;
+        }
+
+        if (xsel.pastetarget == xsel.targetstarget) {
+            if (type == XA_ATOM && format == 32) {
+                Atom *targets = (Atom *)data;
+                if (selectionhastext(targets, nitems)) {
+                    XFree(data);
+                    XDeleteProperty(xw.dpy, xw.win, (int)property);
+                    requestclipboardtarget(xsel.xtarget);
+                    return;
+                }
+                if (selectionhasimage(targets, nitems)) {
+                    XFree(data);
+                    XDeleteProperty(xw.dpy, xw.win, (int)property);
+                    startclipboardimage();
+                    if (xsel.imagefd >= 0) requestclipboardtarget(xsel.imagetarget);
+                    return;
+                }
+            }
+            XFree(data);
+            break;
+        }
+
+        if (xsel.pastetarget == xsel.imagetarget) {
+            size_t len = nitems * format / 8;
+            if (type != xsel.imagetarget || format != 8 || xsel.imagefd < 0 || !writeall(xsel.imagefd, data, len)) {
+                cleanupclipboardimage();
+                XFree(data);
+                break;
+            }
+            XFree(data);
+            if (rem == 0) {
+                close(xsel.imagefd);
+                xsel.imagefd = -1;
+                pasteimagepath(xsel.imagefile);
+            }
+            ofs += nitems * format / 32;
+            continue;
+        }
+
+        if (type != xsel.xtarget && type != XA_STRING) {
+            XFree(data);
+            break;
+        }
+
+        if (format != 8) {
+            XFree(data);
+            break;
         }
 
         /*
@@ -1203,8 +1366,14 @@ void xinit(int cols, int rows)
     clock_gettime(CLOCK_MONOTONIC, &xsel.tclick2);
     xsel.primary = NULL;
     xsel.clipboard = NULL;
+    xsel.imagefile[0] = '\0';
+    xsel.imagefd = -1;
     xsel.xtarget = XInternAtom(xw.dpy, "UTF8_STRING", 0);
     if (xsel.xtarget == None) xsel.xtarget = XA_STRING;
+    xsel.targetstarget = XInternAtom(xw.dpy, "TARGETS", 0);
+    xsel.imagetarget = XInternAtom(xw.dpy, "image/png", 0);
+    xsel.pastetarget = xsel.xtarget;
+    if (atexit(cleanupclipboardimage) != 0) fprintf(stderr, "Could not register clipboard image cleanup\n");
 
     boxdraw_xinit(xw.dpy, xw.cmap, xw.draw, xw.vis);
 }
