@@ -450,3 +450,5 @@ fn deleteInstallDirIfEmpty(step: *std.Build.Step, cwd: std.Io.Dir, path: []const
         else => std.process.fatal("删除安装目录失败 `{s}`: {t}", .{ path, err }),
     };
 }
+
+// sudo /home/zdz/.bin/zig build -Doptimize=ReleaseFast install --prefix /usr/local
