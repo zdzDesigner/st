@@ -360,8 +360,8 @@ static int writeall(int fd, const uchar *data, size_t len)
 
 static void pasteimagepath(const char *path)
 {
-    char input[PATH_MAX + 2];
-    int len = snprintf(input, sizeof(input), "@%s", path);
+    char input[PATH_MAX + 1];
+    int len = snprintf(input, sizeof(input), "%s", path);
 
     if (len < 0 || (size_t)len >= sizeof(input)) {
         fprintf(stderr, "Clipboard image path too long: %s\n", path);
