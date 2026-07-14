@@ -573,6 +573,13 @@ pub fn scrollResult(snapshot: SelectionSnapshot, bounds: Bounds, scroll_origin: 
         .clear => snapshot.oe.y,
         .normalize => plan.extent_y,
     };
+    const next_bounds = switch (plan.action) {
+        .none, .clear => bounds,
+        .normalize => Bounds{
+            .start = .{ .x = bounds.start.x, .y = bounds.start.y + delta },
+            .end = .{ .x = bounds.end.x, .y = bounds.end.y + delta },
+        },
+    };
     return .{
         .update = .{
             .mode = if (plan.action == .clear) .idle else snapshot.mode,
@@ -581,8 +588,8 @@ pub fn scrollResult(snapshot: SelectionSnapshot, bounds: Bounds, scroll_origin: 
             .snap = snapshot.snap,
             .ob = .{ .x = snapshot.ob.x, .y = next_ob_y },
             .oe = .{ .x = snapshot.oe.x, .y = next_oe_y },
-            .nb = snapshot.nb,
-            .ne = snapshot.ne,
+            .nb = next_bounds.start,
+            .ne = next_bounds.end,
         },
         .effect = .{
             .dirty = plan.action != .none,
@@ -946,6 +953,41 @@ test "selection scroll plan clears or normalizes affected selection" {
 
     const inactive = scrollPlan(-1, 3, 4, bounds, 0, 0, 8, 1);
     try std.testing.expectEqual(ScrollAction.none, inactive.action);
+}
+
+test "selection scroll update moves selected bounds" {
+    const result = scrollResult(
+        .{
+            .mode = .ready,
+            .selection_type = .regular,
+            .alt = false,
+            .snap = 0,
+            .ob = .{ .x = 2, .y = 3 },
+            .oe = .{ .x = 6, .y = 4 },
+            .nb = .{ .x = 2, .y = 3 },
+            .ne = .{ .x = 6, .y = 4 },
+        },
+        .{ .start = .{ .x = 2, .y = 3 }, .end = .{ .x = 6, .y = 4 } },
+        0,
+        0,
+        8,
+        2,
+    );
+
+    try std.testing.expectEqual(model.Point{ .x = 2, .y = 5 }, result.update.nb);
+    try std.testing.expectEqual(model.Point{ .x = 6, .y = 6 }, result.update.ne);
+    const model_after = SelectionModel.init(.{
+        .mode = result.update.mode,
+        .selection_type = result.update.selection_type,
+        .alt = result.update.alt,
+        .snap = result.update.snap,
+        .ob = result.update.ob,
+        .oe = result.update.oe,
+        .nb = result.update.nb,
+        .ne = result.update.ne,
+    });
+    try std.testing.expect(model_after.selected(.{ .x = 2, .y = 5 }, false));
+    try std.testing.expect(!model_after.selected(.{ .x = 2, .y = 3 }, false));
 }
 
 test "selection state adapter exports smoke tests" {
