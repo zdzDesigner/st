@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <math.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -929,7 +930,8 @@ static int parsefontsize(const char *text, double *fontsize) {
 
   errno = 0;
   parsed = strtod(text, &end);
-  if (text == end || errno == ERANGE || *end != '\0' || parsed <= 1)
+  if (text == end || errno == ERANGE || *end != '\0' || !isfinite(parsed) ||
+      parsed <= 1)
     return 0;
   *fontsize = parsed;
   return 1;
