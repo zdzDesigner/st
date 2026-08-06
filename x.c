@@ -88,6 +88,11 @@ static void ttysend(const Arg *);
 /* config.h for applying patches and the configuration. */
 #include "config.h"
 
+const char *searchprompttext(void)
+{
+    return commandinputactive() ? commandpromptstr : searchpromptstr;
+}
+
 /* XEMBED messages */
 #define XEMBED_FOCUS_IN 4
 #define XEMBED_FOCUS_OUT 5
@@ -448,6 +453,14 @@ void zoomreset(const Arg *arg)
         larg.f = defaultfontsize;
         zoomabs(&larg);
     }
+}
+
+void xsetfontsize(double fontsize)
+{
+    Arg arg;
+
+    arg.f = fontsize;
+    zoomabs(&arg);
 }
 
 void ttysend(const Arg *arg) { ttywrite(arg->s, strlen(arg->s), 1); }
@@ -1697,18 +1710,20 @@ int xtextcols(const char *text, size_t bytes)
 void xdrawsearchbar(void)
 {
     const char *input;
+    const char *prompt;
     int x, y, row, maxcol, cursorcol;
 
     if (!searchbaractive()) return;
 
     input = searchinputtext();
+    prompt = searchprompttext();
     x = borderpx;
     y = borderpx + win.th - win.ch;
     row = win.th / win.ch - 1;
     maxcol = win.tw / win.cw;
     XftDrawRect(xw.draw, &dc.col[searchbarbg], x, y, win.tw, win.ch);
-    xdrawsearchtext(input, xdrawsearchtext(searchpromptstr, 0, row, maxcol), row, maxcol);
-    cursorcol = xtextcols(searchpromptstr, strlen(searchpromptstr)) + xtextcols(input, searchinputcursor());
+    xdrawsearchtext(input, xdrawsearchtext(prompt, 0, row, maxcol), row, maxcol);
+    cursorcol = xtextcols(prompt, strlen(prompt)) + xtextcols(input, searchinputcursor());
     if (searchinputactive() && cursorcol < maxcol) {
         XftDrawRect(xw.draw, &dc.col[searchbarfg], borderpx + cursorcol * win.cw,
             y + 2, MAX(1, win.cw / 8), win.ch - 4);
@@ -2016,14 +2031,17 @@ void kpress(XEvent *ev)
         }
         if (baseksym == XK_Escape) {
             searchclear(NULL);
-        } else if ((e->state & ControlMask) && baseksym == XK_n) {
+        } else if ((e->state & ControlMask) && baseksym == XK_n && !commandinputactive()) {
             searchnext(NULL);
-        } else if ((e->state & ControlMask) && baseksym == XK_p) {
+        } else if ((e->state & ControlMask) && baseksym == XK_p && !commandinputactive()) {
             searchprev(NULL);
         } else if ((e->state & ControlMask) && (baseksym == XK_c || baseksym == XK_g)) {
             searchcancel();
         } else if (baseksym == XK_Return || baseksym == XK_KP_Enter || ((e->state & ControlMask) && baseksym == XK_m)) {
-            searchcommit();
+            if (commandinputactive())
+                commandexecute();
+            else
+                searchcommit();
         } else if (baseksym == XK_BackSpace || ((e->state & ControlMask) && baseksym == XK_h)) {
             searchbackspace();
         } else if (baseksym == XK_Delete || ((e->state & ControlMask) && baseksym == XK_d)) {

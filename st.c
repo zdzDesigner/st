@@ -180,6 +180,7 @@ typedef struct {
   int current;
   int active;
   int inputmode;
+  int commandmode;
 } SearchState;
 
 typedef struct {
@@ -224,6 +225,8 @@ static void searchapplyinputdelete(size_t, size_t);
 static void searchapplyinputclear(ZigSearchStateResult);
 static Rune *searchallocquerybuffer(size_t);
 static void searchapplydecodedquery(size_t, int, Rune *);
+static int commandsetfontsize(const char *);
+static int parsefontsize(const char *, double *);
 
 static void csidump(void);
 static void csihandle(void);
@@ -508,6 +511,8 @@ void searchclear(const Arg *arg) {
 
 int searchinputactive(void) { return searchscalarstate().inputmode; }
 
+int commandinputactive(void) { return search.commandmode && search.inputmode; }
+
 int searchbaractive(void) {
   SearchScalarState state;
 
@@ -567,7 +572,27 @@ void searchprompt(const Arg *arg) {
     search.input = xmalloc(input.cap);
   }
   search.input[0] = '\0';
+  search.commandmode = 0;
   searchapplyvieweffect(result.effect);
+}
+
+void commandprompt(const Arg *arg) {
+  SearchInputState input;
+  ZigSearchPromptResult result;
+
+  (void)arg;
+  searchresetstate();
+  result = st_searchpromptupdate(searchsnapshot());
+  searchapplyupdate(result.update);
+  input = searchinputstate();
+  if (result.effect.alloc_input)
+    search.input = xmalloc(input.cap);
+  if (!search.input)
+    die("command prompt failed: input buffer missing after prompt alloc plan cap=%zu\n",
+        input.cap);
+  search.input[0] = '\0';
+  search.commandmode = 1;
+  redraw();
 }
 
 void searchinput(const char *text, size_t len) {
@@ -716,6 +741,11 @@ static void searchapplyvieweffect(ZigSearchEffectPlan effect) {
 }
 
 static void searchapplyfloweffect(ZigSearchEffectPlan effect) {
+  if (search.commandmode) {
+    if (effect.redraw || effect.refresh_search)
+      redraw();
+    return;
+  }
   if (effect.refresh_search)
     searchset(search.input ? search.input : "");
   else
@@ -773,6 +803,10 @@ static void searchapplyinputinsert(ZigSearchInputResult result,
           result.move_len);
   memcpy(search.input + result.insert_at, text, len);
   search.input[input.len] = '\0';
+  if (search.commandmode) {
+    redraw();
+    return;
+  }
   searchset(search.input);
 }
 
@@ -802,6 +836,8 @@ static void searchapplyinputclear(ZigSearchStateResult result) {
     search.input = NULL;
   }
   searchapplyfloweffect(result.effect);
+  if (!input.active)
+    search.commandmode = 0;
 }
 
 static void searchresetstate(void) {
@@ -857,6 +893,47 @@ void searchdelete(size_t start, size_t end) {
 }
 
 void searchcommit(void) { searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_COMMIT); }
+
+void commandexecute(void) {
+  const char *command;
+
+  command = searchinputtext();
+  if (commandsetfontsize(command)) {
+    searchresetstate();
+    redraw();
+    return;
+  }
+  fprintf(stderr, "st command failed: unsupported command '%s'\n", command);
+  searchresetstate();
+  redraw();
+}
+
+static int commandsetfontsize(const char *command) {
+  static const char prefix[] = "font-size=";
+  double fontsize;
+
+  if (strncmp(command, prefix, sizeof(prefix) - 1) != 0)
+    return 0;
+  if (!parsefontsize(command + sizeof(prefix) - 1, &fontsize)) {
+    fprintf(stderr, "st command failed: invalid font-size value in '%s'\n",
+            command);
+    return 1;
+  }
+  xsetfontsize(fontsize);
+  return 1;
+}
+
+static int parsefontsize(const char *text, double *fontsize) {
+  char *end;
+  double parsed;
+
+  errno = 0;
+  parsed = strtod(text, &end);
+  if (text == end || errno == ERANGE || *end != '\0' || parsed <= 1)
+    return 0;
+  *fontsize = parsed;
+  return 1;
+}
 
 void searchcancel(void) { searchapplystate(ST_ZIG_SEARCH_STATE_ACTION_CANCEL); }
 

@@ -195,6 +195,7 @@ unsigned int background = 258;
 
 /* Search UI colors and prompt. */
 static char *searchpromptstr = "/search: ";
+static char *commandpromptstr = "command:";
 static unsigned int searchfg = 258;
 static unsigned int searchmatchbg = 11;
 // static unsigned int searchcurrentbg = TRUECOLOR(0x87, 0x0c, 0x65);
@@ -334,6 +335,7 @@ static Shortcut shortcuts[] = {
     {MODKEY, XK_h, kscrollup, {.i = -1}},
     {MODKEY, XK_l, kscrolldown, {.i = -1}},
     {MODKEY, XK_slash, searchprompt, {.i = 0}},
+    {MODKEY, XK_semicolon, commandprompt, {.i = 0}},
     {MODKEY, XK_n, searchnext, {.i = 0}},
     {TERMMOD, XK_n, searchprev, {.i = 0}},
     {TERMMOD, XK_N, searchprev, {.i = 0}},

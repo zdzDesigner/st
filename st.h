@@ -113,12 +113,15 @@ int selected(int, int);
 int searchmatch(int, int);
 int searchcurrent(int, int);
 void searchprompt(const Arg *);
+void commandprompt(const Arg *);
 void searchnext(const Arg *);
 void searchprev(const Arg *);
 void searchclear(const Arg *);
 int searchinputactive(void);
 int searchbaractive(void);
+int commandinputactive(void);
 const char *searchinputtext(void);
+const char *searchprompttext(void);
 size_t searchinputcursor(void);
 void searchinput(const char *, size_t);
 void searchbackspace(void);
@@ -131,7 +134,10 @@ void searchhome(void);
 void searchend(void);
 void searchcommit(void);
 void searchcancel(void);
+void commandexecute(void);
 char *getsel(void);
+
+void xsetfontsize(double);
 
 size_t utf8encode(Rune, char *);
 

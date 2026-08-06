@@ -20,3 +20,12 @@ zig build test
 zig build
 timeout 5 ./zig-out/bin/st
 ```
+
+Runtime command prompt:
+
+```text
+Alt+; opens command:
+command:font-size=20
+```
+
+`font-size=<number>` reloads the running Xft font at the requested pixel size.

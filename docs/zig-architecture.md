@@ -40,7 +40,7 @@ Zig 代码按领域职责组织，避免把 `st.c` 中的 `if` 分支直接搬�
 - `st_setchar.zig` 通过 `GlyphLine`、`PutcPrepare`、`StringCollector`、`InputControlPlan`、`InputEscPlan`、`InputEscFlowPlan` 承载字符写入、STR 收集和 input 主线计划，并调用 `st_control_esc.zig` 的 ESC/control 决策逻辑。
 - `st_utf8.zig` 通过 `Utf8Input`、`Utf8Rune` 承载 UTF-8 编解码。
 - `st_selection.zig` 通过 `SelectionModel` 承载 selection start、extend、normalize、scroll、selected 和 getsel 输出范围写模型，并持有 selection adapter implementation 与 `export fn st_sel*` / `st_selected` / `st_getselexecplan`。
-- `st_search.zig` 通过 `SearchModel` 承载 search 写模型入口，并保留输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、`tlinehist` 历史行映射、可见行历史环形索引和 external pipe 历史行映射纯逻辑。
+- `st_search.zig` 通过 `SearchModel` 承载 search 写模型入口，并保留输入编辑、插入缓冲区移动/扩容计划、基于 tagged union 的光标编辑、输入状态动作和 match append 动作、输入激活判断、match slice 集合判断、跳转、提交/取消、hit、line match、search history、`tlinehist` 历史行映射、可见行历史环形索引和 external pipe 历史行映射纯逻辑。`command:` 复用 search 输入编辑与绘制，命令解析和 `font-size=<number>` 的 Xft 字体重载副作用仍留在 C/X11 executor。
 - `st_line.zig` 作为 line/external pipe 相关 C ABI adapter；history/search adapter implementation、`export fn st_search*` 和 C 标量到 `SearchModel` 的转换已下沉到 `st_search.zig`，selection adapter implementation 与 `export fn st_sel*` 已下沉到 `st_selection.zig`，`searchinputactive` 与 `searchbaractive` 已回退到 C executor。
 
 ## 当前状态
